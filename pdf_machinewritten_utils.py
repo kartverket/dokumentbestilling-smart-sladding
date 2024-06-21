@@ -22,8 +22,6 @@ def extract_text_and_bb_from_image(image):
     
     text = pytesseract.image_to_string(image, lang='nor')
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME)
-
-    data.to_csv('ocr_output.csv', index=False)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
     
@@ -35,12 +33,10 @@ def extract_text_and_bb_from_image(image):
 
 def find_regex_matches(text):
     pattern_personummer = re.compile(r'(?:0[1-9]|[12][0-9]|3[01])(?:0[1-9]|1[0-2])\d{2}\s?\d{5}')
-    pattern_personummer = re.compile(r'\d{6}\s?\d{5}')
     pattern_dnummer = re.compile(r'4(?:[1-9]|[12][0-9]|3[01])(?:0[1-9]|1[0-2])\d{2}\s?\d{5}')
-    pattern_orgnr = re.compile(r'\b\d{9}\b')
 
-    patterns = [pattern_personummer, pattern_dnummer, pattern_orgnr]
-    categories = ['personnummer', 'dnummer', 'orgnr']
+    patterns = [pattern_personummer, pattern_dnummer]
+    categories = ['personnummer', 'dnummer']
     tagged_matches = []
 
 
