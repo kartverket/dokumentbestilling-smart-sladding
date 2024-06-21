@@ -1,0 +1,7 @@
+tesseract
+pillow
+opencv-python
+pdf2image
+transformers
+torch
+datasets
