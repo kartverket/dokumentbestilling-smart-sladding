@@ -8,7 +8,7 @@ def main(pdf_path):
 
     for i, image in enumerate(images):
         text, bounding_boxes = pmu.extract_text_and_bb_from_image(image)
-        tagged_matches = pmu.find_regex_matches(text)
+        tagged_matches = pmu.find_matches(text)
         data = pmu.get_boxes_to_blur(tagged_matches, bounding_boxes)
         print(data)
 
