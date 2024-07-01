@@ -88,7 +88,7 @@ def format_dnumber(dnumber):
 
 def find_matches(text):
     pattern_personummer = re.compile(r'(?:0[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d') #obs: tillater ikke space mellom tallene i dag, måned, år
-    pattern_dnummer = re.compile(r'[4,5,6]\s*(?:[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d')
+    pattern_dnummer = re.compile(r'[4,5,6,7]\s*(?:[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d')
 
     patterns = [pattern_personummer, pattern_dnummer]
     categories = ['personnummer', 'dnummer']
