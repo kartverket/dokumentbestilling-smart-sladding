@@ -10,9 +10,23 @@ import os
 import cv2
 
 
+def get_pdf_dimensions(pdf_path):
+    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
+    dimensions = []
+    for page in range(len(pdf.pages)):
+        media_box = pdf.pages[page].mediabox
+        width = float(media_box.width)
+        height = float(media_box.height)
+        dimensions.append((width, height))
+    return dimensions
 
 def convert_pdf_to_images(pdf_path):
-    images = convert_from_path(pdf_path)
+    dimensions = get_pdf_dimensions(pdf_path)
+    images = []
+    for page_number, (width, height) in enumerate(dimensions):
+        # Convert page to image
+        temp_images = convert_from_path(pdf_path, first_page=page_number+1, last_page=page_number+1, size=(int(width), int(height)))
+        images.extend(temp_images)  # Extend the list with the new images
     return images   
 
 def remove_special_characters(text):
@@ -116,17 +130,25 @@ def find_matches(text):
 
 def get_boxes_to_blur(tagged_matches, bounding_boxes):
 
+    #[['020885 38717', 'personnummer', 0], ['190774 31058', 'personnummer', 1], ['020885 38717', 'personnummer', 2], ['190774 31058', 'personnummer', 3], ['190774 31058', 'personnummer', 4], ['020885 38717', 'personnummer', 5]]
+
     matches_list = []
     for i in tagged_matches:
         sep_matches = i[0].split(' ')
-        for j in sep_matches:
-            matches_list.append([j, i[1], i[2]])
+        if len(sep_matches) > 1:
+            matches_list.append([sep_matches[1], i[1], i[2]])
+        else:
+            matches_list.append([sep_matches[0], i[1], i[2]])
+
 
     data = []
+    bbs = []
     for match in matches_list:
         for index, row in bounding_boxes.iterrows():
             pattern = re.compile(re.escape(match[0]), re.IGNORECASE)
             if pattern.search(row['text']):
-                loc = (row['left'], row['top'], row['width'], row['height'])
+                loc = [row['height'], row['width'], row['top'], row['left']]
         data.append([match[0], match[1], match[2], loc])
-    return data
+        bbs.append(loc)
+        
+    return data, bbs

@@ -19,9 +19,6 @@ def download_and_save_pdf(url, filename):
 #filename = f"dokumenter/{doc}.pdf"
 #download_and_save_pdf(url, filename)
 
-
-organized_labels_path = pd.read_csv("../valideringssett/organized_data.csv")
-
 def get_pdf_dimensions(pdf_path):
     pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
     dimensions = []
@@ -65,3 +62,4 @@ def visualize_bounding_boxes(df, idx):
             rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], edgecolor='r', facecolor="none")
             #Add the rectangle to the axes
             ax.add_patch(rect)
+        plt.show()
