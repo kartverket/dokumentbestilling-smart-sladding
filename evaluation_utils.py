@@ -4,6 +4,12 @@ import torch
 from torchvision.ops import box_iou
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import PyPDF2
+import pandas as pd
+import requests
+import model_utils
+import model_main
+import ast
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     """
@@ -20,16 +26,23 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     metrics: dict, contains the number of True Positives (TP), False Positives (FP) and Predicted Score (PS).
     """
 
-    num_true_bboxes = true_bboxes.shape[0]
-    num_pred_bboxes = predicted_bboxes.shape[0]
+    num_true_bboxes = len(true_bboxes)
+    num_pred_bboxes = len(predicted_bboxes)
 
     # If there are no true bboxes or predicted bboxes, return matched list with None values and all predicted bboxes as unmatched
 
-    if num_true_bboxes == 0 or num_pred_bboxes == 0:
+    if num_true_bboxes == 0:
         matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
         unmatched_preds = predicted_bboxes.copy()
         
-        return matched_boxes, unmatched_preds
+        return matched_boxes, unmatched_preds, {}
+    
+    if num_pred_bboxes == 0:
+        matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
+        metrics = {'TP': 0, 'FP': 0, 'FN': len(true_bboxes)}
+        
+        return matched_boxes, predicted_bboxes, metrics
+    
     
     # Calculate IOU matrix
 
@@ -46,8 +59,9 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
         true_index, pred_index = best_match
 
         matched_boxes.append([true_bboxes[true_index], predicted_bboxes[pred_index], iou_matrix[true_index, pred_index]])
-        unmatched_preds = np.delete(unmatched_preds, pred_index, axis=0)
-        unmatched_true = np.delete(unmatched_true, true_index, axis=0)
+
+        unmatched_preds.remove(predicted_bboxes[pred_index])
+        unmatched_true.remove(true_bboxes[true_index])
 
         iou_matrix[true_index, :] = 0
         iou_matrix[:, pred_index] = 0
@@ -89,3 +103,149 @@ def metrics_perdocument(metrics_list):
     F1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
     
     return {'TP': TP, 'FP': FP, 'FN': FN, 'precision': precision, 'recall': recall, 'F1': F1}
+
+
+def download_and_save_pdf(url, filename):
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        with open(filename, 'wb') as file:
+            file.write(response.content)
+        print("PDF downloaded successfully.")
+    else:
+        print("Failed to download file. HTTP Status Code:", response.status_code)   
+#url = f""
+#filename = f"dokumenter/{doc}.pdf"
+#download_and_save_pdf(url, filename)
+
+
+def scale_bounding_box(bbox, ratio):
+    """
+    Scales a bounding box by a given ratio.
+
+    Parameters:
+    bbox (list): A list representing the bounding box [height, width, x, y].
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new bounding box scaled by the given ratio.
+    """
+    height, width, x, y = bbox
+    return [height*ratio, width*ratio, x*ratio, y*ratio]
+
+
+
+def get_pdf_dimensions(pdf_path):
+    """
+    Get the dimensions of a PDF file.
+    --MARK! Assuming that all pages have the same dimensions.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    list: A tuples containing the width and height of each page in the PDF file.
+    """
+    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
+    media_box = pdf.pages[0].mediabox
+    return (float(media_box.width),float(media_box.height))
+
+def get_pdf_pagecount(pdf_path):
+    """
+    Get the number of pages in a PDF file.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    int: The number of pages in the PDF file.
+    """
+    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
+    return len(pdf.pages)
+
+def get_images_and_bb_from_docid(labels_df, docid):
+    """
+    Get the images and bounding boxes for a document from the document id(dokument-ident).
+
+    Parameters:
+    labels_df (pd.DataFrame): A DataFrame containing the labels.
+    docid (str): The document ID.
+
+    Returns:
+    list: A list of images.
+    list: A list of scaled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    """
+    row = labels_df.loc[labels_df['dokument_nr_embete'] == docid, 'bounding_boxes']
+    doc = docid
+    bbs_string = row.iloc[0]
+    bbs = ast.literal_eval(bbs_string)
+    filename = f"valideringssett/dokumenter/{doc}.pdf"
+    page_count = get_pdf_pagecount(filename)
+    for i in range(len(bbs), page_count):
+        bbs.append([])
+    dimensions = get_pdf_dimensions(filename)
+    images, dimensions_hq = model_utils.convert_pdf_to_images(filename)
+    # Calculate the ratio between the high quality images and the images from pdf2image
+    dimention_ratio = dimensions_hq[0]/dimensions[0]
+    bbs = [[scale_bounding_box(bb, dimention_ratio) for bb in page] for page in bbs]
+    return images, bbs
+
+
+
+def visualize_bounding_boxes(images, true_bbs, pred_bbs):
+    """
+    Visualize bounding boxes on images.
+
+    Parameters:
+    images (list): A list of images.
+    true_bbs (list): A list of labelled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    pred_bbs (list): A list of predicted bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    """
+    for i, image in enumerate(images):
+        fig, ax = plt.subplots(figsize=(20, 20))
+        ax.imshow(image)
+
+        # Combine true and predicted bounding boxes with labels
+        combined_bbs = []
+        if i < len(true_bbs):
+            combined_bbs += [(bb, 'True') for bb in true_bbs[i]]
+        if i < len(pred_bbs):
+            combined_bbs += [(bb, 'Predicted') for bb in pred_bbs[i]]
+
+        # Plot each bounding box with appropriate label and color
+        for bb, label in combined_bbs:
+            if label == 'True':
+                edgecolor = 'green'
+                legend_label = 'True (label)'
+            else:
+                edgecolor = 'red'
+                legend_label = 'Predicted (label)'
+
+            rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2,
+                                 edgecolor=edgecolor, facecolor="none", label=legend_label)
+            ax.add_patch(rect)
+
+        # Creating a legend with unique handles
+        handles, labels = ax.get_legend_handles_labels()
+        unique = {(h.get_edgecolor(), l): h for h, l in zip(handles, labels)}.values()
+        if unique:
+            ax.legend(unique, [h.get_label() for h in unique], loc='upper right')
+
+        #plt.show()
+        #Save the image
+        plt.savefig(f'test_viz{i}')
+
+#doc_id = "2023_73325_200"
+#doc_id = "2023_73413_200"
+#doc_id = "2010_923067_200"
+
+def test_and_visualize_doc(doc_id):
+    pdf_path = f'valideringssett/dokumenter/{doc_id}.pdf'
+
+    organized_labels_path = pd.read_csv("valideringssett/organized_data.csv")
+
+    images_true, true_boxes = get_images_and_bb_from_docid(organized_labels_path, doc_id)
+
+    images_pred, predicted_boxes = model_main.main(pdf_path)
+
+    visualize_bounding_boxes(images_true, true_boxes, predicted_boxes)
