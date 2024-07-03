@@ -31,17 +31,11 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
 
     # If there are no true bboxes or predicted bboxes, return matched list with None values and all predicted bboxes as unmatched
 
-    if num_true_bboxes == 0:
+    if num_true_bboxes == 0 or num_pred_bboxes == 0:
         matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
-        unmatched_preds = predicted_bboxes.copy()
+        unmatched_preds = predicted_bboxes
         
-        return matched_boxes, unmatched_preds, {}
-    
-    if num_pred_bboxes == 0:
-        matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
-        metrics = {'TP': 0, 'FP': 0, 'FN': len(true_bboxes)}
-        
-        return matched_boxes, predicted_bboxes, metrics
+        return matched_boxes, unmatched_preds, {'TP': 0, 'FP': num_pred_bboxes, 'FN': num_true_bboxes}
     
     
     # Calculate IOU matrix
