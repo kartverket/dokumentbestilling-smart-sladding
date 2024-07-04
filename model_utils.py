@@ -152,3 +152,4 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
         bbs.append(loc)
         
     return data, bbs
+
