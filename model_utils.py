@@ -46,7 +46,7 @@ def remove_special_characters(text):
 
 def extract_text_and_bb_from_image(image):
 
-    config = r'--oem 3 --psm 1'
+    config = r'--oem 3 --psm 11'
     text = pytesseract.image_to_string(image, lang='nor', config=config)
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
@@ -128,7 +128,6 @@ def find_matches(text):
 
     for pattern, tag in zip(patterns, categories):
         matches = re.findall(pattern, text)
-        print(matches)
 
         for match in matches:
             

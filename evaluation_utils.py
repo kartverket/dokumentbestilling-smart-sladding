@@ -10,6 +10,7 @@ import requests
 import model_utils
 import model_main
 import ast
+import os
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     """
@@ -31,17 +32,11 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
 
     # If there are no true bboxes or predicted bboxes, return matched list with None values and all predicted bboxes as unmatched
 
-    if num_true_bboxes == 0:
+    # If there are no true bboxes or predicted bboxes, return matched list with None values and all predicted bboxes as unmatched
+    if num_true_bboxes == 0 or num_pred_bboxes == 0:
         matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
-        unmatched_preds = predicted_bboxes.copy()
-        
-        return matched_boxes, unmatched_preds, {}
-    
-    if num_pred_bboxes == 0:
-        matched_boxes = [[true_bbox, None, 0] for true_bbox in true_bboxes]
-        metrics = {'TP': 0, 'FP': 0, 'FN': len(true_bboxes)}
-        
-        return matched_boxes, predicted_bboxes, metrics
+        unmatched_preds = predicted_bboxes
+        return matched_boxes, unmatched_preds, {'TP': 0, 'FP': num_pred_bboxes, 'FN': num_true_bboxes}
     
     
     # Calculate IOU matrix
@@ -179,7 +174,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     doc = docid
     bbs_string = row.iloc[0]
     bbs = ast.literal_eval(bbs_string)
-    filename = f"valideringssett/dokumenter/{doc}.pdf"
+    filename = f"../valideringssett/dokumenter/{doc}.pdf"
     page_count = get_pdf_pagecount(filename)
     for i in range(len(bbs), page_count):
         bbs.append([])
@@ -192,7 +187,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
 
 
 
-def visualize_bounding_boxes(images, true_bbs, pred_bbs):
+def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
     """
     Visualize bounding boxes on images.
 
@@ -201,6 +196,7 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs):
     true_bbs (list): A list of labelled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
     pred_bbs (list): A list of predicted bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
     """
+    images_with_bb = []
     for i, image in enumerate(images):
         fig, ax = plt.subplots(figsize=(20, 20))
         ax.imshow(image)
@@ -231,21 +227,24 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs):
         if unique:
             ax.legend(unique, [h.get_label() for h in unique], loc='upper right')
 
-        #plt.show()
-        #Save the image
-        plt.savefig(f'test_viz{i}')
+        images_with_bb.append(fig)
+    
+    if show:
+        plt.show()
+    #empty the plot 
+    plt.close('all')
 
-#doc_id = "2023_73325_200"
-#doc_id = "2023_73413_200"
-#doc_id = "2010_923067_200"
+    return images_with_bb
 
-def test_and_visualize_doc(doc_id):
-    pdf_path = f'valideringssett/dokumenter/{doc_id}.pdf'
+def test_and_visualize_doc(doc_id, visualize=False):
+    pdf_path = f'../valideringssett/dokumenter/{doc_id}.pdf'
 
-    organized_labels_path = pd.read_csv("valideringssett/organized_data.csv")
+    organized_labels_path = pd.read_csv("../valideringssett/organized_data.csv")
 
     images_true, true_boxes = get_images_and_bb_from_docid(organized_labels_path, doc_id)
 
     images_pred, predicted_boxes = model_main.main(pdf_path)
-
-    visualize_bounding_boxes(images_true, true_boxes, predicted_boxes)
+    
+    images_with_bbs = visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=visualize)
+    
+    return images_with_bbs
