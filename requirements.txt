@@ -5,3 +5,8 @@ pdf2image
 transformers
 torch
 datasets
+fitz
+PyMuPDF
+pdfminer
+pdfminer.six
+pdfplumber
