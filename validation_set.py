@@ -44,19 +44,21 @@ def download_all_documents(tinglyst_dokument_csv_path, save_folder_path):
     # Create the save folder if it does not exist
     try:
         os.mkdir(save_folder_path)
-    except:
+        # Download and save each document
+        for doc in df_doc_ids:
+            url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+            filename = save_folder_path + "/" + doc + ".pdf"
+            download_and_save_pdf(url, filename)
+
+
+    except FileExistsError:
+        print("Folder already exists. Delete folder and try again.")
         pass
 
-    # Download and save each document
-    for doc in df_doc_ids:
-        url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
-        filename = save_folder_path + "/" + doc + ".pdf"
-        download_and_save_pdf(url, filename)
 
 
 
-
-def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument):
+def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument, save_folder_path, save_organized_labels_path):
     """
     Organize bounding boxes from a CSV file containing labels and a CSV file containing document information.
 
@@ -88,7 +90,7 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
         bbs_doc = []
 
         #Get the page count for the document to add empty lists for pages without bounding boxes
-        page_count = evaluation_utils.get_pdf_pagecount(f"../valideringssett/dokumenter/{doc_id}.pdf")
+        page_count = evaluation_utils.get_pdf_pagecount(save_folder_path + '/' + doc_id + '.pdf') 
         grouped_pages = doc_data.groupby('sidetall')
 
         # Loop through the grouped pages
@@ -125,6 +127,6 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
         df = pd.concat([df, pd.DataFrame(missing_rows)], ignore_index=True)
 
     # Save the organized bounding boxes to a CSV file
-    df.to_csv("../valideringssett/organizes_labels.csv", index=False)
+    df.to_csv(save_organized_labels_path, index=False)
 
     return df
