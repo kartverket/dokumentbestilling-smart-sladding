@@ -14,11 +14,9 @@ def evaluate_model(folder_path):
         pdf_path = folder_path + dokument
         #remove .pdf from the name
         doc_id = dokument[:-4]
+
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, doc_id)
         images_pred, predicted_boxes, texts = model_main.main(pdf_path)
-
-        print(doc_id)
-        print(texts)
 
         metrics_list = []
         for i,j in zip(true_boxes, predicted_boxes):
@@ -26,7 +24,6 @@ def evaluate_model(folder_path):
             metrics_list.append(metrics)
 
         results = evaluation_utils.metrics_perdocument(metrics_list)
-        print(results['FP'], results['FN'])
         if results['FP'] > 0 or results['FN'] > 0:
             images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=False)
             for i, img in enumerate(images_with_bbs):

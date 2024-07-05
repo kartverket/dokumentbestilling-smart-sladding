@@ -1,16 +1,14 @@
-
 import numpy as np
 import torch
 from torchvision.ops import box_iou
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import PyPDF2
 import pandas as pd
-import requests
 import model_utils
 import model_main
 import ast
-import os
+import matplotlib.pyplot as plt
+import numpy as np
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     """
@@ -75,6 +73,7 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
 
     return matched_boxes, unmatched_preds, metrics
 
+
 def metrics_perdocument(metrics_list):
     """
     Calculate the aggregated metrics for each document in a dataset.
@@ -100,17 +99,6 @@ def metrics_perdocument(metrics_list):
     return {'TP': TP, 'FP': FP, 'FN': FN, 'precision': precision, 'recall': recall, 'F1': F1}
 
 
-def download_and_save_pdf(url, filename):
-    response = requests.get(url)
-    
-    if response.status_code == 200:
-        with open(filename, 'wb') as file:
-            file.write(response.content)
-        print("PDF downloaded successfully.")
-    else:
-        print("Failed to download file. HTTP Status Code:", response.status_code)   
-
-
 def scale_bounding_box(bbox, ratio):
     """
     Scales a bounding box by a given ratio.
@@ -124,7 +112,6 @@ def scale_bounding_box(bbox, ratio):
     """
     height, width, x, y = bbox
     return [height*ratio, width*ratio, x*ratio, y*ratio]
-
 
 
 def get_pdf_dimensions(pdf_path):
@@ -142,6 +129,7 @@ def get_pdf_dimensions(pdf_path):
     media_box = pdf.pages[0].mediabox
     return (float(media_box.width),float(media_box.height))
 
+
 def get_pdf_pagecount(pdf_path):
     """
     Get the number of pages in a PDF file.
@@ -155,6 +143,7 @@ def get_pdf_pagecount(pdf_path):
     pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
     return len(pdf.pages)
 
+
 def get_images_and_bb_from_docid(labels_df, docid):
     """
     Get the images and bounding boxes for a document from the document id(dokument-ident).
@@ -167,21 +156,30 @@ def get_images_and_bb_from_docid(labels_df, docid):
     list: A list of images.
     list: A list of scaled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
     """
+    # Get the bounding boxes for the document
     row = labels_df.loc[labels_df['dokument_nr_embete'] == docid, 'bounding_boxes']
-    doc = docid
-    bbs_string = row.iloc[0]
-    bbs = ast.literal_eval(bbs_string)
-    filename = f"../valideringssett/dokumenter/{doc}.pdf"
+
+    # Get the bounding boxes from the row and interpret as a list
+    bbs = ast.literal_eval(row.iloc[0])
+
+    #Get the page_count for the document in valideringssett
+    filename = f"../valideringssett/dokumenter/{docid}.pdf"
     page_count = get_pdf_pagecount(filename)
+
+    # Add empty lists for pages without bounding boxes
     for i in range(len(bbs), page_count):
         bbs.append([])
+    
+    # Get the dimensions of the downloaded pdf file and the local pdf file
     dimensions = get_pdf_dimensions(filename)
     images, dimensions_hq = model_utils.convert_pdf_to_images(filename)
+
     # Calculate the ratio between the high quality images and the images from pdf2image
     dimention_ratio = dimensions_hq[0]/dimensions[0]
+
+    # Scale the bounding boxes
     bbs = [[scale_bounding_box(bb, dimention_ratio) for bb in page] for page in bbs]
     return images, bbs
-
 
 
 def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
@@ -245,3 +243,60 @@ def test_and_visualize_doc(doc_id, visualize=False):
     images_with_bbs = visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=visualize)
     
     return images_with_bbs
+
+
+def get_metrics_and_cm(total_tp, total_fp, total_fn):
+
+    precision = total_tp / (total_tp + total_fp)
+    recall = total_tp / (total_tp + total_fn)
+    f1 = 2 * (precision * recall) / (precision + recall)
+
+    print('Precision:', precision)
+    print('Recall:', recall)
+    print('F1:', f1)
+    print('Accuracy:', total_tp/(total_tp + total_fp + total_fn))
+
+    # Define the confusion matrix
+    conf_matrix = np.array([[total_tp, total_fp], 
+                            [total_fn, 0]])
+
+    # Labels for each cell
+    group_names = ['True Positive', 'False Positive', 'False Negative','True Negative']
+    group_counts = ["{0:0.0f}".format(value) for value in conf_matrix.flatten()]
+    group_percentages = ["{0:.2%}".format(value) for value in conf_matrix.flatten() / np.sum(conf_matrix)]
+    labels = (np.asarray(["{}\n{}\n{}".format(name, count, pct) for name, count, pct in zip(group_names, group_counts, group_percentages)])).reshape(2,2)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(conf_matrix, interpolation='nearest', cmap='Blues')
+
+    # We want to show all ticks...
+    ax.set(xticks=np.arange(conf_matrix.shape[1]),
+        yticks=np.arange(conf_matrix.shape[0]),
+        xticklabels=['Positives','Negatives'], 
+        yticklabels=['Positives','Negatives'],
+        title='Confusion Matrix')
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+            rotation_mode="anchor")
+
+    # Loop over data dimensions and create text annotations.
+    for i in range(conf_matrix.shape[0]):
+        for j in range(conf_matrix.shape[1]):
+            ax.text(j, i, labels[i, j],
+                    ha="center", va="center",
+                    color="white" if conf_matrix[i, j] > conf_matrix.max() / 2 else "black")
+
+    plt.ylabel('Predicted labels')
+    plt.xlabel('Actual labels')
+    plt.tight_layout()
+    plt.show()
+
+
+##Avhengig av config..
+
+## RESULTS ALL DOCUMENTS
+#Total TP: 686, Total FP: 9, Total FN: 823
+
+## RESULTS ELEKTRONISK TINGLYST
+#Total TP: 162, Total FP: 0, Total FN: 0

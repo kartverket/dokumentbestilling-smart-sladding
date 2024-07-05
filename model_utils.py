@@ -25,26 +25,45 @@ def get_pdf_dimensions(pdf_path):
     return (float(media_box.width),float(media_box.height))
 
 
-def convert_pdf_to_images2(pdf_path):
-    dimensions = get_pdf_dimensions(pdf_path)
-    images = []
-    for page_number, (width, height) in enumerate(dimensions):
-        # Convert page to image
-        temp_images = convert_from_path(pdf_path, first_page=page_number+1, last_page=page_number+1, size=(int(width), int(height)))
-        images.extend(temp_images)  # Extend the list with the new images
-    return images   
-
 def convert_pdf_to_images(pdf_path):
+    """
+    Convert a PDF file to a list of images.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    list: A list of images.
+    tuple: A tuple containing the width and height of the images.
+    """
     images = convert_from_path(pdf_path)
-    #Find the width and height of the images
     width, height = images[0].size
     dimensions = (width, height)
     return images, dimensions
 
 def remove_special_characters(text):
+    """
+    Remove special characters from a text.
+
+    Parameters:
+    text (str): The text to process.
+
+    Returns:
+    str: The text without special characters.
+    """
     return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
 def extract_text_and_bb_from_image(image):
+    """
+    Extract text and bounding boxes from an image.
+
+    Parameters:
+    image (PIL.Image?): The image to process.
+
+    Returns:
+    str: The extracted text.
+    pd.DataFrame: A DataFrame containing the bounding boxes.
+    """
 
     config = r'--oem 3 --psm 1'
     text = pytesseract.image_to_string(image, lang='nor', config=config)
