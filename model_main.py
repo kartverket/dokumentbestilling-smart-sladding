@@ -1,18 +1,21 @@
 import model_utils
-import numpy as np
-import validation_set
-import evaluation_utils
-import model_utils
 
-def main(pdf_path, path=True):
-    
-    if path:
-        images, dimensions = model_utils.convert_pdf_path_to_images(pdf_path)
-    else:
-        images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_path)
+def main(pdf_file):
+    """
+    Extract text from a PDF file and blur out sensitive information.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    list: A list of images.
+    list: A list of bounding boxes.
+    list: A list of texts.
+    """
+
+    images, dimension = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
     predicted_boxes = []
-    texts = []
 
     for i, image in enumerate(images):
         text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image)
@@ -22,23 +25,15 @@ def main(pdf_path, path=True):
         bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
 
         predicted_boxes.append(bbs)
-        
-        texts.append(text)
 
-    return images, predicted_boxes, texts
+    return images, predicted_boxes, dimension
 
 
 def inference(aar, id, embete):
 
-    pdf_bytes = validation_set.download_pdf(aar, id, embete)
+    pdf_bytes = model_utils.download_pdf(aar, id, embete)
 
-    dimensions = evaluation_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
-
-    images, predicted_boxes, texts = main(pdf_bytes, path=False)
-
-    ratio = np.round(dimensions[0]/images[0].size[0], 6)
-
-    predicted_boxes = model_utils.scale_all_bounding_boxes(predicted_boxes, ratio)
+    images, predicted_boxes, dimension = main(pdf_bytes)
 
     json_responses = []
 
@@ -56,7 +51,8 @@ def inference(aar, id, embete):
                 "height": bb[3],
                 "width": bb[2],
                 "x": bb[0],
-                "y": bb[1]
+                "y": bb[1],
+                "dimensions" : dimension
             })
 
-    return images, predicted_boxes, json_responses, dimensions, ratio
+    return images, predicted_boxes, json_responses, dimension
