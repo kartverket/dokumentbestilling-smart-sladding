@@ -10,9 +10,9 @@ def get_bounding_boxes():
     # Hent ute dokumentinfo(rmasjon fra request body, år, id, embete
     data = request.get_json()
     
-    aar, id, embete = data.get('aar'), data.get('id'), data.get('embete')
+    docid = data.get('docid')
     
-    json_boxes = model_main.main(aar, id, embete)
+    json_boxes = model_main.main(docid)
 
     return jsonify(json_boxes)
 
