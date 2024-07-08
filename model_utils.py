@@ -1,13 +1,8 @@
-import numpy as np
-import scrapy
-import pandas as pd
 import PyPDF2
 import re
-from PIL import Image
 import pytesseract
-from pdf2image import convert_from_path
-import os
-import cv2
+from pdf2image import convert_from_path, convert_from_bytes
+import validation_set
 
 def get_pdf_dimensions(pdf_path):
     """
@@ -25,7 +20,7 @@ def get_pdf_dimensions(pdf_path):
     return (float(media_box.width),float(media_box.height))
 
 
-def convert_pdf_to_images(pdf_path):
+def convert_pdf_path_to_images(pdf_path):
     """
     Convert a PDF file to a list of images.
 
@@ -37,6 +32,22 @@ def convert_pdf_to_images(pdf_path):
     tuple: A tuple containing the width and height of the images.
     """
     images = convert_from_path(pdf_path)
+    width, height = images[0].size
+    dimensions = (width, height)
+    return images, dimensions
+
+def convert_pdf_bytes_to_images(pdf_bytes):
+    """
+    Convert a PDF file to a list of images.
+
+    Parameters:
+    pdf_bytes (bytes): The PDF file as bytes.
+
+    Returns:
+    list: A list of images.
+    tuple: A tuple containing the width and height of the images.
+    """
+    images = convert_from_bytes(pdf_bytes)
     width, height = images[0].size
     dimensions = (width, height)
     return images, dimensions
@@ -65,7 +76,7 @@ def extract_text_and_bb_from_image(image):
     pd.DataFrame: A DataFrame containing the bounding boxes.
     """
 
-    config = r'--oem 3 --psm 1'
+    config = r'--oem 3 --psm 11'
     text = pytesseract.image_to_string(image, lang='nor', config=config)
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
@@ -147,7 +158,6 @@ def find_matches(text):
 
     for pattern, tag in zip(patterns, categories):
         matches = re.findall(pattern, text)
-        print(matches)
 
         for match in matches:
             
@@ -169,8 +179,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
     matches_list = []
     for i in tagged_matches:
         sep_matches = i[0].split(' ')
-        if len(sep_matches) > 1:
-            matches_list.append([sep_matches[-1], i[1], i[2]])
+        matches_list.append([sep_matches[-1], i[1], i[2]])
 
     bbs = []
     for match in matches_list:
@@ -192,3 +201,40 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
             bbs_clean.append(bb)
 
     return bbs_clean
+
+def scale_bounding_box(bbox, ratio):
+    """
+    Scales a bounding box by a given ratio.
+
+    Parameters:
+    bbox (list): A list representing the bounding box [height, width, x, y].
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new bounding box scaled by the given ratio.
+    """
+    height, width, x, y = bbox
+    return [height*ratio, width*ratio, x*ratio, y*ratio]
+
+def scale_all_bounding_boxes(bounding_boxes, ratio):
+    """
+    Scales all bounding boxes in a list by a given ratio.
+
+    Parameters:
+    bounding_boxes (list): A list of bounding boxes.
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new list of bounding boxes scaled by the given ratio.
+    """
+
+    scaled_boxes = []
+
+    for page in bounding_boxes:
+        page_boxes = []
+        for bbox in page:
+            if bbox:
+                page_boxes.append(scale_bounding_box(bbox, ratio))
+        scaled_boxes.append(page_boxes)
+
+    return scaled_boxes
