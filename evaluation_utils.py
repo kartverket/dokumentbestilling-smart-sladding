@@ -9,6 +9,7 @@ import model_main
 import ast
 import matplotlib.pyplot as plt
 import numpy as np
+from pdf2image import convert_from_path, convert_from_bytes
 import fitz
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
@@ -147,6 +148,38 @@ def get_pdf_dimensions_from_byte_file(pdf_bytes):
     rect = page.rect
     return (rect.width, rect.height)
 
+def get_pdf_dimensions(pdf_path):
+    """
+    Get the dimensions of a PDF file.
+    --MARK! Assuming that all pages have the same dimensions.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    list: A tuples containing the width and height of each page in the PDF file.
+    """
+    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
+    media_box = pdf.pages[0].mediabox
+    return (float(media_box.width),float(media_box.height))
+
+
+def convert_pdf_path_to_images(pdf_path):
+    """
+    Convert a PDF file to a list of images.
+
+    Parameters:
+    pdf_path (str): The path to the PDF file.
+
+    Returns:
+    list: A list of images.
+    tuple: A tuple containing the width and height of the images.
+    """
+    images = convert_from_path(pdf_path)
+    width, height = images[0].size
+    dimensions = (width, height)
+    return images, dimensions
+
 
 def get_pdf_pagecount(pdf_path):
     """
@@ -160,6 +193,43 @@ def get_pdf_pagecount(pdf_path):
     """
     pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
     return len(pdf.pages)
+
+def scale_bounding_box(bbox, ratio):
+    """
+    Scales a bounding box by a given ratio.
+
+    Parameters:
+    bbox (list): A list representing the bounding box [height, width, x, y].
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new bounding box scaled by the given ratio.
+    """
+    height, width, x, y = bbox
+    return [height*ratio, width*ratio, x*ratio, y*ratio]
+
+def scale_all_bounding_boxes(bounding_boxes, ratio):
+    """
+    Scales all bounding boxes in a list by a given ratio.
+
+    Parameters:
+    bounding_boxes (list): A list of bounding boxes.
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new list of bounding boxes scaled by the given ratio.
+    """
+
+    scaled_boxes = []
+
+    for page in bounding_boxes:
+        page_boxes = []
+        for bbox in page:
+            if bbox:
+                page_boxes.append(scale_bounding_box(bbox, ratio))
+        scaled_boxes.append(page_boxes)
+
+    return scaled_boxes
 
 
 def get_images_and_bb_from_docid(labels_df, docid):

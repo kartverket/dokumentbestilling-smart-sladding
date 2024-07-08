@@ -1,40 +1,32 @@
-import PyPDF2
 import re
 import pytesseract
-from pdf2image import convert_from_path, convert_from_bytes
-import validation_set
+from pdf2image import convert_from_bytes
+import requests
 
-def get_pdf_dimensions(pdf_path):
+
+def download_pdf(aar, id, embete):
     """
-    Get the dimensions of a PDF file.
-    --MARK! Assuming that all pages have the same dimensions.
+    Download a PDF file from a URL.
 
     Parameters:
-    pdf_path (str): The path to the PDF file.
+    aar (int): The year of the document.
+    id (int): The ID of the document.
+    embete (int): The office of the document.
 
     Returns:
-    list: A tuples containing the width and height of each page in the PDF file.
+    bytes: The content of the PDF file.
     """
-    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
-    media_box = pdf.pages[0].mediabox
-    return (float(media_box.width),float(media_box.height))
 
+    doc = f"{aar}_{id}_{embete}"
+    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+    response = requests.get(url)
 
-def convert_pdf_path_to_images(pdf_path):
-    """
-    Convert a PDF file to a list of images.
+    if response.status_code == 200:
+        print("PDF downloaded successfully.")
+    else:
+        print("Failed to download file. HTTP Status Code:", response.status_code)
 
-    Parameters:
-    pdf_path (str): The path to the PDF file.
-
-    Returns:
-    list: A list of images.
-    tuple: A tuple containing the width and height of the images.
-    """
-    images = convert_from_path(pdf_path)
-    width, height = images[0].size
-    dimensions = (width, height)
-    return images, dimensions
+    return response.content
 
 def convert_pdf_bytes_to_images(pdf_bytes):
     """
@@ -64,7 +56,7 @@ def remove_special_characters(text):
     """
     return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
-def extract_text_and_bb_from_image(image):
+def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
     """
     Extract text and bounding boxes from an image.
 
@@ -76,7 +68,6 @@ def extract_text_and_bb_from_image(image):
     pd.DataFrame: A DataFrame containing the bounding boxes.
     """
 
-    config = r'--oem 3 --psm 11'
     text = pytesseract.image_to_string(image, lang='nor', config=config)
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
@@ -201,40 +192,3 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
             bbs_clean.append(bb)
 
     return bbs_clean
-
-def scale_bounding_box(bbox, ratio):
-    """
-    Scales a bounding box by a given ratio.
-
-    Parameters:
-    bbox (list): A list representing the bounding box [height, width, x, y].
-    ratio (float): The scaling ratio.
-
-    Returns:
-    list: A new bounding box scaled by the given ratio.
-    """
-    height, width, x, y = bbox
-    return [height*ratio, width*ratio, x*ratio, y*ratio]
-
-def scale_all_bounding_boxes(bounding_boxes, ratio):
-    """
-    Scales all bounding boxes in a list by a given ratio.
-
-    Parameters:
-    bounding_boxes (list): A list of bounding boxes.
-    ratio (float): The scaling ratio.
-
-    Returns:
-    list: A new list of bounding boxes scaled by the given ratio.
-    """
-
-    scaled_boxes = []
-
-    for page in bounding_boxes:
-        page_boxes = []
-        for bbox in page:
-            if bbox:
-                page_boxes.append(scale_bounding_box(bbox, ratio))
-        scaled_boxes.append(page_boxes)
-
-    return scaled_boxes
