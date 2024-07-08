@@ -72,6 +72,8 @@ def remove_special_characters(text):
     Returns:
     str: The text without special characters.
     """
+    if not isinstance(text, str):
+        text = str(text)
     return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
 def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
