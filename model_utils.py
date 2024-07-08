@@ -2,6 +2,7 @@ import re
 import pytesseract
 from pdf2image import convert_from_bytes
 import requests
+import fitz
 
 
 def download_pdf(aar, id, embete):
@@ -43,6 +44,23 @@ def convert_pdf_bytes_to_images(pdf_bytes):
     width, height = images[0].size
     dimensions = (width, height)
     return images, dimensions
+
+def get_pdf_dimensions_from_byte_file(pdf_bytes):
+    """
+    Get the dimensions of each page in a PDF file.
+
+    Parameters:
+    pdf_bytes (bytes): The PDF file content in bytes.
+
+    Returns:
+    list: A list of tuples where each tuple contains the width and height of a page.
+    """
+    # Open the PDF from bytes
+    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    
+    page = pdf_document.load_page(0)
+    rect = page.rect
+    return (rect.width, rect.height)
 
 def remove_special_characters(text):
     """
@@ -192,3 +210,40 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
             bbs_clean.append(bb)
 
     return bbs_clean
+
+def scale_bounding_box(bbox, ratio):
+    """
+    Scales a bounding box by a given ratio.
+
+    Parameters:
+    bbox (list): A list representing the bounding box [height, width, x, y].
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new bounding box scaled by the given ratio.
+    """
+    height, width, x, y = bbox
+    return [height*ratio, width*ratio, x*ratio, y*ratio]
+
+def scale_all_bounding_boxes(bounding_boxes, ratio):
+    """
+    Scales all bounding boxes in a list by a given ratio.
+
+    Parameters:
+    bounding_boxes (list): A list of bounding boxes.
+    ratio (float): The scaling ratio.
+
+    Returns:
+    list: A new list of bounding boxes scaled by the given ratio.
+    """
+
+    scaled_boxes = []
+
+    for page in bounding_boxes:
+        page_boxes = []
+        for bbox in page:
+            if bbox:
+                page_boxes.append(scale_bounding_box(bbox, ratio))
+        scaled_boxes.append(page_boxes)
+
+    return scaled_boxes
