@@ -1,7 +1,7 @@
 import model_utils
 import evaluation_utils
 
-def main(pdf_file):
+def model(pdf_file):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -30,9 +30,11 @@ def main(pdf_file):
     return images, predicted_boxes, dimensions
 
 
-def inference(aar, id, embete):
+def main(docid):
+
+    aar, id, embete = docid.split('_')
     
-    pdf_bytes = model_utils.download_pdf(aar, id, embete)
+    pdf_bytes = model_utils.download_pdf(docid)
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 

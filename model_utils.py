@@ -5,7 +5,7 @@ import requests
 import fitz
 
 
-def download_pdf(aar, id, embete):
+def download_pdf(docid):
     """
     Download a PDF file from a URL.
 
@@ -18,8 +18,7 @@ def download_pdf(aar, id, embete):
     bytes: The content of the PDF file.
     """
 
-    doc = f"{aar}_{id}_{embete}"
-    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{docid}.pdf"
     response = requests.get(url)
 
     if response.status_code == 200:
@@ -189,7 +188,7 @@ def find_matches(text):
 def get_boxes_to_blur(tagged_matches, bounding_boxes):
     matches_list = []
     for i in tagged_matches:
-        sep_matches = i[0].split(' ')
+        sep_matches = re.split(r'[-\s]', i[0])
         matches_list.append([sep_matches[-1], i[1], i[2]])
 
     bbs = []
