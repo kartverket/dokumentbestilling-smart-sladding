@@ -1,4 +1,5 @@
 import model_utils
+import evaluation_utils
 
 def main(pdf_file):
     """
@@ -13,7 +14,7 @@ def main(pdf_file):
     list: A list of texts.
     """
 
-    images, dimension = model_utils.convert_pdf_bytes_to_images(pdf_file)
+    images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
     predicted_boxes = []
 
@@ -26,33 +27,38 @@ def main(pdf_file):
 
         predicted_boxes.append(bbs)
 
-    return images, predicted_boxes, dimension
+    return images, predicted_boxes, dimensions
 
 
 def inference(aar, id, embete):
-
+    
     pdf_bytes = model_utils.download_pdf(aar, id, embete)
 
-    images, predicted_boxes, dimension = main(pdf_bytes)
+    pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
+    images, predicted_boxes, image_dimensions = main(pdf_bytes)
+
+    ratio = pdf_dimensions[0] / image_dimensions[0]
+
+    predicted_boxes_scaled = model_utils.scale_all_bounding_boxes(predicted_boxes, ratio)
+    
     json_responses = []
 
-    for page_num, bb_page in enumerate(predicted_boxes):
+    for page_num, bb_page in enumerate(predicted_boxes_scaled):
         for bb_index, bb in enumerate(bb_page):
             json_responses.append({
                 "dokument_aar": aar,
                 "dokument_nr": id,
                 "embete" : embete, 
-                "sidetall": page_num,
+                "sidetall": page_num+1,
                 "index": bb_index,
                 "type": "PERSONNUMMER",
-                "ml_generated": True,
+                "ml_generated": 'true',
                 "ml_status": None,
                 "height": bb[3],
                 "width": bb[2],
                 "x": bb[0],
-                "y": bb[1],
-                "dimensions" : dimension
+                "y": bb[1]
             })
 
-    return images, predicted_boxes, json_responses, dimension
+    return images, predicted_boxes, json_responses, ratio
