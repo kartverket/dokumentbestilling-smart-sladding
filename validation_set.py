@@ -24,6 +24,32 @@ def download_and_save_pdf(url, filename):
     else:
         print("Failed to download file. HTTP Status Code:", response.status_code)
 
+    return filename
+
+def download_pdf(aar, id, embete):
+    """
+    Download a PDF file from a URL.
+
+    Parameters:
+    aar (int): The year of the document.
+    id (int): The ID of the document.
+    embete (int): The office of the document.
+
+    Returns:
+    bytes: The content of the PDF file.
+    """
+
+    doc = f"{aar}_{id}_{embete}"
+    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        print("PDF downloaded successfully.")
+    else:
+        print("Failed to download file. HTTP Status Code:", response.status_code)
+
+    return response.content
+
 
 def download_all_documents(tinglyst_dokument_csv_path, save_folder_path):
     """

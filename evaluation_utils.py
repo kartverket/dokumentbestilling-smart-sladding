@@ -9,6 +9,7 @@ import model_main
 import ast
 import matplotlib.pyplot as plt
 import numpy as np
+import fitz
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     """
@@ -129,6 +130,23 @@ def get_pdf_dimensions(pdf_path):
     media_box = pdf.pages[0].mediabox
     return (float(media_box.width),float(media_box.height))
 
+def get_pdf_dimensions_from_byte_file(pdf_bytes):
+    """
+    Get the dimensions of each page in a PDF file.
+
+    Parameters:
+    pdf_bytes (bytes): The PDF file content in bytes.
+
+    Returns:
+    list: A list of tuples where each tuple contains the width and height of a page.
+    """
+    # Open the PDF from bytes
+    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    
+    page = pdf_document.load_page(0)
+    rect = page.rect
+    return (rect.width, rect.height)
+
 
 def get_pdf_pagecount(pdf_path):
     """
@@ -163,7 +181,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     bbs = ast.literal_eval(row.iloc[0])
 
     #Get the page_count for the document in valideringssett
-    filename = f"../valideringssett/dokumenter/{docid}.pdf"
+    filename = f"{docid}.pdf"
     page_count = get_pdf_pagecount(filename)
 
     # Add empty lists for pages without bounding boxes
@@ -172,7 +190,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     
     # Get the dimensions of the downloaded pdf file and the local pdf file
     dimensions = get_pdf_dimensions(filename)
-    images, dimensions_hq = model_utils.convert_pdf_to_images(filename)
+    images, dimensions_hq = model_utils.convert_pdf_path_to_images(filename)
 
     # Calculate the ratio between the high quality images and the images from pdf2image
     dimention_ratio = dimensions_hq[0]/dimensions[0]
