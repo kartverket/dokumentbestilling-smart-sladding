@@ -320,6 +320,17 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
     return images_with_bb
 
 def test_and_visualize_doc(doc_id, visualize=False):
+    """
+    Test the model on a document and visualize the results.
+
+    Parameters:
+    doc_id (str): The document ID.
+    visualize (bool): Whether to visualize the bounding boxes.
+
+    Returns:
+    list: A list of images with bounding boxes.
+    """
+
     pdf_path = f'../valideringssett/dokumenter/{doc_id}.pdf'
 
     organized_labels_path = pd.read_csv("../valideringssett/organized_data.csv")
@@ -334,6 +345,14 @@ def test_and_visualize_doc(doc_id, visualize=False):
 
 
 def get_metrics_and_cm(total_tp, total_fp, total_fn):
+    """
+    Calculate the precision, recall, and F1 score from the total number of true positives, false positives, and false negatives. Plot the metrics in a confusion matrix.
+    
+    Parameters:
+    total_tp (int): The total number of true positives.
+    total_fp (int): The total number of false positives.
+    total_fn (int): The total number of false negatives.
+    """
 
     precision = total_tp / (total_tp + total_fp)
     recall = total_tp / (total_tp + total_fn)

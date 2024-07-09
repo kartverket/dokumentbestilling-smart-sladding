@@ -31,6 +31,18 @@ def model(pdf_file):
 
 
 def main(docid):
+    """
+    Extract text from a PDF file and blur out sensitive information.
+
+    Parameters:
+    docid (str): the document ID.
+
+    Returns:
+    images (list): A list of images.
+    predicted_boxes (list): A list of bounding boxes per image.
+    json_responses (list): A list of json responses (dict).
+    ratio (float): The ratio between the PDF and image dimensions.
+    """
 
     aar, id, embete = docid.split('_')
     
@@ -38,7 +50,7 @@ def main(docid):
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    images, predicted_boxes, image_dimensions = main(pdf_bytes)
+    images, predicted_boxes, image_dimensions = model(pdf_bytes)
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 

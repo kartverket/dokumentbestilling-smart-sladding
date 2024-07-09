@@ -4,6 +4,18 @@ import pandas as pd
 import os
 
 def evaluate_model(folder_path):
+    """
+    Evaluate the model on a set of documents.
+
+    Parameters:
+    folder_path (str): The path to the folder containing the documents.
+
+    Returns:
+    total_results (list): A list of dictionaries containing the results per document.
+    total_tp (int): The total number of true positives.
+    total_fp (int): The total number of false positives.
+    total_fn (int): The total number of false negatives.
+    """
 
     organized_labels_path = pd.read_csv("../valideringssett/organized_data.csv")
 

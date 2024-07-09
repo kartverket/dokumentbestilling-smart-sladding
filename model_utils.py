@@ -98,6 +98,15 @@ def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
     return text, bounding_boxes
 
 def check_controldigits(number):
+    """
+    Check if the control digits of a Norwegian personal number are correct.
+
+    Parameters:
+    number (str): The personal number to validate.
+
+    Returns:
+    bool: True if the control digits are correct, False otherwise.
+    """
 
     # Remove whitespace
     number = re.sub(r'\s*', '', number)
@@ -134,6 +143,17 @@ def check_controldigits(number):
     return False
 
 def format_dnumber(dnumber):
+    """
+    Format a D-number to a personal number.
+
+    Parameters:
+    dnumber (str): The D-number to format.
+
+    Returns:
+    bool: True if the D-number is a valid personal number, False otherwise.
+    str: The formatted personal number.
+    """
+
     is_personal_number = True
     # Remove whitespace to get the original D-number
     dnumber = re.sub(r'\s*', '', dnumber)
@@ -158,6 +178,16 @@ def format_dnumber(dnumber):
     return is_personal_number, personal_number
 
 def find_matches(text):
+    """
+    Find matches in a text using regular expressions.
+
+    Parameters:
+    text (str): The text to search for matches.
+
+    Returns:
+    list: A list of matches with corresponding tag and index.
+    """
+
     pattern_personummer = re.compile(r'(?:0[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d') #obs: tillater ikke space mellom tallene i dag, måned, år
     pattern_dnummer = re.compile(r'[4,5,6,7]\s*(?:[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d')
 
@@ -186,6 +216,17 @@ def find_matches(text):
 
 
 def get_boxes_to_blur(tagged_matches, bounding_boxes):
+    """
+    Get bounding boxes for matches found in a text.
+
+    Parameters:
+    tagged_matches (list): A list of matches with corresponding tag and index.
+    bounding_boxes (pd.DataFrame): A DataFrame containing the bounding boxes.
+
+    Returns:
+    list: A list of bounding boxes for the matches.
+    """
+    
     matches_list = []
     for i in tagged_matches:
         sep_matches = re.split(r'[-\s]', i[0])
