@@ -11,13 +11,7 @@ def get_bounding_boxes():
     data = request.args.get("dokumentIdent", type=str)
     print("data", data)
     
-<<<<<<< HEAD
     aar, id, embete = data.split("-")
-=======
-    docid = data.get('docid')
-    
-    json_boxes = model_main.main(docid)
->>>>>>> main
 
     print(aar, id, embete)
     
