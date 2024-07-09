@@ -1,7 +1,16 @@
-tesseract
+pytesseract
 pillow
 opencv-python
 pdf2image
 transformers
 torch
+torchvision
 datasets
+flask
+pandas
+matplotlib
+numpy
+fitz
+ast
+re
+requests
