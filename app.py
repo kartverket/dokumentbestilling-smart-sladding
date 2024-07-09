@@ -11,7 +11,7 @@ def get_bounding_boxes():
     data = request.args.get("dokumentIdent", type=str)
     print("data", data)
     
-    aar, id, embete = data.split("-")
+    aar, id, embete = data.split("_")
 
     print(aar, id, embete)
     
