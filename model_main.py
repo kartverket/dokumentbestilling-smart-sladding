@@ -61,14 +61,7 @@ def main(docid):
     for page_num, bb_page in enumerate(predicted_boxes_scaled):
         for bb_index, bb in enumerate(bb_page):
             json_responses.append({
-                "dokument_aar": aar,
-                "dokument_nr": id,
-                "embete" : embete, 
-                "sidetall": page_num+1,
-                "index": bb_index,
-                "type": "PERSONNUMMER",
-                "ml_generated": 'true',
-                "ml_status": None,
+                "page": page_num+1,
                 "height": bb[3],
                 "width": bb[2],
                 "x": bb[0],
