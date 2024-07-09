@@ -44,8 +44,6 @@ def main(docid):
     ratio (float): The ratio between the PDF and image dimensions.
     """
 
-    aar, id, embete = docid.split('_')
-    
     pdf_bytes = model_utils.download_pdf(docid)
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
@@ -68,4 +66,4 @@ def main(docid):
                 "y": bb[1]
             })
 
-    return images, predicted_boxes, json_responses, ratio
+    return json_responses

@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request, Response
-# import model_main
+import model_main
 
 app = Flask(__name__)
 
@@ -10,16 +10,13 @@ def get_bounding_boxes():
     # Hent ute dokumentinfo(rmasjon fra request body, år, id, embete
     data = request.args.get("dokumentIdent", type=str)
     print("data", data)
-    
-    aar, id, embete = data.split("_")
 
-    print(aar, id, embete)
-    
-    # json_boxes = model_main.main(aar, id, embete)
-    label_list = [{"x":100, "y":100, "height":100, "width":100, "page":1}, {"x":100, "y":100, "height":100, "width":100, "page":1}]
+    docid = data
+
+    json_responses = model_main.main(docid)
+
     # return jsonify(label_list)
-    test = jsonify(label_list)
-    # print("list:",test, type(test))
+    test = jsonify(json_responses)
 
     # test.status_code=200
     return test
