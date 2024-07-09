@@ -11,6 +11,6 @@ pandas
 matplotlib
 numpy
 fitz
-ast
-re
+regex
 requests
+ast-tools
