@@ -1,8 +1,14 @@
-tesseract
+pytesseract
 pillow
 opencv-python
 pdf2image
-transformers
+PyPDF2
+numpy
+matplotlib
+pandas
 torch
+torchvision
+pymupdf
+requests
 datasets
 pytest
