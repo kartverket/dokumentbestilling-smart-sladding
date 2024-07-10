@@ -43,7 +43,7 @@ def main(docid):
     json_responses (list): A list of json responses (dict).
     ratio (float): The ratio between the PDF and image dimensions.
     """
-    
+
     pdf_bytes = model_utils.download_pdf(docid)
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
