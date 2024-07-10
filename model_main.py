@@ -60,10 +60,10 @@ def main(docid):
         for bb_index, bb in enumerate(bb_page):
             json_responses.append({
                 "page": page_num+1,
-                "height": bb[3],
-                "width": bb[2],
-                "x": bb[0],
-                "y": bb[1]
+                "height": bb[0],
+                "width": bb[1],
+                "x": bb[2],
+                "y": bb[3]
             })
 
     return json_responses
