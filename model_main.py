@@ -67,3 +67,7 @@ def main(docid):
             })
 
     return json_responses
+
+if __name__ == '__main__':
+    res = main('2023_62529_200')
+    print(res)
