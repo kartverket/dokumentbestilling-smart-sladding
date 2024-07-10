@@ -8,5 +8,6 @@ matplotlib
 pandas
 torch
 torchvision
-pymupdf
+flask
 requests
+pymupdf

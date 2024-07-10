@@ -1,20 +1,17 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 import model_main
 
 app = Flask(__name__)
 
 
-@app.route('/model/', methods=['POST'])
+@app.route('/model', methods=['GET'])
 def get_bounding_boxes():
 
-    # Hent ute dokumentinfo(rmasjon fra request body, år, id, embete
-    data = request.get_json()
-    
-    docid = data.get('docid')
-    
-    json_boxes = model_main.main(docid)
+    docid = request.args.get("dokumentIdent", type=str)
 
-    return jsonify(json_boxes)
+    json_responses = model_main.main(docid)
+
+    return jsonify(json_responses)
 
 if __name__ == '__main__':
     app.run(host='localhost', port=5070)
