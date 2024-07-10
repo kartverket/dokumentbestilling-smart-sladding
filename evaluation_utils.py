@@ -7,8 +7,6 @@ import pandas as pd
 import model_utils
 import model_main
 import ast
-import matplotlib.pyplot as plt
-import numpy as np
 from pdf2image import convert_from_path, convert_from_bytes
 import fitz
 
