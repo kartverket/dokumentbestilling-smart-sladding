@@ -7,20 +7,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import model_utils
 import model_main
-import evaluation_utils
 
-
+# Fixtures
 @pytest.fixture
 def personnumber():
     return "30053238021"
-
-# add different spaces in personnumber for tests?
-
-# @pytest.fixture
-# def personnumber_spaces():
-#     return "30 05 32 3 8 0 2 1"
-
-# Fixed parameters
 
 @pytest.fixture
 def dnumber():
@@ -30,6 +21,15 @@ def dnumber():
 def doc_id():
     return '2023_72893_200'
 
+@pytest.fixture
+def json_response():
+    return [{'page': 1, 'height': 279.71999999999997, 'width': 405.35999999999996, 'x': 6.4799999999999995, 'y': 23.4}, 
+            {'page': 1, 'height': 574.92, 'width': 208.44, 'x': 6.4799999999999995, 'y': 23.4}, 
+            {'page': 1, 'height': 702.72, 'width': 77.39999999999999, 'x': 6.4799999999999995, 'y': 23.04}, 
+            {'page': 1, 'height': 295.2, 'width': 405.35999999999996, 'x': 6.4799999999999995, 'y': 23.04}, 
+            {'page': 1, 'height': 590.76, 'width': 208.44, 'x': 6.4799999999999995, 'y': 23.4}, 
+            {'page': 1, 'height': 686.88, 'width': 77.03999999999999, 'x': 6.4799999999999995, 'y': 23.4}]
+
 # Test functions
 
 def test_check_controldigits(personnumber):
@@ -38,6 +38,6 @@ def test_check_controldigits(personnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.format_dnumber(dnumber) == (True, "30053238021")
 
-def test_main(doc_id):
-    assert model_main.main(doc_id) == (True, "2023_72893_200")
+def test_main(doc_id, json_response):
+    assert model_main.main(doc_id) == json_response
 
