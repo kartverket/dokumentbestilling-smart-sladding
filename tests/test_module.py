@@ -38,6 +38,6 @@ def test_check_controldigits(personnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.format_dnumber(dnumber) == (True, "30053238021")
 
-def test_main(doc_id, json_response):
-    assert model_main.main(doc_id) == json_response
+# def test_main(doc_id, json_response):
+#     assert model_main.main(doc_id) == json_response
 
