@@ -43,8 +43,6 @@ def main(docid):
     json_responses (list): A list of json responses (dict).
     ratio (float): The ratio between the PDF and image dimensions.
     """
-
-    aar, id, embete = docid.split('_')
     
     pdf_bytes = model_utils.download_pdf(docid)
 
@@ -68,4 +66,8 @@ def main(docid):
                 "y": bb[1]
             })
 
-    return images, predicted_boxes, json_responses, ratio
+    return json_responses
+
+if __name__ == '__main__':
+    res = main('2023_62529_200')
+    print(res)
