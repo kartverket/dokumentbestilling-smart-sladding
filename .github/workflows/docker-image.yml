@@ -1,5 +1,9 @@
 name: Deploy Image to GHCR
 
+permissions:
+  contents: read
+  packages: write
+
 on:
   push:
     branches:
