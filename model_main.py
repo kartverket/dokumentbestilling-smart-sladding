@@ -1,5 +1,4 @@
 import model_utils
-import evaluation_utils
 
 def model(pdf_file):
     """
@@ -52,7 +51,7 @@ def main(docid):
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 
-    predicted_boxes_scaled = model_utils.scale_all_bounding_boxes(predicted_boxes, ratio)
+    predicted_boxes_scaled = model_utils.scale_and_pad_all_bounding_boxes(predicted_boxes, ratio)
     
     json_responses = []
 
@@ -66,7 +65,7 @@ def main(docid):
                 "y": bb[3]
             })
 
-    return json_responses
+    return images, json_responses, ratio, predicted_boxes_scaled
 
 if __name__ == '__main__':
     res = main('2023_62529_200')
