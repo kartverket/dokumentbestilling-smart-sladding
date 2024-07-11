@@ -14,6 +14,10 @@ def personnumber():
     return "30053238021"
 
 @pytest.fixture
+def not_personnumber():
+    return "30053238022"
+
+@pytest.fixture
 def dnumber():
     return "70053238021"
 
@@ -32,8 +36,16 @@ def json_response():
 
 # Test functions
 
-def test_check_controldigits(personnumber):
+def test_find_matches(personnumber, not_personnumber, dnumber):
+    assert model_utils.find_matches(f"This is a test with a valid personnumber {personnumber}") == [[f'{personnumber}', 'personnummer', 0]]
+    assert model_utils.find_matches(f'This is a test with an invalid personnumber {not_personnumber}') == []
+    assert model_utils.find_matches(f"This is a test with a valid dnumber {dnumber}") == [[f'{dnumber}', 'dnummer', 0]]
+    assert model_utils.find_matches(f"This is a test with a valid personnumber {personnumber} and a valid dnumber {dnumber}") == [[f'{personnumber}', 'personnummer', 0], [f'{dnumber}', 'dnummer', 1]]
+
+def test_check_controldigits(personnumber, not_personnumber, dnumber):
     assert model_utils.check_controldigits(personnumber) == True
+    assert model_utils.check_controldigits(not_personnumber) == False
+    assert model_utils.check_controldigits(model_utils.format_dnumber(dnumber)[1]) == True
 
 def test_format_dnumber(dnumber):
     assert model_utils.format_dnumber(dnumber) == (True, "30053238021")
