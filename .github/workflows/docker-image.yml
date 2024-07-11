@@ -22,5 +22,5 @@ jobs:
 
       - name: 'Build and Push Python Image'
         run: |
-          docker build -f Dockerfile -t ghcr.io/oskaramm/smart_sladding_ml:latest .
-          docker push ghcr.io/oskaramm/smart_sladding_ml:latest
+          docker build -f Dockerfile -t ghcr.io/kartverket/smart_sladding_ml:latest .
+          docker push ghcr.io/kartverket/smart_sladding_ml:latest
