@@ -246,7 +246,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
         for index, row in bounding_boxes.iterrows():
             if pattern.search(row['text']):
                 if no_sep:
-                    loc = [row['height'], 0.4*row['width'], row['left'] + 0.6*row['width'], row['top']]
+                    loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
                 else:
                     loc = [row['height'], row['width'], row['left'], row['top']]
                 match_bbs.append(loc)
