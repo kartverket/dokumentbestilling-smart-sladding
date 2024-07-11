@@ -7,8 +7,12 @@ permissions:
 on:
   push:
     branches:
-      - push_docker_to_GHCR
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+
 
 jobs:
   push-python-image:
