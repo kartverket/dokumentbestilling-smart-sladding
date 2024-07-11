@@ -28,5 +28,5 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # Specify the command to run your application
-CMD ["python", "model_main.py"]
+CMD ["python", "app.py"]
 
