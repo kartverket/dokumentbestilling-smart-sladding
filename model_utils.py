@@ -253,21 +253,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
 
     return bbs_clean
 
-def scale_bounding_box(bbox, ratio):
-    """
-    Scales a bounding box by a given ratio.
-
-    Parameters:
-    bbox (list): A list representing the bounding box [height, width, x, y].
-    ratio (float): The scaling ratio.
-
-    Returns:
-    list: A new bounding box scaled by the given ratio.
-    """
-    height, width, x, y = bbox
-    return [height*ratio, width*ratio, x*ratio, y*ratio]
-
-def scale_all_bounding_boxes(bounding_boxes, ratio):
+def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2):
     """
     Scales all bounding boxes in a list by a given ratio.
 
@@ -285,7 +271,9 @@ def scale_all_bounding_boxes(bounding_boxes, ratio):
         page_boxes = []
         for bbox in page:
             if bbox:
-                page_boxes.append(scale_bounding_box(bbox, ratio))
+                height, width, x, y = bbox
+                padding = height * padding_factor
+                page_boxes.append([height * ratio + padding, width * ratio + padding, x * ratio - 2 * (padding / 3), y * ratio - 2 * (padding / 3)])
         scaled_boxes.append(page_boxes)
 
     return scaled_boxes
