@@ -34,6 +34,8 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
         predicted_boxes = []
 
+        total_text = ""
+
         for i, image in enumerate(images):
             text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image, config)
 
@@ -42,6 +44,8 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
             bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
 
             predicted_boxes.append(bbs)
+
+            total_text += text
 
         metrics_list = []
         for i,j in zip(true_boxes, predicted_boxes):
@@ -55,6 +59,15 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
         if results['FP'] > 0 or results['FN'] > 0:
             for i, img in enumerate(images_with_bbs):
                 img.savefig(f'../wrong_all/{docid}_{i}.png')
+                
+        if results['FP'] > 0:
+            os.mkdir(f'../wrong_fp/{docid}/')
+            for i, img in enumerate(images_with_bbs):
+                img.savefig(f'../wrong_fp/{docid}/{i}.png')
+                #Save textfile with the text
+            with open(f"../wrong_fp/{docid}/{i}.txt", "w") as text_file:
+                text_file.write(total_text)
+            
         
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'../resultater_all/{docid}_{i}.png')
