@@ -65,7 +65,7 @@ def main(docid, config = r'--oem 3 --psm 11'):
                 "y": bb[3]
             })
 
-    return images, json_responses, ratio, predicted_boxes_scaled
+    return json_responses
 
 if __name__ == '__main__':
     res = main('2023_62529_200')
