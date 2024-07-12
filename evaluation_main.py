@@ -2,8 +2,9 @@ import evaluation_utils
 import model_main
 import pandas as pd
 import os
+import model_utils
 
-def evaluate_model(folder_path):
+def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
     """
     Evaluate the model on a set of documents.
 
@@ -25,10 +26,22 @@ def evaluate_model(folder_path):
     for index, dokument in enumerate(os.listdir(folder_path)):
         pdf_path = folder_path + dokument
         #remove .pdf from the name
-        doc_id = dokument[:-4]
+        docid = dokument[:-4]
 
-        images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, doc_id)
-        images_pred, predicted_boxes, texts = model_main.main(pdf_path)
+        images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid)
+
+        images, dimensions = evaluation_utils.convert_pdf_path_to_images(pdf_path)
+
+        predicted_boxes = []
+
+        for i, image in enumerate(images):
+            text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image, config)
+
+            tagged_matches = model_utils.find_matches(text)
+
+            bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
+
+            predicted_boxes.append(bbs)
 
         metrics_list = []
         for i,j in zip(true_boxes, predicted_boxes):
@@ -36,19 +49,21 @@ def evaluate_model(folder_path):
             metrics_list.append(metrics)
 
         results = evaluation_utils.metrics_perdocument(metrics_list)
-        if results['FP'] > 0 or results['FN'] > 0:
-            images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=False)
-            for i, img in enumerate(images_with_bbs):
-                img.savefig(f'../wrong_labels_all/{doc_id}_{i}.png')
-        
 
         images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=False)
+        
+        if results['FP'] > 0 or results['FN'] > 0:
+            for i, img in enumerate(images_with_bbs):
+                img.savefig(f'../wrong_all/{docid}_{i}.png')
+        
         for i, img in enumerate(images_with_bbs):
-            img.savefig(f'../resultater_all/{doc_id}_{i}.png')
+            img.savefig(f'../resultater_all/{docid}_{i}.png')
 
         total_tp += results['TP']
         total_fp += results['FP']
         total_fn += results['FN']
+
+        print(total_tp, total_fp, total_fn)
         
         total_results.append(results)
         print(index)
