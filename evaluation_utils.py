@@ -4,7 +4,6 @@ from torchvision.ops import box_iou
 import matplotlib.pyplot as plt
 import PyPDF2
 import pandas as pd
-import model_utils
 import model_main
 import ast
 from pdf2image import convert_from_path, convert_from_bytes
@@ -249,7 +248,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     bbs = ast.literal_eval(row.iloc[0])
 
     #Get the page_count for the document in valideringssett
-    filename = f"{docid}.pdf"
+    filename = f"../dokumenter/{docid}.pdf"
     page_count = get_pdf_pagecount(filename)
 
     # Add empty lists for pages without bounding boxes
@@ -258,7 +257,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     
     # Get the dimensions of the downloaded pdf file and the local pdf file
     dimensions = get_pdf_dimensions(filename)
-    images, dimensions_hq = model_utils.convert_pdf_path_to_images(filename)
+    images, dimensions_hq = convert_pdf_path_to_images(filename)
 
     # Calculate the ratio between the high quality images and the images from pdf2image
     dimention_ratio = dimensions_hq[0]/dimensions[0]
