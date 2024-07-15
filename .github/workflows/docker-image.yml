@@ -11,12 +11,20 @@ on:
   pull_request:
     branches:
       - main
+  workflow_call:
+    outputs:
+      image_sha:
+        description: "The sha of the image"
+        value: ${{ jobs.push-python-image.outputs.image_sha }}
   workflow_dispatch:
+  
 
 
 jobs:
   push-python-image:
     runs-on: ubuntu-latest
+    outputs:
+      image_sha: ${{ steps.setOutput.outputs.image_sha }}
     steps:
       - name: 'Checkout GitHub Action'
         uses: actions/checkout@v2
@@ -42,3 +50,15 @@ jobs:
           IMAGE_TAG=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}
           docker tag $IMAGE_TAG ghcr.io/kartverket/smart_sladding_ml:latest
           docker push ghcr.io/kartverket/smart_sladding_ml:latest
+
+      - name: Set output with build values
+        id: setOutput
+        run: |
+          echo "image_sha=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}" >> $GITHUB_OUTPUT
+  argocd-sync:
+    needs: push-python-image
+    uses: ./.github/workflows/argo-sync.yml
+    secrets: inherit
+    with:
+      image_sha: ${{ needs.push-python-image.outputs.image_sha }}
+        

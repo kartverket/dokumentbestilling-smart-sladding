@@ -1,0 +1,28 @@
+name: Update argo image version
+
+
+on:
+    workflow_call:
+        inputs:
+            image_sha:
+                description: "The sha of the image"
+                required: true
+                type: string
+    workflow_dispatch:
+
+
+jobs:
+    argo-sync:
+        name: Deploy
+        uses: kartverket/eiet-apps/.github/workflows/release-app.yml@main
+        with:
+            imageurl: ${{ inputs.image_sha }}
+            branch: ${{ github.head_ref || github.ref_name }}
+            namespace_prefix: dokumentbestilling
+            version_file: version
+            ingress_file: ingress
+            ingress_prefix: dokumentbestilling
+            application: dokumentbestilling-smartsladding
+        secrets:
+            PAT_REPO: ${{ secrets.PAT_REPO }}
+
