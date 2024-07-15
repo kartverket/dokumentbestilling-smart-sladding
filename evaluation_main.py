@@ -3,6 +3,7 @@ import model_main
 import pandas as pd
 import os
 import model_utils
+import time
 
 def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
     """
@@ -22,6 +23,7 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
     total_results = []
     total_tp, total_fp, total_fn = 0,0,0
+
     #Loop through all docu
     for index, dokument in enumerate(os.listdir(folder_path)):
         pdf_path = folder_path + dokument
@@ -36,6 +38,7 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
         total_text = ""
 
+        time0 = time.time()
         for i, image in enumerate(images):
             text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image, config)
 
@@ -46,7 +49,9 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
             predicted_boxes.append(bbs)
 
             total_text += text
-
+        time1 = time.time()
+        print(f"OCR time for {docid}: {time1-time0}")
+        
         metrics_list = []
         for i,j in zip(true_boxes, predicted_boxes):
             matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(i, j)

@@ -227,15 +227,18 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
     list: A list of bounding boxes for the matches.
     """
     
-    no_sep = False
+    splitted = False
     matches_list = []
 
     for i in tagged_matches:
-        sep_matches = re.split(r'[`\-=~!@#$%^&*()_+\[\]{};\'\\:"|<,./<>?\s]', i[0])
-        if len(sep_matches) == 1:
-            no_sep = True
+        sep_matches = re.split(r'\s+', i[0])
 
-        matches_list.append([sep_matches[-1], i[1], i[2]])
+        if len(sep_matches) == 2:
+            splitted = True
+            matches_list.append([sep_matches[-1], i[1], i[2]])
+        
+        else:
+            matches_list.append([i[0], i[1], i[2]])
 
     bbs = []
     for match in matches_list:
@@ -245,10 +248,10 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
 
         for index, row in bounding_boxes.iterrows():
             if pattern.search(row['text']):
-                if no_sep:
-                    loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
-                else:
+                if splitted:
                     loc = [row['height'], row['width'], row['left'], row['top']]
+                else:
+                    loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
                 match_bbs.append(loc)
         
         # Extend the main bounding boxes list with all matches found for this pattern
