@@ -1,7 +1,7 @@
-### 🎯 **Issue:** 
+🎯 **Issue:** 
 
 
-### ✓ **Hva jeg har gjort:** 
+✓ **Hva jeg har gjort:** 
 
 
-### 🧪 **Hvordan teste dette:**
+🧪 **Hvordan teste dette:**
