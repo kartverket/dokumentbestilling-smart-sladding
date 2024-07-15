@@ -29,7 +29,7 @@ def model(pdf_file, config):
     return images, predicted_boxes, dimensions
 
 
-def main(docid, config = r'--oem 3 --psm 11'):
+def main(docid, base_url, config = r'--oem 3 --psm 11'):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -43,7 +43,7 @@ def main(docid, config = r'--oem 3 --psm 11'):
     ratio (float): The ratio between the PDF and image dimensions.
     """
 
-    pdf_bytes = model_utils.download_pdf(docid)
+    pdf_bytes = model_utils.download_pdf(docid, base_url)
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 

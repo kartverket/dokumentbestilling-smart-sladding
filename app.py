@@ -1,8 +1,12 @@
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request
 import model_main
+import os
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
+load_dotenv()
+base_url = os.getenv('DOKUMENT_URL', default='http://localhost:3000/pantebok')
 
 @app.route('/health')
 def health():
@@ -15,7 +19,7 @@ def get_bounding_boxes():
 
     docid = request.args.get("dokumentIdent", type=str)
 
-    json_responses = model_main.main(docid)
+    json_responses = model_main.main(docid, base_url)
 
     return jsonify(json_responses)
 
