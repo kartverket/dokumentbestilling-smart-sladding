@@ -229,7 +229,7 @@ def scale_all_bounding_boxes(bounding_boxes, ratio):
     return scaled_boxes
 
 
-def get_images_and_bb_from_docid(labels_df, docid):
+def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     """
     Get the images and bounding boxes for a document from the document id(dokument-ident).
 
@@ -248,7 +248,7 @@ def get_images_and_bb_from_docid(labels_df, docid):
     bbs = ast.literal_eval(row.iloc[0])
 
     #Get the page_count for the document in valideringssett
-    filename = f"../dokumenter/{docid}.pdf"
+    filename = folder_path + f"{docid}.pdf"
     page_count = get_pdf_pagecount(filename)
 
     # Add empty lists for pages without bounding boxes
@@ -260,11 +260,11 @@ def get_images_and_bb_from_docid(labels_df, docid):
     images, dimensions_hq = convert_pdf_path_to_images(filename)
 
     # Calculate the ratio between the high quality images and the images from pdf2image
-    dimention_ratio = dimensions_hq[0]/dimensions[0]
+    dimension_ratio = dimensions_hq[0]/dimensions[0]
 
     # Scale the bounding boxes
-    bbs = [[scale_bounding_box(bb, dimention_ratio) for bb in page] for page in bbs]
-    return images, bbs
+    bbs_scaled = [[scale_bounding_box(bb, dimension_ratio) for bb in page] for page in bbs] 
+    return images, bbs_scaled
 
 
 def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
