@@ -125,7 +125,7 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
             for i, row in page_data.iterrows():
 
                 # Add the bounding box to the list
-                bbs.append([row["x"], row["y"], row["width"], row["height"]])
+                bbs.append([row["height"], row["width"], row["x"], row["y"]])
 
             # Add the bounding boxes for the page to the document
             bbs_doc.append(bbs)
