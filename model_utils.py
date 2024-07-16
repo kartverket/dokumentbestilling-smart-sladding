@@ -73,7 +73,7 @@ def remove_special_characters(text):
     """
     if not isinstance(text, str):
         text = str(text)
-    return re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    return re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
 
 def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
     """
@@ -233,7 +233,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
     for i in tagged_matches:
         sep_matches = re.split(r'\s+', i[0])
 
-        if len(sep_matches) == 2:
+        if len(sep_matches[-1]) == 5:
             splitted = True
             matches_list.append([sep_matches[-1], i[1], i[2]])
         
