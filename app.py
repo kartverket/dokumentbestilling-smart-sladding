@@ -15,6 +15,7 @@ def health():
 
 
 
+
 @app.route('/model', methods=['GET'])
 def get_bounding_boxes():
 
