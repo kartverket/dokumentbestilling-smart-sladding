@@ -62,6 +62,6 @@ jobs:
       PAT_REPO: ${{ secrets.PAT_REPO }}
     uses: kartverket/eiet-apps/.github/workflows/kopier-image-smartsladding-dev.yml@main
     with:
-      IMAGE_SHA: ${{ needs.push-python-image.outputs.image_sha }}
+      imageurl: ${{ needs.push-python-image.outputs.image_sha }}
         
         
