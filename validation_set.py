@@ -26,7 +26,7 @@ def download_and_save_pdf(url, filename):
 
     return filename
 
-def download_pdf(aar, id, embete):
+def download_pdf(aar, id, embete, base_url):
     """
     Download a PDF file from a URL.
 
@@ -40,7 +40,7 @@ def download_pdf(aar, id, embete):
     """
 
     doc = f"{aar}_{id}_{embete}"
-    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+    url = f"{base_url}/{doc}.pdf"
     response = requests.get(url)
 
     if response.status_code == 200:
@@ -51,7 +51,7 @@ def download_pdf(aar, id, embete):
     return response.content
 
 
-def download_all_documents(tinglyst_dokument_csv_path, save_folder_path):
+def download_all_documents(tinglyst_dokument_csv_path, save_folder_path, base_url):
     """
     Download all documents from a CSV file containing document information.
 
@@ -72,7 +72,7 @@ def download_all_documents(tinglyst_dokument_csv_path, save_folder_path):
         os.mkdir(save_folder_path)
         # Download and save each document
         for doc in df_doc_ids:
-            url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{doc}.pdf"
+            url = f"{base_url}/{doc}.pdf"
             filename = save_folder_path + "/" + doc + ".pdf"
             download_and_save_pdf(url, filename)
 

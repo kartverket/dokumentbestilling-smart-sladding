@@ -5,7 +5,7 @@ import requests
 import fitz
 
 
-def download_pdf(docid):
+def download_pdf(docid, base_url):
     """
     Download a PDF file from a URL.
 
@@ -18,7 +18,7 @@ def download_pdf(docid):
     bytes: The content of the PDF file.
     """
 
-    url = f"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/{docid}.pdf"
+    url = f"{base_url}/{docid}.pdf"
     response = requests.get(url)
 
     if response.status_code == 200:
