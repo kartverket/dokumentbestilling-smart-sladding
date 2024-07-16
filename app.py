@@ -14,7 +14,6 @@ def health():
     return jsonify(health="healthy")
 
 
-
 @app.route('/model', methods=['GET'])
 def get_bounding_boxes():
 
