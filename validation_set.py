@@ -73,6 +73,7 @@ def download_all_documents(tinglyst_dokument_csv_path, save_folder_path, base_ur
         # Download and save each document
         for doc in df_doc_ids:
             url = f"{base_url}/{doc}.pdf"
+            print(url)
             filename = save_folder_path + "/" + doc + ".pdf"
             download_and_save_pdf(url, filename)
 
@@ -80,7 +81,6 @@ def download_all_documents(tinglyst_dokument_csv_path, save_folder_path, base_ur
     except FileExistsError:
         print("Folder already exists. Delete folder and try again.")
         pass
-
 
 
 
@@ -115,29 +115,33 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
     for doc_id, doc_data in grouped_docs:
         bbs_doc = []
 
-        #Get the page count for the document to add empty lists for pages without bounding boxes
-        page_count = evaluation_utils.get_pdf_pagecount(save_folder_path + '/' + doc_id + '.pdf') 
-        grouped_pages = doc_data.groupby('sidetall')
+        try:
+            #Get the page count for the document to add empty lists for pages without bounding boxes
+            page_count = evaluation_utils.get_pdf_pagecount(save_folder_path + '/' + doc_id + '.pdf') 
+            grouped_pages = doc_data.groupby('sidetall')
 
-        # Loop through the grouped pages
-        for page_id, page_data in grouped_pages:
-            bbs = []
-            for i, row in page_data.iterrows():
+            # Loop through the grouped pages
+            for page_id, page_data in grouped_pages:
+                bbs = []
+                for i, row in page_data.iterrows():
 
-                # Add the bounding box to the list
-                bbs.append([row["height"], row["width"], row["x"], row["y"]])
+                    # Add the bounding box to the list
+                    bbs.append([row["height"], row["width"], row["x"], row["y"]])
 
-            # Add the bounding boxes for the page to the document
-            bbs_doc.append(bbs)
-        
-        # Add empty lists for pages without bounding boxes
-        for i in range(page_count - len(bbs_doc)):
-            bbs_doc.append([])
-        
-        # Add the bounding boxes and document ID to the lists
-        bbs_all.append(bbs_doc)
-        docs_all.append(doc_id)
-    
+                # Add the bounding boxes for the page to the document
+                bbs_doc.append(bbs)
+            
+            # Add empty lists for pages without bounding boxes
+            for i in range(page_count - len(bbs_doc)):
+                bbs_doc.append([])
+            
+            # Add the bounding boxes and document ID to the lists
+            bbs_all.append(bbs_doc)
+            docs_all.append(doc_id)
+
+        except:
+            print(f"Document {doc_id} not found.")
+            
     # Make a new df from bbs_all and docs_all
     df = pd.DataFrame({
         "dokument_nr_embete" : docs_all,
@@ -156,3 +160,25 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
     df.to_csv(save_organized_labels_path, index=False)
 
     return df
+
+
+# This function requires that you have a folder inside the repo called valideringsset with the files bestilling_tinglyst_dokument.csv and labels.csv
+
+def get_validation_set_main(tinglyst_dokument_cvs_path, path_to_labels, save_document_folder, base_url, save_organized_labels_path):
+    """
+    Get the validation set for the model.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the validation set.
+    """
+
+    # Download all documents
+    download_all_documents(tinglyst_dokument_cvs_path, save_document_folder, base_url)
+
+    # Organize the bounding boxes
+    df = organize_bounding_boxes(path_to_labels, tinglyst_dokument_cvs_path,save_document_folder, save_organized_labels_path)
+
+    return df
+
+if __name__ == "__main__":
+    df = get_validation_set_main("valideringssett/bestilling_tinglyst_dokument.csv", "valideringssett/labels.csv", "valideringssett/dokumenter" ,"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", "valideringssett/organized_labels.csv")
