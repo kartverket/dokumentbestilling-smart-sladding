@@ -68,5 +68,5 @@ def main(docid, base_url, config = r'--oem 3 --psm 11'):
     return json_responses
 
 if __name__ == '__main__':
-    res = main('2023_62529_200')
+    res = main('2023_62529_200', 'https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok/')
     print(res)
