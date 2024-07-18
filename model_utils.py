@@ -3,6 +3,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 import requests
 import fitz
+import PIL
 
 
 def download_pdf(docid, base_url):
@@ -28,7 +29,32 @@ def download_pdf(docid, base_url):
 
     return response.content
 
-def convert_pdf_bytes_to_images(pdf_bytes):
+def adjust_image_contrast(images, contrast_factor):
+    """
+    Adjust the contrast of a list of images.
+
+    Parameters:
+    images (list PIL.Image): The images to adjust.
+    contrast_factor (float): The contrast factor.
+
+    Returns:
+    list PIL.Image: The adjusted images.
+    """
+    enhanced_images = []
+
+    for image in images:
+        # Create an ImageEnhance object
+        enhancer = PIL.ImageEnhance.Contrast(image)
+
+        # Enhance the image contrast
+        enhanced_image = enhancer.enhance(contrast_factor)
+
+        # Append the enhanced image to the list
+        enhanced_images.append(enhanced_image)
+
+    return enhanced_images
+
+def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = True, contrast_factor = 2.0):
     """
     Convert a PDF file to a list of images.
 
@@ -39,9 +65,23 @@ def convert_pdf_bytes_to_images(pdf_bytes):
     list: A list of images.
     tuple: A tuple containing the width and height of the images.
     """
+
     images = convert_from_bytes(pdf_bytes)
+
+    if adjust_contrast:
+
+        # Adjust the contrast of the images
+        enhanced_images = adjust_image_contrast(images, contrast_factor)
+            
+        # Get the dimensions of the image
+        width, height = enhanced_images[0].size
+        dimensions = (width, height)
+
+        return enhanced_images, dimensions
+
     width, height = images[0].size
     dimensions = (width, height)
+
     return images, dimensions
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
