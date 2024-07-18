@@ -242,7 +242,7 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     list: A list of scaled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
     """
     # Get the bounding boxes for the document
-    row = labels_df.loc[labels_df['dokument_nr_embete'] == docid, 'bounding_boxes']
+    row = labels_df.loc[labels_df['dokument_nr_embete'] == docid, 'bbs']
 
     # Get the bounding boxes from the row and interpret as a list
     bbs = ast.literal_eval(row.iloc[0])

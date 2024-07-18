@@ -3,6 +3,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 import requests
 import fitz
+import Levenshtein
 import PIL
 
 
@@ -113,7 +114,7 @@ def remove_special_characters(text):
     """
     if not isinstance(text, str):
         text = str(text)
-    return re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
+    return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
 def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
     """
@@ -267,18 +268,18 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
     list: A list of bounding boxes for the matches.
     """
     
-    splitted = False
     matches_list = []
 
     for i in tagged_matches:
+        splitted = False
         sep_matches = re.split(r'\s+', i[0])
 
         if len(sep_matches[-1]) == 5:
             splitted = True
-            matches_list.append([sep_matches[-1], i[1], i[2]])
+            matches_list.append([sep_matches[-1], i[1], i[2], splitted])
         
         else:
-            matches_list.append([i[0], i[1], i[2]])
+            matches_list.append([i[0], i[1], i[2], splitted])
 
     bbs = []
     for match in matches_list:
@@ -288,7 +289,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
 
         for index, row in bounding_boxes.iterrows():
             if pattern.search(row['text']):
-                if splitted:
+                if match[3]:
                     loc = [row['height'], row['width'], row['left'], row['top']]
                 else:
                     loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
@@ -328,3 +329,53 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
         scaled_boxes.append(page_boxes)
 
     return scaled_boxes
+def get_levenshtein_distance(s1, s2):
+    """
+    Get the Levenshtein distance between two strings.
+
+    Parameters:
+    s1 (str): The first string.
+    s2 (str): The second string.
+
+    Returns:
+    int: The Levenshtein distance between the two strings.
+    """
+    return Levenshtein.distance(s1, s2)
+
+
+def can_be_int(s):
+
+    s = s.replace(" ", "")
+    try:
+        integer = int(s)
+        if len(s) == 5:
+            return 'last_five'
+        if len(s) == 11:
+            return 'whole_number'
+        else:
+            return False
+    except ValueError:
+        return False
+    
+
+def get_bbs_from_keywords(bounding_boxes, keywords):
+
+    bounding_boxes = bounding_boxes.reset_index()
+    
+    indexes = []
+    predicted_boxes = []
+    for keyword in keywords:
+        for row in bounding_boxes.iterrows():
+            if get_levenshtein_distance(keyword[0], row[1]['text'].lower()) < keyword[1]+1:
+                indexes.append(row[0])
+    for index in indexes:
+        for next in range(index, index+3):
+            check  = can_be_int(bounding_boxes.iloc[next]['text'])
+            if check == 'last_five':
+                row = bounding_boxes.iloc[next]
+                predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
+
+            if check == 'whole_number':
+                row = bounding_boxes.iloc[next]
+                predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
+    return predicted_boxes

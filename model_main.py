@@ -12,6 +12,9 @@ def model(pdf_file, config):
     list: A list of bounding boxes.
     list: A list of texts.
     """
+
+    #List with keywords and their corresponding allowed Levenshtein distance
+    keywords = [('personnr', 2), ('pnr', 0),('p nr', 0), ('fnr', 0),('f nr', 0), ('fødselsnr', 2), ('fodselsnr', 2), ('personnummer', 3), ('fødselsnummer', 3), ('fodselsnummer', 3)]
     
     images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
@@ -24,12 +27,21 @@ def model(pdf_file, config):
 
         bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
 
-        predicted_boxes.append(bbs)
+        keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, keywords)
+
+        all_boxes = bbs + keyword_boxes
+
+        bounding_boxes_tuples = [tuple(box) for box in all_boxes]
+        unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
+        unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+
+        predicted_boxes.append(unique_bounding_boxes)
+
 
     return images, predicted_boxes, dimensions
 
 
-def main(docid, base_url, config = r'--oem 3 --psm 11'):
+def main(docid, base_url, config = r'--oem 1 --psm 11'):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -65,7 +77,7 @@ def main(docid, base_url, config = r'--oem 3 --psm 11'):
                 "y": bb[3]
             })
 
-    return json_responses
+    return json_responses, predicted_boxes, images
 
 if __name__ == '__main__':
     res = main('2023_62529_200')
