@@ -16,3 +16,4 @@ flask
 requests
 pymupdf
 python-dotenv
+python-Levenshtein
