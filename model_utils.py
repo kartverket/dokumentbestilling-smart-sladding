@@ -72,13 +72,7 @@ def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = True, contrast_fact
     if adjust_contrast:
 
         # Adjust the contrast of the images
-        enhanced_images = adjust_image_contrast(images, contrast_factor)
-            
-        # Get the dimensions of the image
-        width, height = enhanced_images[0].size
-        dimensions = (width, height)
-
-        return enhanced_images, dimensions
+        images = adjust_image_contrast(images, contrast_factor)
 
     width, height = images[0].size
     dimensions = (width, height)
