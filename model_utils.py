@@ -178,7 +178,7 @@ def format_easyocr_result_to_df(result):
 
     return data_df, text
 
-def apply_tesseractocr(image, languages = [], config = r'--oem 3 --psm 11'):
+def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11'):
     """
     Extract text and bounding boxes from an image.
 
@@ -417,6 +417,43 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
         scaled_boxes.append(page_boxes)
 
     return scaled_boxes
+
+
+def find_closest_bounding_boxes(df, search_word):
+    # Search for all instances of the word in the DataFrame
+    word_rows = df[df['text'] == search_word]
+
+    if word_rows.empty:
+        return False
+
+    # Create a list to hold the closest bounding boxes for each instance of the search word
+    all_closest_boxes = []
+
+    # Calculate distances and find closest bounding boxes
+    for _, word_row in word_rows.iterrows():
+        # Get the bounding box coordinates of the found word
+        word_bbox = word_row[['left', 'top', 'width', 'height']].values
+        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
+
+        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
+        def calculate_distance(row):
+            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
+            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
+
+        df['distance'] = df.apply(calculate_distance, axis=1)
+
+        # Sort by distance and select the five closest bounding boxes (excluding the word itself)
+        closest_boxes = df[df['text'] != search_word].sort_values(by='distance').head(10)
+
+        # Append the closest boxes for this instance to the list
+        all_closest_boxes.append(closest_boxes)
+
+    # Concatenate all closest boxes DataFrames into one DataFrame
+    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
+
+    return closest_boxes_df
+
+
 def get_levenshtein_distance(s1, s2):
     """
     Get the Levenshtein distance between two strings.

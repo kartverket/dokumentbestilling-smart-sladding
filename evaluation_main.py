@@ -6,7 +6,7 @@ import model_utils
 import time
 
 
-def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
+def evaluate_model(folder_path, model_function, config = r'--oem 3 --psm 11'):
     """
     Evaluate the model on a set of documents.
 
@@ -18,6 +18,7 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
     total_tp (int): The total number of true positives.
     total_fp (int): The total number of false positives.
     total_fn (int): The total number of false negatives.
+    df_results (pd.DataFrame): A DataFrame containing the results per document.
     """
 
     base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
@@ -27,14 +28,20 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
     total_results = []
     total_tp, total_fp, total_fn = 0,0,0
 
+    docids = []
+    tps = []
+    fps = []
+    fns = []
+
     #Loop through all docu
     for index, dokument in enumerate(os.listdir(folder_path)):
         pdf_path = folder_path + dokument
         #remove .pdf from the name
         docid = dokument[:-4]
+        docids.append(docid)
         print(docid)
 
-        json_responses, predicted_boxes, images = model_main.main(docid, base_url)
+        json_responses, predicted_boxes, images = model_main.main(docid, base_url, model_function)
 
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
 
@@ -49,7 +56,11 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
         images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=False)
         for i, img in enumerate(images_with_bbs):
-            img.savefig(f'resultater_all/{docid}_{i}.png')
+            img.savefig(f'result_images_all/{docid}_{i}.png')
+    
+        tps.append(results['TP'])
+        fps.append(results['FP'])
+        fns.append(results['FN'])
     
         total_tp += results['TP']
         total_fp += results['FP']
@@ -62,7 +73,10 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
     print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
 
-    return total_results, total_tp, total_fp, total_fn
+    df_results = pd.DataFrame({'docid': docids, 'TP': tps, 'FP': fps, 'FN': fns})
+    df_results.to_csv('results_per_doc.csv', index=False)
+
+    return total_results, total_tp, total_fp, total_fn, df_results
 
 
 ## RESULTS ALL DOCUMENTS
@@ -79,6 +93,8 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 ## RESULTS ELEKTRONISK TINGLYST
 #Total TP: 162, Total FP: 0, Total FN: 0
 
+
+
 ##RESUULTS ALL DOCUMENTS()
 # Config: '--oem 1 --psm 11'
 # With Ocr peronnummer, boxsplitting and keywords
@@ -88,3 +104,14 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 #Recall: 0.6027851458885941
 #F1: 0.7351395066720583
 #Accuracy: 0.5812020460358056
+
+
+
+##RESUULTS ALL DOCUMENTS EASYOCR AFTER 444 DOCUMENTS
+# With Ocr peronnummer, boxsplitting and keywords
+# Total TP: 380, Total FP: 84, Total FN: 311
+
+#Precision: 0.8189655172413793
+#Recall: 0.5499276410998553
+#F1: 0.6580086580086579
+#Accuracy: 0.49032258064516127
