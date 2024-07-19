@@ -395,17 +395,3 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
     plt.xlabel('Actual labels')
     plt.tight_layout()
     plt.show()
-
-
-##Avhengig av config..
-
-## RESULTS ALL DOCUMENTS
-#Total TP: 686, Total FP: 9, Total FN: 823
-
-## RESULTS ELEKTRONISK TINGLYST
-#Total TP: 162, Total FP: 0, Total FN: 0
-
-##RESUULTS ALL DOCUMENTS()
-# Config: '--oem 1 --psm 11'
-# With Ocr peronnummer, boxsplitting and keywords
-# Total TP: 909, Total FP: 56, Total FN: 599
