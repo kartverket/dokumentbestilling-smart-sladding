@@ -468,18 +468,42 @@ def get_levenshtein_distance(s1, s2):
     return Levenshtein.distance(s1, s2)
 
 
+# def can_be_int(s):
+
+#     s = s.replace(" ", "")
+#     try:
+#         integer = int(s)
+#         if len(s) == 5:
+#             return 'last_five'
+#         if len(s) == 11:
+#             return 'whole_number'
+#         else:
+#             return False
+#     except ValueError:
+#         return False
+    
 def can_be_int(s):
 
+    n_ints = 0
     s = s.replace(" ", "")
-    try:
-        integer = int(s)
-        if len(s) == 5:
-            return 'last_five'
-        if len(s) == 11:
-            return 'whole_number'
-        else:
-            return False
-    except ValueError:
+    s = re.findall(r'.', s)
+    #print(s)
+
+    for char in s:
+        try:
+            integer = int(char)
+            n_ints += 1
+        except:
+            continue
+    
+    if n_ints > 9 and n_ints < 14:
+        return 'whole_number'
+    if n_ints == 5:
+        return 'last_five'
+    if n_ints > 2 and n_ints < 5 and len(s) == 5:
+        return 'last_five'
+    
+    else:
         return False
     
 
