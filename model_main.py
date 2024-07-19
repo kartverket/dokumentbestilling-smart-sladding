@@ -14,7 +14,7 @@ def model(pdf_file, model_function, languages, config):
     """
 
     #List with keywords and their corresponding allowed Levenshtein distance
-    keywords = [('personnr', 2), ('pnr', 0),('p nr', 0), ('fnr', 0),('f nr', 0), ('fødselsnr', 2), ('fodselsnr', 2), ('personnummer', 3), ('fødselsnummer', 3), ('fodselsnummer', 3)]
+    keywords = [('personnr', 2), ('pers nr', 1), ('persnr', 1), ('pnr', 0),('p nr', 0), ('fnr', 0),('f nr', 0), ('fødselsnr', 2), ('fodselsnr', 2), ('personnummer', 3), ('fødselsnummer', 3), ('fodselsnummer', 3), ('født', 1), ('fodt', 1), ('fødselsdato', 3), ('fodselsdato', 3), ('fpnr', 1), ('f pnr', 1), ('føds nr', 1), ('fods nr', 1), ('fødsnr', 1), ('fodsnr', 1), ('f  nr', 0)]
     
     images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 

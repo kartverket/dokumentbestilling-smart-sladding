@@ -456,14 +456,17 @@ def get_bbs_from_keywords(bounding_boxes, keywords):
         for row in bounding_boxes.iterrows():
             if get_levenshtein_distance(keyword[0], row[1]['text'].lower()) < keyword[1]+1:
                 indexes.append(row[0])
+
+
     for index in indexes:
         for next in range(index, index+3):
-            check  = can_be_int(bounding_boxes.iloc[next]['text'])
-            if check == 'last_five':
-                row = bounding_boxes.iloc[next]
-                predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
+            if next < len(bounding_boxes):
+                check  = can_be_int(bounding_boxes.iloc[next]['text'])
+                if check == 'last_five':
+                    row = bounding_boxes.iloc[next]
+                    predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
 
-            if check == 'whole_number':
-                row = bounding_boxes.iloc[next]
-                predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
+                if check == 'whole_number':
+                    row = bounding_boxes.iloc[next]
+                    predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
     return predicted_boxes
