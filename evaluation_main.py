@@ -63,3 +63,28 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
     print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
 
     return total_results, total_tp, total_fp, total_fn
+
+
+## RESULTS ALL DOCUMENTS
+# Config: '--oem 1 --psm 11'
+# With Ocr peronnummer
+#Total TP: 686, Total FP: 9, Total FN: 823
+
+#Precision: 0.9870503597122302
+#Recall: 0.4546056991385023
+#F1: 0.6225045372050816
+#Accuracy: 0.4519104084321476
+
+
+## RESULTS ELEKTRONISK TINGLYST
+#Total TP: 162, Total FP: 0, Total FN: 0
+
+##RESUULTS ALL DOCUMENTS()
+# Config: '--oem 1 --psm 11'
+# With Ocr peronnummer, boxsplitting and keywords
+# Total TP: 909, Total FP: 56, Total FN: 599
+
+#Precision: 0.9419689119170984
+#Recall: 0.6027851458885941
+#F1: 0.7351395066720583
+#Accuracy: 0.5812020460358056
