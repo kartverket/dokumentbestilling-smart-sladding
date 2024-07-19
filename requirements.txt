@@ -17,3 +17,4 @@ requests
 pymupdf
 python-dotenv
 python-Levenshtein
+easyocr
