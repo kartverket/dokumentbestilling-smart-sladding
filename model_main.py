@@ -1,6 +1,6 @@
 import model_utils
 
-def model(pdf_file, config):
+def model(pdf_file, model_function, languages, config):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -21,7 +21,7 @@ def model(pdf_file, config):
     predicted_boxes = []
 
     for i, image in enumerate(images):
-        text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image, config)
+        text, bounding_boxes = model_function(image, languages, config)
 
         tagged_matches = model_utils.find_matches(text)
 
@@ -41,7 +41,7 @@ def model(pdf_file, config):
     return images, predicted_boxes, dimensions
 
 
-def main(docid, base_url, config = r'--oem 1 --psm 11'):
+def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11'):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -59,7 +59,7 @@ def main(docid, base_url, config = r'--oem 1 --psm 11'):
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    images, predicted_boxes, image_dimensions = model(pdf_bytes, config)
+    images, predicted_boxes, image_dimensions = model(pdf_bytes, model_function, languages, config)
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 

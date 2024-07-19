@@ -40,7 +40,7 @@ def evaluate_model(folder_path, config = r'--oem 3 --psm 11'):
 
         time0 = time.time()
         for i, image in enumerate(images):
-            text, bounding_boxes = model_utils.extract_text_and_bb_from_image(image, config)
+            text, bounding_boxes = model_utils.apply_tesseractocr(image, config)
 
             tagged_matches = model_utils.find_matches(text)
 

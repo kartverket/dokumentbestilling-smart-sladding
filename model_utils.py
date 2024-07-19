@@ -5,6 +5,9 @@ import requests
 import fitz
 import Levenshtein
 import PIL
+import numpy as np
+import pandas as pd
+import easyocr
 
 
 def download_pdf(docid, base_url):
@@ -55,7 +58,7 @@ def adjust_image_contrast(images, contrast_factor):
 
     return enhanced_images
 
-def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = True, contrast_factor = 2.0):
+def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_factor = 1.5):
     """
     Convert a PDF file to a list of images.
 
@@ -78,6 +81,25 @@ def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = True, contrast_fact
     dimensions = (width, height)
 
     return images, dimensions
+
+def pil_to_cv2(image):
+    """
+    Convert a PIL Image to an OpenCV image.
+
+    Parameters:
+    image (PIL.Image): The image to convert.
+
+    Returns:
+    np.array: The OpenCV image.
+    """
+    
+    # Convert PIL Image to RGB
+    image = image.convert('RGB')
+    # Convert to numpy array
+    open_cv_image = np.array(image)
+    # Convert RGB to BGR
+    open_cv_image = open_cv_image[:, :, ::-1].copy()
+    return open_cv_image
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
@@ -110,7 +132,53 @@ def remove_special_characters(text):
         text = str(text)
     return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
-def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
+def format_bb_coordinates(bb):
+    """
+    Format bounding box coordinates to the format used by the model.
+
+    Parameters:
+    bbs (list): A list of bounding box on form [(x, y), (x, y), (x, y), (x, y)].
+
+    Returns:
+    parameters: Formatted bounding box on form: w, h, x, y.
+    """
+
+
+    h = bb[3][1] - bb[0][1]
+    w = bb[2][0] - bb[3][0]
+    x = bb[0][0]
+    y = bb[0][1]
+    
+
+    return h, w, x, y
+
+def format_easyocr_result_to_df(result):
+    """
+    Format the result to a DataFrame.
+
+    Parameters:
+    result (list): A list containing the results.
+
+    Returns:
+    pd.DataFrame: The result as a DataFrame.
+    """
+
+    data_df = pd.DataFrame(columns=['left', 'top', 'width', 'height', 'text'])
+    text = ""
+
+    for line in result:
+        h, w, x, y = format_bb_coordinates(line[0])
+        new_data = pd.DataFrame([
+        {'left': x, 'top': y, 'height': h, 'width': w, 'text': line[1]}
+        ])
+        data_df = pd.concat([data_df, new_data], ignore_index=True)
+
+        text += line[1] + " "
+
+
+    return data_df, text
+
+def apply_tesseractocr(image, languages = [], config = r'--oem 3 --psm 11'):
     """
     Extract text and bounding boxes from an image.
 
@@ -131,6 +199,32 @@ def extract_text_and_bb_from_image(image, config = r'--oem 3 --psm 11'):
     bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
     text = remove_special_characters(text)
     return text, bounding_boxes
+
+def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = ''):
+    """
+    Apply EasyOCR to an image.
+
+    Parameters:
+    image (PIL.image): The image to process.
+    languages (list): A list of languages to use.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the result.
+    str: The extracted text.
+    """
+
+    image = pil_to_cv2(image)
+    reader = easyocr.Reader(languages)
+    result = reader.readtext(image)
+    result_df, text = format_easyocr_result_to_df(result)
+
+    result_df = result_df.dropna()
+    
+    #drop alle special characters
+    result_df['text'] = result_df['text'].apply(remove_special_characters)
+    text = remove_special_characters(text)
+    
+    return text, result_df
 
 def check_controldigits(number):
     """
