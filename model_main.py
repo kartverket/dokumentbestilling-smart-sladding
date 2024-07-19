@@ -80,5 +80,5 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
     return json_responses, predicted_boxes, images
 
 if __name__ == '__main__':
-    res = main('2023_62529_200')
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok",  model_utils.apply_tesseractocr, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11')
     print(res)
