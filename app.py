@@ -19,7 +19,7 @@ def get_bounding_boxes():
 
     docid = request.args.get("dokumentIdent", type=str)
 
-    json_responses = model_main.main(docid, base_url)
+    json_responses, _ , _, _ , _, _, _ = model_main.main(docid, base_url)
 
     return jsonify(json_responses)
 

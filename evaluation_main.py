@@ -41,7 +41,11 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
         docids.append(docid)
         print(docid)
 
-        json_responses, model_bbs, predicted_boxes, images = model_main.main(docid, base_url, model_function)
+        json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = model_main.main(docid, base_url, model_function)
+
+        for i, text in enumerate(all_text):
+            with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
+                file.write(text)
 
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
 
@@ -54,7 +58,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
 
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, model_bbs, true_boxes, predicted_boxes, show=False)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, model_bbs, true_boxes, predicted_boxes, predicted_keyword, predicted_regex, show=False)
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{savefolder_name}/{docid}_{i}.png')
     
