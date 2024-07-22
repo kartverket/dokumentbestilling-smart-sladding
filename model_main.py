@@ -47,10 +47,14 @@ def model(pdf_file, model_function, languages, config):
 
     images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
+    model_bbs = []
     predicted_boxes = []
+    predicted_bbs_keywords = []
+    predicted_bbs_regex = []
 
     for i, image in enumerate(images):
         text, bounding_boxes = model_function(image, languages, config)
+        model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
 
         tagged_matches = model_utils.find_matches(text)
 
@@ -66,8 +70,11 @@ def model(pdf_file, model_function, languages, config):
 
         predicted_boxes.append(unique_bounding_boxes)
 
+        predicted_bbs_keywords.append(keyword_boxes)
+        predicted_bbs_regex.append(bbs)
 
-    return images, predicted_boxes, dimensions
+
+    return images, model_bbs, predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
 def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11'):
@@ -88,7 +95,7 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    images, predicted_boxes, image_dimensions = model(pdf_bytes, model_function, languages, config)
+    images, model_bbs, predicted_boxes, _, _, image_dimensions = model(pdf_bytes, model_function, languages, config)
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 
@@ -106,7 +113,7 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
                 "y": bb[3]
             })
 
-    return json_responses, predicted_boxes, images
+    return json_responses, model_bbs, predicted_boxes, images
 
 if __name__ == '__main__':
     res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok",  model_utils.apply_tesseractocr, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11')

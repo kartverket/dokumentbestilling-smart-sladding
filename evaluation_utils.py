@@ -267,7 +267,7 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     return images, bbs_scaled
 
 
-def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
+def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_bbs, show=False):
     """
     Visualize bounding boxes on images.
 
@@ -283,6 +283,7 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
 
         # Combine true and predicted bounding boxes with labels
         combined_bbs = []
+        combined_bbs += [(bb, 'All') for bb in all_bbs[i]]
         if i < len(true_bbs):
             combined_bbs += [(bb, 'True') for bb in true_bbs[i]]
         if i < len(pred_bbs):
@@ -290,10 +291,13 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
 
         # Plot each bounding box with appropriate label and color
         for bb, label in combined_bbs:
+            if label == 'All':
+                edgecolor = 'gray'
+                legend_label = 'All (label)'
             if label == 'True':
                 edgecolor = 'green'
                 legend_label = 'True (label)'
-            else:
+            if label == 'Predicted':
                 edgecolor = 'red'
                 legend_label = 'Predicted (label)'
 
