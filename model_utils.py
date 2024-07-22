@@ -8,6 +8,39 @@ import PIL
 import numpy as np
 import pandas as pd
 import easyocr
+from io import BytesIO
+
+#List with keywords and their corresponding allowed Levenshtein distance
+keywords = [('personnr', 2), 
+                ('pers nr', 1), 
+                ('persnr', 1), 
+                ('pnr', 0),
+                ('p nr', 0), 
+                ('fnr', 0),
+                ('f nr', 0), 
+                ('fødselsnr', 2), 
+                ('fodselsnr', 2), 
+                ('personnummer', 3), 
+                ('fødselsnummer', 3), 
+                ('fodselsnummer', 3), 
+                ('født', 1), 
+                ('fodt', 1), 
+                ('fødselsdato', 3), 
+                ('fodselsdato', 3), 
+                ('fpnr', 1), 
+                ('f pnr', 1), 
+                ('føds nr', 1), 
+                ('fods nr', 1), 
+                ('fødsnr', 1), 
+                ('fodsnr', 1), 
+                ('f  nr', 0), 
+                ('identifikasjonsnummer', 4),
+                ('fnrorgnr', 3),
+                ('fødselsnrorganisasjonsnr', 5),
+                ('fødselsnrorgnr', 4),
+                ('fødselsorganisasjonsnummer', 5),
+                ('identifikasjonsnummer', 4),
+                ('fødselsnrforetaksnr', 4)]
 
 
 def download_pdf(docid, base_url):
@@ -100,6 +133,29 @@ def pil_to_cv2(image):
     # Convert RGB to BGR
     open_cv_image = open_cv_image[:, :, ::-1].copy()
     return open_cv_image
+
+def is_elektronisk_tinglyst(pdf_bytes):
+    """
+    Check if a PDF file is electronically registered.
+
+    Parameters:
+    pdf_bytes (bytes): The PDF file content in bytes.
+
+    Returns:
+    bool: True if the PDF file is electronically registered, False otherwise.
+    """
+     
+    pdf_stream = BytesIO(pdf_bytes)
+
+    pdf_document = fitz.open(stream=pdf_stream, filetype="pdf")
+
+    # Get and print the metadata
+    metadata = pdf_document.metadata
+    if metadata['title'] == 'Dokument til signering':
+        return True
+    else:
+        return False
+    
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
@@ -413,7 +469,7 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
             if bbox:
                 height, width, x, y = bbox
                 padding = height * padding_factor
-                page_boxes.append([height * ratio + padding, width * ratio + padding, x * ratio - 2 * (padding / 3), y * ratio - 2 * (padding / 3)])
+                page_boxes.append([height * ratio + padding, width * ratio + padding, x * ratio - (padding / 2), y * ratio - (padding / 2)])
         scaled_boxes.append(page_boxes)
 
     return scaled_boxes
@@ -507,7 +563,7 @@ def can_be_int(s):
         return False
     
 
-def get_bbs_from_keywords(bounding_boxes, keywords):
+def get_bbs_from_keywords(bounding_boxes):
 
     bounding_boxes = bounding_boxes.reset_index()
     
