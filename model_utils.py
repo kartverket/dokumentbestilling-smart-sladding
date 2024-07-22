@@ -48,9 +48,8 @@ def download_pdf(docid, base_url):
     Download a PDF file from a URL.
 
     Parameters:
-    aar (int): The year of the document.
-    id (int): The ID of the document.
-    embete (int): The office of the document.
+    docid (str): The document ID on form "aar_id_embete".
+    base_url (str): The base URL of the API.
 
     Returns:
     bytes: The content of the PDF file.
@@ -97,6 +96,8 @@ def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_fac
 
     Parameters:
     pdf_bytes (bytes): The PDF file as bytes.
+    adjust_contrast (bool): Whether to adjust the contrast of the images.
+    contrast_factor (float): The contrast factor.
 
     Returns:
     list: A list of images.
@@ -193,7 +194,7 @@ def format_bb_coordinates(bb):
     Format bounding box coordinates to the format used by the model.
 
     Parameters:
-    bbs (list): A list of bounding box on form [(x, y), (x, y), (x, y), (x, y)].
+    bb (list): A list of bounding box on form [(x, y), (x, y), (x, y), (x, y)].
 
     Returns:
     parameters: Formatted bounding box on form: w, h, x, y.
@@ -240,6 +241,8 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11'):
 
     Parameters:
     image (PIL.Image?): The image to process.
+    languages (list): A list of languages to use.
+    config (str): The configuration string.
 
     Returns:
     str: The extracted text.
@@ -263,6 +266,7 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = ''):
     Parameters:
     image (PIL.image): The image to process.
     languages (list): A list of languages to use.
+    config (str): The configuration string.
 
     Returns:
     pd.DataFrame: A DataFrame containing the result.
@@ -464,6 +468,7 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
     Parameters:
     bounding_boxes (list): A list of bounding boxes.
     ratio (float): The scaling ratio.
+    padding_factor (float): The padding factor.
 
     Returns:
     list: A new list of bounding boxes scaled by the given ratio.
@@ -484,6 +489,18 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
 
 
 def find_closest_bounding_boxes(df, search_word, num_closest=10):
+    """
+    Find the closest bounding boxes to a word in a DataFrame.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the bounding boxes.
+    search_word (str): The word to search for.
+    num_closest (int): The number of closest bounding boxes to find.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the closest bounding boxes.
+    """
+
     # Search for all instances of the word in the DataFrame
     word_rows = df[df['text'] == search_word]
 
@@ -531,27 +548,21 @@ def get_levenshtein_distance(s1, s2):
     """
     return Levenshtein.distance(s1, s2)
 
-
-# def can_be_int(s):
-
-#     s = s.replace(" ", "")
-#     try:
-#         integer = int(s)
-#         if len(s) == 5:
-#             return 'last_five'
-#         if len(s) == 11:
-#             return 'whole_number'
-#         else:
-#             return False
-#     except ValueError:
-#         return False
     
 def can_be_int(s):
+    """
+    Check if a string can be converted to an integer.
+
+    Parameters:
+    s (str): The string to check.
+
+    Returns:
+    str: 'whole_number' if the string can be a whole number, 'last_five' if the string is the last five digits of a number, False otherwise.
+    """
 
     n_ints = 0
     s = s.replace(" ", "")
     s = re.findall(r'.', s)
-    #print(s)
 
     for char in s:
         try:
@@ -572,6 +583,15 @@ def can_be_int(s):
     
 
 def get_bbs_from_keywords(bounding_boxes):
+    """
+    Get bounding boxes from keywords.
+
+    Parameters:
+    bounding_boxes (pd.DataFrame): The DataFrame containing the bounding boxes.
+
+    Returns:
+    list: A list of bounding boxes.
+    """
 
     bounding_boxes = bounding_boxes.reset_index()
     

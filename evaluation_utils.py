@@ -236,6 +236,7 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     Parameters:
     labels_df (pd.DataFrame): A DataFrame containing the labels.
     docid (str): The document ID.
+    folder_path (str): The path to the folder containing the documents.
 
     Returns:
     list: A list of images.
@@ -267,14 +268,19 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     return images, bbs_scaled
 
 
-def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_bbs, pred_key, pred_regex, show=False):
+def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_key, pred_regex, show=False):
     """
     Visualize bounding boxes on images.
 
     Parameters:
     images (list): A list of images.
+    all_bbs (list): A list of all bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
     true_bbs (list): A list of labelled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
-    pred_bbs (list): A list of predicted bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    pred_key (list): A list of predicted bounding boxes separated by keyword search by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    pred_regex (list): A list of predicted bounding boxes by regex pattern separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+
+    Returns:
+    list: A list of images with bounding boxes.
     """
     images_with_bb = []
     for i, image in enumerate(images):

@@ -12,6 +12,9 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
 
     Parameters:
     folder_path (str): The path to the folder containing the documents.
+    labels_path (str): The path to the csv file containing the labels.
+    savefolder_name (str): The name of the folder where the results will be saved.
+    model_function (function): The function that will be used to extract the text and bounding boxes from the images.
 
     Returns:
     total_results (list): A list of dictionaries containing the results per document.
