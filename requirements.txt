@@ -17,4 +17,5 @@ requests
 pymupdf
 python-dotenv
 python-Levenshtein
+python-bidi
 easyocr
