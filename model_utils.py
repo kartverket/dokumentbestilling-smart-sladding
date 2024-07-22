@@ -573,7 +573,7 @@ def can_be_int(s):
     
     if n_ints > 9 and n_ints < 14:
         return 'whole_number'
-    if n_ints == 5:
+    if n_ints == 5 and len(s)==5:
         return 'last_five'
     if n_ints > 2 and n_ints < 5 and len(s) == 5:
         return 'last_five'
