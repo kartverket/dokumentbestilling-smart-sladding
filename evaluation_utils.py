@@ -380,6 +380,7 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
     print('Recall:', recall)
     print('F1:', f1)
     print('Accuracy:', total_tp/(total_tp + total_fp + total_fn))
+    print('Percent of true positives:', total_tp/(total_tp + total_fn))
 
     # Define the confusion matrix
     conf_matrix = np.array([[total_tp, total_fp], 
