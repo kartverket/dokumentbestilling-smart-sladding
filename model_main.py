@@ -13,37 +13,12 @@ def model(pdf_file, model_function, languages, config):
     list: A list of texts.
     """
 
-    #List with keywords and their corresponding allowed Levenshtein distance
-    keywords = [('personnr', 2), 
-                ('pers nr', 1), 
-                ('persnr', 1), 
-                ('pnr', 0),
-                ('p nr', 0), 
-                ('fnr', 0),
-                ('f nr', 0), 
-                ('fødselsnr', 2), 
-                ('fodselsnr', 2), 
-                ('personnummer', 3), 
-                ('fødselsnummer', 3), 
-                ('fodselsnummer', 3), 
-                ('født', 1), 
-                ('fodt', 1), 
-                ('fødselsdato', 3), 
-                ('fodselsdato', 3), 
-                ('fpnr', 1), 
-                ('f pnr', 1), 
-                ('føds nr', 1), 
-                ('fods nr', 1), 
-                ('fødsnr', 1), 
-                ('fodsnr', 1), 
-                ('f  nr', 0), 
-                ('identifikasjonsnummer', 4),
-                ('fnrorgnr', 3),
-                ('fødselsnrorganisasjonsnr', 5),
-                ('fødselsnrorgnr', 4),
-                ('fødselsorganisasjonsnummer', 5),
-                ('identifikasjonsnummer', 4),
-                ('fødselsnrforetaksnr', 4)]
+    elektronisk_tinglyst = model_utils.is_elektronisk_tinglyst(pdf_file)
+    #Logger
+    if elektronisk_tinglyst:
+        print('Elektronisk tinglyst, skipping keyword detection')
+    else:
+        print('Not elektronisk tinglyst, running keyword detection')
 
     images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
@@ -60,15 +35,23 @@ def model(pdf_file, model_function, languages, config):
 
         bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
 
-        keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, keywords)
+        if not elektronisk_tinglyst:
 
-        all_boxes = bbs + keyword_boxes
+            print('Running keyword detection')
 
-        bounding_boxes_tuples = [tuple(box) for box in all_boxes]
-        unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
-        unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes)
 
-        predicted_boxes.append(unique_bounding_boxes)
+            all_boxes = bbs + keyword_boxes
+
+            bounding_boxes_tuples = [tuple(box) for box in all_boxes]
+            unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
+            unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+
+            predicted_boxes.append(unique_bounding_boxes)
+
+        else:
+            print('No keyword detection')
+            predicted_boxes.append(bbs)
 
         predicted_bbs_keywords.append(keyword_boxes)
         predicted_bbs_regex.append(bbs)
