@@ -1,6 +1,6 @@
 import model_utils
 
-def model(pdf_file, model_function, languages, config):
+def model(pdf_file, model_function, languages, config, num_indexes, num_closest):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -29,7 +29,7 @@ def model(pdf_file, model_function, languages, config):
     predicted_bbs_regex = []
 
     for i, image in enumerate(images):
-        text, bounding_boxes = model_function(image, languages, config)
+        text, bounding_boxes = model_function(image, languages, config, elektronisk_tinglyst)
         model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
         all_text.append(text)
 
@@ -42,7 +42,7 @@ def model(pdf_file, model_function, languages, config):
 
             print('Running keyword detection')
 
-            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes)
+            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest = num_closest)
             predicted_bbs_keywords.append(keyword_boxes)
 
             all_boxes = bbs + keyword_boxes
@@ -53,7 +53,7 @@ def model(pdf_file, model_function, languages, config):
 
             predicted_boxes.append(unique_bounding_boxes)
 
-        else:
+        if elektronisk_tinglyst:
             print('No keyword detection')
             predicted_boxes.append(bbs)
 
@@ -62,7 +62,7 @@ def model(pdf_file, model_function, languages, config):
     return images, all_text, model_bbs, predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
-def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11'):
+def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest = 10):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -80,7 +80,7 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, model_function, languages, config)
+    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, model_function, languages, config, num_indexes=num_indexes, num_closest=num_closest)
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 
@@ -101,5 +101,5 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
     return json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images
 
 if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok",  model_utils.apply_tesseractocr, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11')
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok",  model_utils.apply_tesseractocr, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
     print(res)
