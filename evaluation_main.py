@@ -6,7 +6,7 @@ import model_utils
 import time
 
 
-def evaluate_model(folder_path, model_function, config = r'--oem 3 --psm 11'):
+def evaluate_model(folder_path, labels_path, savefolder_name, model_function, config = r'--oem 3 --psm 11'):
     """
     Evaluate the model on a set of documents.
 
@@ -23,7 +23,7 @@ def evaluate_model(folder_path, model_function, config = r'--oem 3 --psm 11'):
 
     base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
 
-    organized_labels_path = pd.read_csv("valideringssett/organized_labels.csv")
+    organized_labels_path = pd.read_csv(labels_path)
 
     total_results = []
     total_tp, total_fp, total_fn = 0,0,0
@@ -41,7 +41,11 @@ def evaluate_model(folder_path, model_function, config = r'--oem 3 --psm 11'):
         docids.append(docid)
         print(docid)
 
-        json_responses, predicted_boxes, images = model_main.main(docid, base_url, model_function)
+        json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = model_main.main(docid, base_url, model_function)
+
+        for i, text in enumerate(all_text):
+            with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
+                file.write(text)
 
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
 
@@ -54,9 +58,9 @@ def evaluate_model(folder_path, model_function, config = r'--oem 3 --psm 11'):
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
 
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=False)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, model_bbs, true_boxes, predicted_boxes, predicted_keyword, predicted_regex, show=False)
         for i, img in enumerate(images_with_bbs):
-            img.savefig(f'result_images_all/{docid}_{i}.png')
+            img.savefig(f'{savefolder_name}/{docid}_{i}.png')
     
         tps.append(results['TP'])
         fps.append(results['FP'])

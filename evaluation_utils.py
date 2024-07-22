@@ -267,7 +267,7 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     return images, bbs_scaled
 
 
-def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
+def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_bbs, pred_key, pred_regex, show=False):
     """
     Visualize bounding boxes on images.
 
@@ -283,21 +283,36 @@ def visualize_bounding_boxes(images, true_bbs, pred_bbs, show=False):
 
         # Combine true and predicted bounding boxes with labels
         combined_bbs = []
+        combined_bbs += [(bb, 'All') for bb in all_bbs[i]]
         if i < len(true_bbs):
             combined_bbs += [(bb, 'True') for bb in true_bbs[i]]
-        if i < len(pred_bbs):
-            combined_bbs += [(bb, 'Predicted') for bb in pred_bbs[i]]
+        # if i < len(pred_bbs):
+        #     combined_bbs += [(bb, 'Predicted') for bb in pred_bbs[i]]
+        if i < len(pred_key):
+            combined_bbs += [(bb, 'Predicted keyword') for bb in pred_key[i]]
+        if i < len(pred_regex):
+            combined_bbs += [(bb, 'Predicted regex') for bb in pred_regex[i]]
 
         # Plot each bounding box with appropriate label and color
         for bb, label in combined_bbs:
+            if label == 'All':
+                edgecolor = 'gray'
+                linestyle = '-'
+                legend_label = 'All (label)'
             if label == 'True':
                 edgecolor = 'green'
+                linestyle = '-'
                 legend_label = 'True (label)'
-            else:
+            if label == 'Predicted regex':
                 edgecolor = 'red'
-                legend_label = 'Predicted (label)'
+                linestyle = '--'
+                legend_label = 'Predicted regex (label)'
+            if label == 'Predicted keyword':
+                edgecolor = 'blue'
+                linestyle = '-'
+                legend_label = 'Predicted keyword (label)'
 
-            rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2,
+            rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2, linestyle=linestyle,
                                  edgecolor=edgecolor, facecolor="none", label=legend_label)
             ax.add_patch(rect)
 

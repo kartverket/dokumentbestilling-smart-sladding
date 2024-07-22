@@ -282,6 +282,14 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = ''):
     
     return text, result_df
 
+def get_all_bbs(df):
+    all_bbs = []
+    for iter, row in df.iterrows():
+        bb = [row['height'], row['width'], row['left'], row['top']]
+        all_bbs.append(bb)
+
+    return all_bbs
+
 def check_controldigits(number):
     """
     Check if the control digits of a Norwegian personal number are correct.
