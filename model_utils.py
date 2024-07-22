@@ -419,7 +419,7 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
     return scaled_boxes
 
 
-def find_closest_bounding_boxes(df, search_word):
+def find_closest_bounding_boxes(df, search_word, num_closest=10):
     # Search for all instances of the word in the DataFrame
     word_rows = df[df['text'] == search_word]
 
@@ -443,7 +443,7 @@ def find_closest_bounding_boxes(df, search_word):
         df['distance'] = df.apply(calculate_distance, axis=1)
 
         # Sort by distance and select the five closest bounding boxes (excluding the word itself)
-        closest_boxes = df[df['text'] != search_word].sort_values(by='distance').head(10)
+        closest_boxes = df[df['text'] != search_word].sort_values(by='distance').head(num_closest)
 
         # Append the closest boxes for this instance to the list
         all_closest_boxes.append(closest_boxes)
@@ -518,8 +518,8 @@ def get_bbs_from_keywords(bounding_boxes, keywords):
             if get_levenshtein_distance(keyword[0], row[1]['text'].lower()) < keyword[1]+1:
                 indexes.append(row[0])
 
-
     for index in indexes:
+
         for next in range(index, index+3):
             if next < len(bounding_boxes):
                 check  = can_be_int(bounding_boxes.iloc[next]['text'])
@@ -530,4 +530,15 @@ def get_bbs_from_keywords(bounding_boxes, keywords):
                 if check == 'whole_number':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
+
+        closest_bbs = find_closest_bounding_boxes(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest=10)
+
+        for row in closest_bbs.iterrows():
+            check  = can_be_int(row[1]['text'])
+            if check == 'last_five':
+                predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
+
+            if check == 'whole_number':
+                predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
+            
     return predicted_boxes
