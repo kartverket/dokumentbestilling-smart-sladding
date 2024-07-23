@@ -86,7 +86,7 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
     time2 = time.time()
     images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, model_function, languages, config, num_indexes=num_indexes, num_closest=num_closest)
     time3 = time.time()
-    print(f"Extracted text from document {docid} in {time3-time2} seconds.")
+    print(f"Run model function for document {docid} in {time3-time2} seconds.")
 
     ratio = pdf_dimensions[0] / image_dimensions[0]
 
