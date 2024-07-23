@@ -81,7 +81,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
     print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
 
     df_results = pd.DataFrame({'docid': docids, 'TP': tps, 'FP': fps, 'FN': fns})
-    df_results.to_csv('results_per_doc.csv', index=False)
+    df_results.to_csv(f'{savefolder_name}/results_per_doc.csv', index=False)
 
     return total_results, total_tp, total_fp, total_fn, df_results
 
