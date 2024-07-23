@@ -235,7 +235,7 @@ def format_easyocr_result_to_df(result):
 
     return data_df, text
 
-def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11'):
+def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
     """
     Extract text and bounding boxes from an image.
 
@@ -254,12 +254,13 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11'):
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
     
-    #drop alle special characters
-    bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
-    text = remove_special_characters(text)
+    if not elektronisk_tinglyst:
+        #drop alle special characters
+        bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
+        text = remove_special_characters(text)
     return text, bounding_boxes
 
-def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = ''):
+def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronisk_tinglyst = False):
     """
     Apply EasyOCR to an image.
 
@@ -280,10 +281,10 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = ''):
 
     result_df = result_df.dropna()
     
-    #drop alle special characters
-    result_df['text'] = result_df['text'].apply(remove_special_characters)
-    text = remove_special_characters(text)
-    
+    if not elektronisk_tinglyst:
+        #drop alle special characters
+        result_df['text'] = result_df['text'].apply(remove_special_characters)
+        text = remove_special_characters(text)
     return text, result_df
 
 def get_all_bbs(df):
@@ -573,7 +574,7 @@ def can_be_int(s):
     
     if n_ints > 9 and n_ints < 14:
         return 'whole_number'
-    if n_ints == 5:
+    if n_ints == 5 and len(s)==5:
         return 'last_five'
     if n_ints > 2 and n_ints < 5 and len(s) == 5:
         return 'last_five'
@@ -582,7 +583,7 @@ def can_be_int(s):
         return False
     
 
-def get_bbs_from_keywords(bounding_boxes):
+def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
     """
     Get bounding boxes from keywords.
 
@@ -604,7 +605,7 @@ def get_bbs_from_keywords(bounding_boxes):
 
     for index in indexes:
 
-        for next in range(index, index+3):
+        for next in range(index, index+num_indexes):
             if next < len(bounding_boxes):
                 check  = can_be_int(bounding_boxes.iloc[next]['text'])
                 if check == 'last_five':
@@ -615,7 +616,7 @@ def get_bbs_from_keywords(bounding_boxes):
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
 
-        closest_bbs = find_closest_bounding_boxes(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest=10)
+        closest_bbs = find_closest_bounding_boxes(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest=num_closest)
 
         for row in closest_bbs.iterrows():
             check  = can_be_int(row[1]['text'])

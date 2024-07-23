@@ -1,7 +1,7 @@
 # smart_sladding_ml
 
 ## Beskrivelse
-Prosjektet er utviklet for å generere automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger. Dette gjøres ved å bruke en Tesseract OCR modell til å gjenkjenne og detektere innholdet i dokumentene. Deretter gjennomføres et regex og/eller keyword søk på innholdet for å klassifisere personnummer og d-nummer. 
+Prosjektet er utviklet for å generere automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger. Dette gjøres ved å bruke en Tesseract OCR modell til å gjenkjenne og detektere innholdet i dokumentene. Deretter gjennomføres et regex og/eller keyword søk på innholdet for å klassifisere områder med personnummer og d-nummer. 
 
 ## Installasjon
 Hvordan sette opp prosjektet og kjøre lokalt:
