@@ -34,6 +34,7 @@ keywords = [('personnr', 2),
                 ('fødsnr', 1), 
                 ('fodsnr', 1), 
                 ('f  nr', 0), 
+                ('fdt', 0),
                 ('identifikasjonsnummer', 4),
                 ('fnrorgnr', 3),
                 ('fødselsnrorganisasjonsnr', 5),
@@ -250,6 +251,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
     """
 
     text = pytesseract.image_to_string(image, lang='nor', config=config)
+    text = text.replace('\n', ' ')
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
