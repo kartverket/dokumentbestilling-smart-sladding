@@ -8,6 +8,7 @@ import model_main
 import ast
 from pdf2image import convert_from_path, convert_from_bytes
 import fitz
+import model_utils
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     """
@@ -37,8 +38,7 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
     
     
     # Calculate IOU matrix
-
-    iou_matrix = box_iou(torch.tensor(true_bboxes), torch.tensor(predicted_bboxes)).numpy()
+    iou_matrix = model_utils.calculate_iou(true_bboxes, predicted_bboxes)
     
     # Find the best matches
 

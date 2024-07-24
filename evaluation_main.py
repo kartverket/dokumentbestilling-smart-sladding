@@ -6,7 +6,7 @@ import model_utils
 import time
 
 
-def evaluate_model(folder_path, labels_path, savefolder_name, model_function, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest = 10):
+def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest = 10):
     """
     Evaluate the model on a set of documents.
 
@@ -44,7 +44,9 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
         docids.append(docid)
         print(docid)
 
-        json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = model_main.main(docid, base_url, model_function, num_indexes=num_indexes, num_closest=num_closest)
+        json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = model_main.main(docid, base_url, num_indexes=num_indexes, num_closest=num_closest)
+
+        print(len(predicted_boxes[0]))
 
         for i, text in enumerate(all_text):
             with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
@@ -52,16 +54,22 @@ def evaluate_model(folder_path, labels_path, savefolder_name, model_function, co
 
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
 
+        print(len(true_boxes[0]))
+
         #Get the true positives, false positives and false negatives
         metrics_list = []
         for i,j in zip(true_boxes, predicted_boxes):
             matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(i, j)
             metrics_list.append(metrics)
 
+        print(metrics_list)
+
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
+        print(results)
 
         images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, model_bbs, true_boxes, predicted_keyword, predicted_regex, show=False)
+
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{savefolder_name}/{docid}_{i}.png')
     

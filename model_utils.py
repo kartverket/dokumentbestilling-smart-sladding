@@ -9,6 +9,9 @@ import numpy as np
 import pandas as pd
 import easyocr
 from io import BytesIO
+import torch
+from torchvision.ops import box_iou
+import copy as cp
 
 #List with keywords and their corresponding allowed Levenshtein distance
 keywords = [('personnr', 2), 
@@ -278,8 +281,10 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronis
 
     image = pil_to_cv2(image)
     reader = easyocr.Reader(languages)
-    result = reader.readtext(image)
+    result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
     result_df, text = format_easyocr_result_to_df(result)
+
+    text = text.replace('\n', ' ')
 
     result_df = result_df.dropna()
     
@@ -576,9 +581,7 @@ def can_be_int(s):
     
     if n_ints > 9 and n_ints < 14:
         return 'whole_number'
-    if n_ints == 5 and len(s)==5:
-        return 'last_five'
-    if n_ints > 2 and n_ints < 5 and len(s) == 5:
+    if n_ints > 2 and len(s) == 5:
         return 'last_five'
     
     else:
@@ -629,3 +632,70 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
                 predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
             
     return predicted_boxes
+
+def format_box_to_iou(box):
+    """
+    Formats a box on form (height, width, left, top) to the format required by the box_iou function in torchvision (x1, y1, x2, y2).
+    Parameters:
+        box (list): A list containing the height, width, left and top of the box.
+    Returns:
+        list: A list containing the x1, y1, x2 and y2 coordinates
+    """
+    return [box[2], box[3], box[2] + abs(box[1]), box[3] + abs(box[0])]
+
+def calculate_iou(boxes_a, boxes_b):
+    """
+    Calculates the Intersection over Union (IoU) between two lists of boxes.
+    Parameters:
+        box_a (list): A list containing lists of coordinates on the form [height, width, left, top].
+        box_b (list): A list containing lists of coordinates on the form [height, width, left, top].
+    Returns:
+        np.array: A matrix containing the IoU between the boxes in box_a and box_b.
+    """
+
+    boxes_a_copy = cp.deepcopy(boxes_a)
+    boxes_b_copy = cp.deepcopy(boxes_b)
+
+    for i in range(max(len(boxes_a_copy), len(boxes_b_copy))):
+        if i < len(boxes_a_copy):
+            boxes_a_copy[i] = format_box_to_iou(boxes_a_copy[i])
+        if i < len(boxes_b_copy):
+            boxes_b_copy[i] = format_box_to_iou(boxes_b_copy[i])
+    return box_iou(torch.tensor(boxes_a_copy), torch.tensor(boxes_b_copy)).numpy()
+
+
+
+def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
+
+    clean_predicted_boxes = []
+
+    for page in predicted_boxes:
+
+        if len(page) > 0:
+            
+            iou_matrix = calculate_iou(page, page)
+            print(iou_matrix)
+
+            remove_indexes_page = []
+            #Search only over the diagonl of the matrix
+
+            num_rows, num_cols = iou_matrix.shape
+
+            for i in range(num_rows):
+                for j in range(i + 1, num_cols):
+                    if iou_matrix[i][j] > iou_threshold:
+                        
+                        area_i = page[i][0] * page[i][1]
+                        area_j = page[j][0] * page[j][1]
+
+                        if area_i > area_j:
+                            remove_indexes_page.append(j)
+                        else:
+                            remove_indexes_page.append(i)
+
+            predicted_boxes_page = [box for i, box in enumerate(page) if i not in remove_indexes_page]
+            clean_predicted_boxes.append(predicted_boxes_page)
+        else:
+            clean_predicted_boxes.append([])
+
+    return clean_predicted_boxes

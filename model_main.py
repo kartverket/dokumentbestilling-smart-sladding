@@ -1,7 +1,8 @@
 import model_utils
 import time
+import pandas as pd
 
-def model(pdf_file, model_function, languages, config, num_indexes, num_closest):
+def model(pdf_file, languages, config, num_indexes, num_closest):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -15,6 +16,7 @@ def model(pdf_file, model_function, languages, config, num_indexes, num_closest)
     """
 
     elektronisk_tinglyst = model_utils.is_elektronisk_tinglyst(pdf_file)
+
     #Logger
     if elektronisk_tinglyst:
         print('Elektronisk tinglyst, skipping keyword detection')
@@ -30,7 +32,13 @@ def model(pdf_file, model_function, languages, config, num_indexes, num_closest)
     predicted_bbs_regex = []
 
     for i, image in enumerate(images):
-        text, bounding_boxes = model_function(image, languages, config, elektronisk_tinglyst)
+        text_tess, bounding_boxes_tess = model_utils.apply_tesseractocr(image, languages, config, elektronisk_tinglyst)
+        text_easy, bounding_boxes_easy = model_utils.apply_easyocr(image, languages, config, elektronisk_tinglyst)
+
+        text = text_tess + ' ' + text_easy
+
+        bounding_boxes = pd.concat([bounding_boxes_tess, bounding_boxes_easy], ignore_index=True)
+
         model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
         all_text.append(text)
 
@@ -55,12 +63,15 @@ def model(pdf_file, model_function, languages, config, num_indexes, num_closest)
         if elektronisk_tinglyst:
             predicted_boxes.append(bbs)
 
+    
+    print(predicted_boxes)
+    clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
+    print(clean_predicted_boxes)
+
+    return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
-    return images, all_text, model_bbs, predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
-
-
-def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest = 10):
+def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest = 10):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -81,7 +92,7 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
     time2 = time.time()
-    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, model_function, languages, config, num_indexes=num_indexes, num_closest=num_closest)
+    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest=num_closest)
     time3 = time.time()
     print(f"Run model function for document {docid} in {time3-time2} seconds.")
 
@@ -104,5 +115,5 @@ def main(docid, base_url, model_function, languages = ['en', 'sv', 'da'], config
     return json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images
 
 if __name__ == '__main__':
-    res, alltext, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok",  model_utils.apply_tesseractocr, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
+    res, alltext, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
     print(res)
