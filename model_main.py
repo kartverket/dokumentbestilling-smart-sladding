@@ -32,8 +32,17 @@ def model(pdf_file, languages, config, num_indexes, num_closest):
     predicted_bbs_regex = []
 
     for i, image in enumerate(images):
+        t1_tess = time.time()
         text_tess, bounding_boxes_tess = model_utils.apply_tesseractocr(image, languages, config, elektronisk_tinglyst)
+        t2_tess = time.time()
+
+        print(f"Time for Tesseract OCR: {t2_tess-t1_tess}")
+
+        t1_easy = time.time()
         text_easy, bounding_boxes_easy = model_utils.apply_easyocr(image, languages, config, elektronisk_tinglyst)
+        t2_easy = time.time()
+
+        print(f"Time for Easy OCR: {t2_easy-t1_easy}")
 
         text = text_tess + ' ' + text_easy
 

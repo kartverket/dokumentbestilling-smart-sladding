@@ -15,36 +15,30 @@ import copy as cp
 
 #List with keywords and their corresponding allowed Levenshtein distance
 keywords = [('personnr', 2), 
-                ('pers nr', 1), 
-                ('persnr', 1), 
-                ('pnr', 0),
-                ('p nr', 0), 
-                ('fnr', 0),
-                ('f nr', 0), 
-                ('fødselsnr', 2), 
-                ('fodselsnr', 2), 
-                ('personnummer', 3), 
-                ('fødselsnummer', 3), 
-                ('fodselsnummer', 3), 
-                ('født', 1), 
-                ('fodt', 1), 
-                ('fødselsdato', 3), 
-                ('fodselsdato', 3), 
-                ('fpnr', 1), 
-                ('f pnr', 1), 
-                ('føds nr', 1), 
-                ('fods nr', 1), 
-                ('fødsnr', 1), 
-                ('fodsnr', 1), 
-                ('f  nr', 0), 
-                ('fdt', 0),
-                ('identifikasjonsnummer', 4),
-                ('fnrorgnr', 3),
-                ('fødselsnrorganisasjonsnr', 5),
-                ('fødselsnrorgnr', 4),
-                ('fødselsorganisasjonsnummer', 5),
-                ('identifikasjonsnummer', 4),
-                ('fødselsnrforetaksnr', 4)]
+            ('pers nr', 1), 
+            ('persnr', 1), 
+            ('pnr', 0),
+            ('fnr', 0),
+            ('fødselsnr', 2), 
+            ('fodselsnr', 2), 
+            ('personnummer', 3), 
+            ('fødselsnummer', 3), 
+            ('fodselsnummer', 3), 
+            ('født', 1), 
+            ('fødselsdato', 3), 
+            ('fodselsdato', 3), 
+            ('fpnr', 1), 
+            ('fødsnr', 1), 
+            ('fodsnr', 1), 
+            ('fødsnr', 1), 
+            ('fodsnr', 1),
+            ('identifikasjonsnummer', 3),
+            ('fnrorgnr', 1),
+            ('fødselsnrorganisasjonsnr', 4),
+            ('fødselsnrorgnr', 3),
+            ('fødselsorganisasjonsnummer', 4),
+            ('identifikasjonsnummer', 3),
+            ('fødselsnrforetaksnr', 3)]
 
 
 def download_pdf(docid, base_url):
@@ -68,6 +62,7 @@ def download_pdf(docid, base_url):
         print("Failed to download file. HTTP Status Code:", response.status_code)
 
     return response.content
+
 
 def adjust_image_contrast(images, contrast_factor):
     """
@@ -93,6 +88,7 @@ def adjust_image_contrast(images, contrast_factor):
         enhanced_images.append(enhanced_image)
 
     return enhanced_images
+
 
 def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_factor = 1.5):
     """
@@ -120,6 +116,7 @@ def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_fac
 
     return images, dimensions
 
+
 def pil_to_cv2(image):
     """
     Convert a PIL Image to an OpenCV image.
@@ -138,6 +135,7 @@ def pil_to_cv2(image):
     # Convert RGB to BGR
     open_cv_image = open_cv_image[:, :, ::-1].copy()
     return open_cv_image
+
 
 def is_elektronisk_tinglyst(pdf_bytes):
     """
@@ -179,6 +177,7 @@ def get_pdf_dimensions_from_byte_file(pdf_bytes):
     rect = page.rect
     return (rect.width, rect.height)
 
+
 def remove_special_characters(text):
     """
     Remove special characters from a text.
@@ -193,6 +192,7 @@ def remove_special_characters(text):
         text = str(text)
     return re.sub(r'[^a-zA-Z0-9\s]', '', text)
 
+
 def format_bb_coordinates(bb):
     """
     Format bounding box coordinates to the format used by the model.
@@ -204,14 +204,13 @@ def format_bb_coordinates(bb):
     parameters: Formatted bounding box on form: w, h, x, y.
     """
 
-
     h = bb[3][1] - bb[0][1]
     w = bb[2][0] - bb[3][0]
     x = bb[0][0]
     y = bb[0][1]
     
-
     return h, w, x, y
+
 
 def format_easyocr_result_to_df(result):
     """
@@ -239,6 +238,7 @@ def format_easyocr_result_to_df(result):
 
     return data_df, text
 
+
 def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
     """
     Extract text and bounding boxes from an image.
@@ -264,6 +264,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
         bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
         text = remove_special_characters(text)
     return text, bounding_boxes
+
 
 def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronisk_tinglyst = False):
     """
@@ -294,6 +295,7 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronis
         text = remove_special_characters(text)
     return text, result_df
 
+
 def get_all_bbs(df):
     all_bbs = []
     for iter, row in df.iterrows():
@@ -301,6 +303,7 @@ def get_all_bbs(df):
         all_bbs.append(bb)
 
     return all_bbs
+
 
 def check_controldigits(number):
     """
@@ -347,6 +350,7 @@ def check_controldigits(number):
     
     return False
 
+
 def format_dnumber(dnumber):
     """
     Format a D-number to a personal number.
@@ -381,6 +385,7 @@ def format_dnumber(dnumber):
     personal_number = f'{day:02d}{month:02d}{year:02d}{sequence}'
 
     return is_personal_number, personal_number
+
 
 def find_matches(text):
     """
@@ -417,7 +422,6 @@ def find_matches(text):
                 index += 1
 
     return tagged_matches
-
 
 
 def get_boxes_to_blur(tagged_matches, bounding_boxes):
@@ -468,6 +472,7 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
             bbs_clean.append(bb)
 
     return bbs_clean
+
 
 def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2):
     """
@@ -556,7 +561,7 @@ def get_levenshtein_distance(s1, s2):
     """
     return Levenshtein.distance(s1, s2)
 
-    
+
 def can_be_int(s):
     """
     Check if a string can be converted to an integer.
@@ -586,6 +591,39 @@ def can_be_int(s):
     
     else:
         return False
+
+
+def can_be_ssn(s):
+    """
+    Check if a string can be converted to an integer or represents the last five digits of a number.
+
+    Parameters:
+    s (str): The string to check.
+
+    Returns:
+    str: 'whole_number' if the string can be a whole number, 'last_five' if the string is the last five digits of a number, False otherwise.
+    """
+
+    # Remove all whitespace in the string
+    s = s.replace(" ", "")
+
+    # Count the number of digits in the string
+    int_count = 0
+    for char in s:
+        if char.isdigit():
+            int_count += 1
+
+    # Return 'last_five' if the string is 4 or 5 digits long and contains more than 2 digits
+    if len(s) == 5:
+        if int_count > 3:
+            return 'last_five'
+    
+    # Return 'whole_number' if the string is 10 or 11 digits long and contains more than 9 digits
+    if len(s) > 9 and len(s) < 12:
+        if int_count > 9:
+            return 'whole_number'
+        
+    return False
     
 
 def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
@@ -612,7 +650,7 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
 
         for next in range(index, index+num_indexes):
             if next < len(bounding_boxes):
-                check  = can_be_int(bounding_boxes.iloc[next]['text'])
+                check  = can_be_ssn(bounding_boxes.iloc[next]['text'])
                 if check == 'last_five':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
@@ -621,10 +659,11 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
 
+
         closest_bbs = find_closest_bounding_boxes(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest=num_closest)
 
         for row in closest_bbs.iterrows():
-            check  = can_be_int(row[1]['text'])
+            check  = can_be_ssn(row[1]['text'])
             if check == 'last_five':
                 predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
 
@@ -632,6 +671,7 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
                 predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
             
     return predicted_boxes
+
 
 def format_box_to_iou(box):
     """
@@ -642,6 +682,7 @@ def format_box_to_iou(box):
         list: A list containing the x1, y1, x2 and y2 coordinates
     """
     return [box[2], box[3], box[2] + abs(box[1]), box[3] + abs(box[0])]
+
 
 def calculate_iou(boxes_a, boxes_b):
     """
@@ -662,7 +703,6 @@ def calculate_iou(boxes_a, boxes_b):
         if i < len(boxes_b_copy):
             boxes_b_copy[i] = format_box_to_iou(boxes_b_copy[i])
     return box_iou(torch.tensor(boxes_a_copy), torch.tensor(boxes_b_copy)).numpy()
-
 
 
 def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
@@ -689,9 +729,9 @@ def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
                         area_j = page[j][0] * page[j][1]
 
                         if area_i > area_j:
-                            remove_indexes_page.append(j)
-                        else:
                             remove_indexes_page.append(i)
+                        else:
+                            remove_indexes_page.append(j)
 
             predicted_boxes_page = [box for i, box in enumerate(page) if i not in remove_indexes_page]
             clean_predicted_boxes.append(predicted_boxes_page)
