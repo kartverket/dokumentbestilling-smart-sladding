@@ -32,7 +32,7 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 #Download Language files
-RUN python -c "import easyocr; easyocr.Reader(['no', 'en', 'da'], model_storage_directory='/smart_sladding_ml/easyocr_models')"
+#RUN python -c "import easyocr; easyocr.Reader(['no', 'en', 'da'], model_storage_directory='/smart_sladding_ml/easyocr_models')"
 
 EXPOSE 5070
 
