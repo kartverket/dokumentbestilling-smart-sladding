@@ -253,9 +253,9 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
     pd.DataFrame: A DataFrame containing the bounding boxes.
     """
 
-    text = pytesseract.image_to_string(image, lang='nor', config=config)
+    text = pytesseract.image_to_string(image, config=config)
     text = text.replace('\n', ' ')
-    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
+    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
     
@@ -281,7 +281,7 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronis
     """
 
     image = pil_to_cv2(image)
-    reader = easyocr.Reader(languages)
+    reader = easyocr.Reader(languages, download_enabled=False)
     result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
     result_df, text = format_easyocr_result_to_df(result)
 
