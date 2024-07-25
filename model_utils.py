@@ -255,7 +255,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
 
     text = pytesseract.image_to_string(image, config=config)
     text = text.replace('\n', ' ')
-    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
+    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
     
