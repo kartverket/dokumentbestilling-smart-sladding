@@ -253,7 +253,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
     pd.DataFrame: A DataFrame containing the bounding boxes.
     """
 
-    text = pytesseract.image_to_string(image, lang='nor', config=config)
+    text = pytesseract.image_to_string(image, config=config)
     text = text.replace('\n', ' ')
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, lang='nor', config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
