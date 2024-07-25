@@ -121,8 +121,8 @@ def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --p
                 "y": bb[3]
             })
 
-    return json_responses, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images
+    return json_responses
 
 if __name__ == '__main__':
-    res, alltext, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, images = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
     print(res)

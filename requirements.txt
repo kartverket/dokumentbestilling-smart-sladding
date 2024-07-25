@@ -19,3 +19,4 @@ python-dotenv
 python-Levenshtein
 python-bidi
 easyocr
+opencv-python
