@@ -13,6 +13,11 @@ RUN apt-get update \
         libtesseract-dev \
         libleptonica-dev \
         poppler-utils \
+        build-essential \
+        pkg-config \
+        libgl1-mesa-dev \
+        libglu1-mesa-dev \
+        wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -31,4 +36,3 @@ EXPOSE 5070
 
 # Specify the command to run your application
 CMD ["flask", "run", "--host=0.0.0.0", "--port=5070"]
-
