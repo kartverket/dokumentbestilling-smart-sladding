@@ -10,7 +10,7 @@ from pdf2image import convert_from_path, convert_from_bytes
 import fitz
 import model_utils
 
-def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.5):
+def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.2):
     """
     Match predicted bounding boxes to true bounding boxes based on Intersection over Union (IOU) value.
 

@@ -2,7 +2,7 @@ import model_utils
 import time
 import pandas as pd
 
-def model(pdf_file, languages, config, num_indexes, num_closest):
+def model(pdf_file, languages, config, num_indexes, num_closest_above, num_closest_below):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -58,7 +58,7 @@ def model(pdf_file, languages, config, num_indexes, num_closest):
 
         if not elektronisk_tinglyst:
 
-            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest = num_closest)
+            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest_above, num_closest_below=num_closest_below)
             predicted_bbs_keywords.append(keyword_boxes)
 
             all_boxes = bbs + keyword_boxes
@@ -80,7 +80,7 @@ def model(pdf_file, languages, config, num_indexes, num_closest):
     return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
-def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest = 10):
+def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -101,7 +101,7 @@ def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --p
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
     time2 = time.time()
-    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest=num_closest)
+    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
     time3 = time.time()
     print(f"Run model function for document {docid} in {time3-time2} seconds.")
 
@@ -124,5 +124,5 @@ def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --p
     return json_responses
 
 if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest=10)
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest_above=3, num_closest_below=7)
     print(res)

@@ -547,6 +547,59 @@ def find_closest_bounding_boxes(df, search_word, num_closest=10):
 
     return closest_boxes_df
 
+def find_closest_bounding_boxes_constrained(df, search_word, num_closest_above=3, num_closest_below=7):
+    """
+    Find the closest bounding boxes to a word in a DataFrame, divided by above and below.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the bounding boxes.
+    search_word (str): The word to search for.
+    num_closest_above (int): The number of closest bounding boxes to find above the word.
+    num_closest_below (int): The number of closest bounding boxes to find below the word.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the closest bounding boxes.
+    """
+
+    # Search for all instances of the word in the DataFrame
+    word_rows = df[df['text'] == search_word]
+
+    if word_rows.empty:
+        return False
+
+    # Create a list to hold the closest bounding boxes for each instance of the search word
+    all_closest_boxes = []
+
+    # Calculate distances and find closest bounding boxes
+    for _, word_row in word_rows.iterrows():
+        # Get the bounding box coordinates of the found word
+        word_bbox = word_row[['left', 'top', 'width', 'height']].values
+        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
+
+        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
+        def calculate_distance(row):
+            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
+            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
+
+        df['distance'] = df.apply(calculate_distance, axis=1)
+
+        # Filter the boxes above and below
+        above_boxes = df[(df['top'] < word_row['top']) & (df['text'] != search_word)]
+        below_boxes = df[(df['top'] >= word_row['top']) & (df['text'] != search_word)]
+
+        # Sort by distance and select the closest bounding boxes for above and below
+        closest_above_boxes = above_boxes.sort_values(by='distance').head(num_closest_above)
+        closest_below_boxes = below_boxes.sort_values(by='distance').head(num_closest_below)
+
+        # Append the closest boxes for this instance to the list
+        all_closest_boxes.append(closest_above_boxes)
+        all_closest_boxes.append(closest_below_boxes)
+
+    # Concatenate all closest boxes DataFrames into one DataFrame
+    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
+
+    return closest_boxes_df
+
 
 def get_levenshtein_distance(s1, s2):
     """
@@ -619,14 +672,14 @@ def can_be_ssn(s):
             return 'last_five'
     
     # Return 'whole_number' if the string is 10 or 11 digits long and contains more than 9 digits
-    if len(s) > 9 and len(s) < 12:
+    if len(s) > 9 and len(s) < 14: 
         if int_count > 9:
             return 'whole_number'
         
     return False
     
 
-def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
+def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, num_closest_below=7):
     """
     Get bounding boxes from keywords.
 
@@ -660,7 +713,7 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest=10):
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
 
 
-        closest_bbs = find_closest_bounding_boxes(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest=num_closest)
+        closest_bbs = find_closest_bounding_boxes_constrained(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
         for row in closest_bbs.iterrows():
             check  = can_be_ssn(row[1]['text'])

@@ -6,7 +6,7 @@ import model_utils
 import time
 
 
-def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest = 10):
+def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
     """
     Evaluate the model on a set of documents.
 
@@ -46,7 +46,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3
 
         pdf_bytes = model_utils.download_pdf(docid, base_url)
         languages = ['en', 'sv', 'da']
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model_main.model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest=num_closest)
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model_main.model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
         print(len(predicted_boxes[0]))
 
