@@ -281,7 +281,7 @@ def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronis
     """
 
     image = pil_to_cv2(image)
-    reader = easyocr.Reader(languages)
+    reader = easyocr.Reader(languages, download_enabled=False, )
     result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
     result_df, text = format_easyocr_result_to_df(result)
 
