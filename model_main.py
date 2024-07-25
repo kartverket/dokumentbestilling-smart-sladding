@@ -80,7 +80,7 @@ def model(pdf_file, languages, config, num_indexes, num_closest_above, num_close
     return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
-def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
+def main(docid, base_url, languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -124,5 +124,5 @@ def main(docid, base_url, languages = ['en', 'sv', 'da'], config = r'--oem 1 --p
     return json_responses
 
 if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['en', 'sv', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest_above=3, num_closest_below=7)
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest_above=3, num_closest_below=7)
     print(res)
