@@ -266,7 +266,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
     return text, bounding_boxes
 
 
-def apply_easyocr(image, languages = ['en', 'sv', 'da'], config = '', elektronisk_tinglyst = False):
+def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronisk_tinglyst = False):
     """
     Apply EasyOCR to an image.
 
