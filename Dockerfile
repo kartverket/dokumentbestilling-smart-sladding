@@ -9,7 +9,6 @@ ENV PYTHONUNBUFFERED 1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tesseract-ocr \
-        tesseract-ocr-nor \
         libtesseract-dev \
         libleptonica-dev \
         poppler-utils \
@@ -31,6 +30,9 @@ COPY . /smart_sladding_ml
 COPY requirements.txt /smart_sladding_ml/
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
+
+#Download Language files
+RUN python -c "import easyocr; easyocr.Reader(['en', 'sv', 'da'])"
 
 EXPOSE 5070
 
