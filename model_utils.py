@@ -286,7 +286,7 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronis
                             message=r"You are using `torch.load` with `weights_only=False`")
 
     image = pil_to_cv2(image)
-    reader = easyocr.Reader(languages)
+    reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
     result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
     result_df, text = format_easyocr_result_to_df(result)
 
