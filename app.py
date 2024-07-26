@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 load_dotenv()
 base_url = os.getenv('DOKUMENT_URL', default='http://localhost:3000/pantebok')
+#base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
 
 @app.route('/health')
 def health():

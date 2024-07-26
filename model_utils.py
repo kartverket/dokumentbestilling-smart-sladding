@@ -278,15 +278,23 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronis
     pd.DataFrame: A DataFrame containing the result.
     str: The extracted text.
     """
-
     image = pil_to_cv2(image)
+    print('EasyOCRLogger: Converted image to cv2')
+
     reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
+    print('EasyOCRLogger: Reader initialized')
+
     result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
+    print('EasyOCRLogger: Readtext done')
+
     result_df, text = format_easyocr_result_to_df(result)
+    print('EasyOCRLogger: Formatted result to DataFrame')
 
     text = text.replace('\n', ' ')
+    print('EasyOCRLogger: Replaced newline with space')
 
     result_df = result_df.dropna()
+    print('EasyOCRLogger: Dropped NaN values')
     
     if not elektronisk_tinglyst:
         #drop alle special characters
