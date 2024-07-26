@@ -12,7 +12,6 @@ from io import BytesIO
 import torch
 from torchvision.ops import box_iou
 import copy as cp
-import warnings
 
 
 #List with keywords and their corresponding allowed Levenshtein distance
@@ -26,14 +25,12 @@ keywords = [('personnr', 2),
             ('personnummer', 3), 
             ('fødselsnummer', 3), 
             ('fodselsnummer', 3), 
-            ('født', 1), 
-            ('fødselsdato', 3), 
-            ('fodselsdato', 3), 
+            #('født', 1), 
+            #('fødselsdato', 3), 
+            #('fodselsdato', 3), 
             ('fpnr', 1), 
             ('fødsnr', 1), 
             ('fodsnr', 1), 
-            ('fødsnr', 1), 
-            ('fodsnr', 1),
             ('identifikasjonsnummer', 3),
             ('fnrorgnr', 1),
             ('fødselsnrorganisasjonsnr', 4),
@@ -281,9 +278,6 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronis
     pd.DataFrame: A DataFrame containing the result.
     str: The extracted text.
     """
-    # Suppress FutureWarning related to torch.load
-    warnings.filterwarnings("ignore", category=FutureWarning, 
-                            message=r"You are using `torch.load` with `weights_only=False`")
 
     image = pil_to_cv2(image)
     reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
@@ -696,15 +690,17 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
     """
 
     bounding_boxes = bounding_boxes.reset_index()
+
+    keywords_and_ssn_found = []
     
     indexes = []
     predicted_boxes = []
     for keyword in keywords:
         for row in bounding_boxes.iterrows():
             if get_levenshtein_distance(keyword[0], row[1]['text'].lower()) < keyword[1]+1:
-                indexes.append(row[0])
+                indexes.append([row[0], keyword[0]])
 
-    for index in indexes:
+    for index, keyword_ in indexes:
 
         for next in range(index, index+num_indexes):
             if next < len(bounding_boxes):
@@ -712,10 +708,12 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
                 if check == 'last_five':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
+                    keywords_and_ssn_found.append({'found_by':'index', 'type':'last_five', 'text':row['text'], 'keyword':keyword_})
 
                 if check == 'whole_number':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
+                    keywords_and_ssn_found.append({'found_by':'index', 'type':'whole_number', 'text':row['text'], 'keyword':keyword_})
 
 
         closest_bbs = find_closest_bounding_boxes_constrained(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest_above=num_closest_above, num_closest_below=num_closest_below)
@@ -724,11 +722,13 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
             check  = can_be_ssn(row[1]['text'])
             if check == 'last_five':
                 predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
+                keywords_and_ssn_found.append({'found_by':'closest_boxes', 'type':'last_five', 'text':row[1]['text'], 'keyword':keyword_})
 
             if check == 'whole_number':
                 predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
+                keywords_and_ssn_found.append({'found_by':'closest_boxes', 'type':'whole_number', 'text':row[1]['text'], 'keyword':keyword_})
             
-    return predicted_boxes
+    return predicted_boxes, keywords_and_ssn_found
 
 
 def format_box_to_iou(box):

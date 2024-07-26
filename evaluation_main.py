@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import model_utils
 import time
+import json
 
 
 def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
@@ -46,13 +47,17 @@ def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3
 
         pdf_bytes = model_utils.download_pdf(docid, base_url)
         languages = ['no', 'en', 'da']
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model_main.model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_dict = model_main.model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
         print(len(predicted_boxes[0]))
 
         for i, text in enumerate(all_text):
             with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
                 file.write(text)
+        
+        #Save keywords_and_ssn_found dictionary as .json file
+        with open(f'{savefolder_name}/{docid}_keywords_and_ssn_found.json', 'w') as file:
+            json.dump(keywords_dict, file, indent=4)
 
         images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
 
