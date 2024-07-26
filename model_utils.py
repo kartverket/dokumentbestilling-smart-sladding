@@ -12,6 +12,8 @@ from io import BytesIO
 import torch
 from torchvision.ops import box_iou
 import copy as cp
+import warnings
+
 
 #List with keywords and their corresponding allowed Levenshtein distance
 keywords = [('personnr', 2), 
@@ -279,9 +281,12 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronis
     pd.DataFrame: A DataFrame containing the result.
     str: The extracted text.
     """
+    # Suppress FutureWarning related to torch.load
+    warnings.filterwarnings("ignore", category=FutureWarning, 
+                            message=r"You are using `torch.load` with `weights_only=False`")
 
     image = pil_to_cv2(image)
-    reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model_storage', user_network_directory='../tmp/.EasyOCR/user_network')
+    reader = easyocr.Reader(languages)
     result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
     result_df, text = format_easyocr_result_to_df(result)
 
