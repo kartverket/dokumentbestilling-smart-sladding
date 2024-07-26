@@ -279,22 +279,16 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronis
     str: The extracted text.
     """
     image = pil_to_cv2(image)
-    print('EasyOCRLogger: Converted image to cv2')
 
     reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
-    print('EasyOCRLogger: Reader initialized')
 
-    result = reader.readtext(image, x_ths = 0.01, y_ths = 0.01, width_ths = 0.01)
-    print('EasyOCRLogger: Readtext done')
+    result = reader.readtext(image, width_ths = 0.01)
 
     result_df, text = format_easyocr_result_to_df(result)
-    print('EasyOCRLogger: Formatted result to DataFrame')
 
     text = text.replace('\n', ' ')
-    print('EasyOCRLogger: Replaced newline with space')
 
     result_df = result_df.dropna()
-    print('EasyOCRLogger: Dropped NaN values')
     
     if not elektronisk_tinglyst:
         #drop alle special characters
@@ -780,7 +774,6 @@ def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
         if len(page) > 0:
             
             iou_matrix = calculate_iou(page, page)
-            print(iou_matrix)
 
             remove_indexes_page = []
             #Search only over the diagonl of the matrix
