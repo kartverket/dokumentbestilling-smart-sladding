@@ -61,6 +61,7 @@ def main(docid, base_url):
     ratio (float): The ratio between the PDF and image dimensions.
     """
     pdf_bytes = model_utils.download_pdf(docid, base_url)
+
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
     predicted_boxes, image_dimensions = model(pdf_bytes)
@@ -81,7 +82,6 @@ def main(docid, base_url):
 
     return json_responses
     
-
 if __name__ == '__main__':
     res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
     print(res)
