@@ -2,7 +2,7 @@ import model_utils
 import time
 import pandas as pd
 
-def model(pdf_file, languages, config, num_indexes, num_closest_above, num_closest_below):
+def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=True, languages=['no', 'da', 'en'], tess_config=r'--oem 1 --psm 11', num_indexes=3, num_closest=[6,12]):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -15,6 +15,8 @@ def model(pdf_file, languages, config, num_indexes, num_closest_above, num_close
     list: A list of texts.
     """
 
+    predicted_boxes = []
+
     elektronisk_tinglyst = model_utils.is_elektronisk_tinglyst(pdf_file)
 
     #Logger
@@ -25,55 +27,27 @@ def model(pdf_file, languages, config, num_indexes, num_closest_above, num_close
 
     images, dimensions = model_utils.convert_pdf_bytes_to_images(pdf_file)
 
-    model_bbs = []
-    all_text = []
-    predicted_boxes = []
-    predicted_bbs_keywords = []
-    predicted_bbs_regex = []
-
-    keywords_dict = {}
-
     for i, image in enumerate(images):
-        text_tess, bounding_boxes_tess = model_utils.apply_tesseractocr(image, languages, config, elektronisk_tinglyst)
-        text_easy, bounding_boxes_easy = model_utils.apply_easyocr(image, languages, config, elektronisk_tinglyst)
 
-        text = text_tess + ' ' + text_easy
-
-        bounding_boxes = pd.concat([bounding_boxes_tess, bounding_boxes_easy], ignore_index=True)
-
-        model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
-        all_text.append(text)
-
-        tagged_matches = model_utils.find_matches(text)
-
-        bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
-        predicted_bbs_regex.append(bbs)
+        bounding_boxes, text = model_utils.ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst)
+        bbs = model_utils.apply_regex_search(bounding_boxes, text)
 
         if not elektronisk_tinglyst:
 
-            keyword_boxes, keywords_and_ssn_found = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest_above, num_closest_below=num_closest_below)
-            predicted_bbs_keywords.append(keyword_boxes)
+            if run_keyword_search:
 
-            keywords_dict[i] = keywords_and_ssn_found
-
-
-            all_boxes = bbs + keyword_boxes
-
-            bounding_boxes_tuples = [tuple(box) for box in all_boxes]
-            unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
-            unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
-
-            predicted_boxes.append(unique_bounding_boxes)
+                unique_bounding_boxes = model_utils.apply_keyword_search(bounding_boxes, num_indexes, num_closest)
+                predicted_boxes.append(unique_bounding_boxes)
 
         if elektronisk_tinglyst:
             predicted_boxes.append(bbs)
 
     clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
 
-    return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions, keywords_dict
+    return clean_predicted_boxes, dimensions
 
 
-def main(docid, base_url, languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
+def main(docid, base_url):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -90,17 +64,12 @@ def main(docid, base_url, languages = ['no', 'en', 'da'], config = r'--oem 1 --p
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    time2 = time.time()
-    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_and_ssn_found = model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
-    time3 = time.time()
-    print(f"Ran model function for document {docid} in {time3-time2} seconds.")
-
+    predicted_boxes, image_dimensions = model(pdf_bytes)
     ratio = pdf_dimensions[0] / image_dimensions[0]
 
     predicted_boxes_scaled = model_utils.scale_and_pad_all_bounding_boxes(predicted_boxes, ratio)
     
     json_responses = []
-
     for page_num, bb_page in enumerate(predicted_boxes_scaled):
         for bb_index, bb in enumerate(bb_page):
             json_responses.append({
@@ -112,7 +81,7 @@ def main(docid, base_url, languages = ['no', 'en', 'da'], config = r'--oem 1 --p
             })
 
     return json_responses
-
+    
 if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest_above=6, num_closest_below=12)
+    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
     print(res)
