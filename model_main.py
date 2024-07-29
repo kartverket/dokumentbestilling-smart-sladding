@@ -40,12 +40,14 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
 
                 all_boxes = predicted_boxes_regex + predicted_boxes_keyword
 
-                predicted_boxes.append(all_boxes)
+                unique_bounding_boxes = model_utils.remove_duplicates(all_boxes)
+
+                predicted_boxes.append(unique_bounding_boxes)
 
         if elektronisk_tinglyst:
             predicted_boxes.append(predicted_boxes_regex)
 
-    clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
+    clean_predicted_boxes = model_utils.remove_overlapping_boxes(predicted_boxes)
 
     return clean_predicted_boxes, dimensions
 
@@ -81,8 +83,6 @@ def main(docid, base_url):
                 "width": bb[1],
                 "x": bb[2],
                 "y": bb[3],
-                "type": "PERSONNUMMER",
-                "ml_generated": "true",
             })
 
     return json_responses

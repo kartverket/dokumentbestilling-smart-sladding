@@ -7,7 +7,85 @@ import time
 import json
 
 
-def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
+def evaluate_model(folder_path, labels_path, savefolder_name):
+    """
+    Evaluate the model on a set of documents.
+
+    Parameters:
+    folder_path (str): The path to the folder containing the documents.
+    labels_path (str): The path to the csv file containing the labels.
+    savefolder_name (str): The name of the folder where the results will be saved.
+    model_function (function): The function that will be used to extract the text and bounding boxes from the images.
+
+    Returns:
+    total_results (list): A list of dictionaries containing the results per document.
+    total_tp (int): The total number of true positives.
+    total_fp (int): The total number of false positives.
+    total_fn (int): The total number of false negatives.
+    df_results (pd.DataFrame): A DataFrame containing the results per document.
+    """
+
+    base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
+
+    organized_labels_path = pd.read_csv(labels_path)
+
+    total_results = []
+    total_tp, total_fp, total_fn = 0,0,0
+
+    docids = []
+    tps = []
+    fps = []
+    fns = []
+
+    #Loop through all docu
+    for index, dokument in enumerate(os.listdir(folder_path)):
+        pdf_path = folder_path + dokument
+        #remove .pdf from the name
+        docid = dokument[:-4]
+        docids.append(docid)
+
+        pdf_bytes = model_utils.download_pdf(docid, base_url)
+        predicted_boxes, dimensions = model_main.model(pdf_bytes)
+
+
+        images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
+
+        #Get the true positives, false positives and false negatives
+        metrics_list = []
+        for i,j in zip(true_boxes, predicted_boxes):
+            matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(i, j)
+            metrics_list.append(metrics)
+
+        results = evaluation_utils.metrics_perdocument(metrics_list)
+
+        images_with_bbs = evaluation_utils.draw_bounding_boxes(images_true, predicted_boxes, true_boxes)
+
+        for i, img in enumerate(images_with_bbs):
+            img.savefig(f'{savefolder_name}/{docid}_{i}.png')
+    
+        tps.append(results['TP'])
+        fps.append(results['FP'])
+        fns.append(results['FN'])
+    
+        total_tp += results['TP']
+        total_fp += results['FP']
+        total_fn += results['FN']
+
+        print(total_tp, total_fp, total_fn)
+        
+        total_results.append(results)
+        print(index)
+
+    print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
+
+    df_results = pd.DataFrame({'docid': docids, 'TP': tps, 'FP': fps, 'FN': fns})
+    df_results.to_csv(f'{savefolder_name}/results_per_doc.csv', index=False)
+
+    return total_results, total_tp, total_fp, total_fn, df_results
+
+
+
+def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
     """
     Evaluate the model on a set of documents.
 
@@ -46,7 +124,8 @@ def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3
 
         pdf_bytes = model_utils.download_pdf(docid, base_url)
         languages = ['no', 'en', 'da']
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_dict = model_main.model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_dict = extended_model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
+
 
         for i, text in enumerate(all_text):
             with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
@@ -95,45 +174,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3
     return total_results, total_tp, total_fp, total_fn, df_results
 
 
-## RESULTS ALL DOCUMENTS
-# Config: '--oem 1 --psm 11'
-# With Ocr peronnummer
-#Total TP: 686, Total FP: 9, Total FN: 823
-
-#Precision: 0.9870503597122302
-#Recall: 0.4546056991385023
-#F1: 0.6225045372050816
-#Accuracy: 0.4519104084321476
-
-
-## RESULTS ELEKTRONISK TINGLYST
-#Total TP: 162, Total FP: 0, Total FN: 0
-
-
-
-##RESUULTS ALL DOCUMENTS()
-# Config: '--oem 1 --psm 11'
-# With Ocr peronnummer, boxsplitting and keywords
-# Total TP: 909, Total FP: 56, Total FN: 599
-
-#Precision: 0.9419689119170984
-#Recall: 0.6027851458885941
-#F1: 0.7351395066720583
-#Accuracy: 0.5812020460358056
-
-
-
-##RESUULTS ALL DOCUMENTS EASYOCR AFTER 444 DOCUMENTS
-# With Ocr peronnummer, boxsplitting and keywords
-# Total TP: 380, Total FP: 84, Total FN: 311
-
-#Precision: 0.8189655172413793
-#Recall: 0.5499276410998553
-#F1: 0.6580086580086579
-#Accuracy: 0.49032258064516127
-
-
-def model(pdf_file, languages, config, num_indexes, num_closest_above, num_closest_below):
+def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, num_closest_below):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -204,47 +245,40 @@ def model(pdf_file, languages, config, num_indexes, num_closest_above, num_close
     return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions, keywords_dict
 
 
-def main(docid, base_url, languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
-    """
-    Extract text from a PDF file and blur out sensitive information.
 
-    Parameters:
-    docid (str): the document ID.
+## RESULTS ALL DOCUMENTS
+# Config: '--oem 1 --psm 11'
+# With Ocr peronnummer
+#Total TP: 686, Total FP: 9, Total FN: 823
 
-    Returns:
-    images (list): A list of images.
-    predicted_boxes (list): A list of bounding boxes per image.
-    json_responses (list): A list of json responses (dict).
-    ratio (float): The ratio between the PDF and image dimensions.
-    """
-    pdf_bytes = model_utils.download_pdf(docid, base_url)
+#Precision: 0.9870503597122302
+#Recall: 0.4546056991385023
+#F1: 0.6225045372050816
+#Accuracy: 0.4519104084321476
 
-    pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-    time2 = time.time()
-    images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_and_ssn_found = model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
-    time3 = time.time()
-    print(f"Ran model function for document {docid} in {time3-time2} seconds.")
+## RESULTS ELEKTRONISK TINGLYST
+#Total TP: 162, Total FP: 0, Total FN: 0
 
-    ratio = pdf_dimensions[0] / image_dimensions[0]
 
-    predicted_boxes_scaled = model_utils.scale_and_pad_all_bounding_boxes(predicted_boxes, ratio)
-    
-    json_responses = []
 
-    for page_num, bb_page in enumerate(predicted_boxes_scaled):
-        for bb_index, bb in enumerate(bb_page):
-            json_responses.append({
-                "page": page_num+1,
-                "height": bb[0],
-                "width": bb[1],
-                "x": bb[2],
-                "y": bb[3]
-            })
+##RESUULTS ALL DOCUMENTS()
+# Config: '--oem 1 --psm 11'
+# With Ocr peronnummer, boxsplitting and keywords
+# Total TP: 909, Total FP: 56, Total FN: 599
 
-    return json_responses
+#Precision: 0.9419689119170984
+#Recall: 0.6027851458885941
+#F1: 0.7351395066720583
+#Accuracy: 0.5812020460358056
 
-if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", languages = ['no', 'en', 'da'], config = r'--oem 1 --psm 11', num_indexes=3, num_closest_above=6, num_closest_below=12)
-    print(res)
 
+
+##RESUULTS ALL DOCUMENTS EASYOCR AFTER 444 DOCUMENTS
+# With Ocr peronnummer, boxsplitting and keywords
+# Total TP: 380, Total FP: 84, Total FN: 311
+
+#Precision: 0.8189655172413793
+#Recall: 0.5499276410998553
+#F1: 0.6580086580086579
+#Accuracy: 0.49032258064516127
