@@ -48,7 +48,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name):
         predicted_boxes, dimensions = model_main.model(pdf_bytes)
 
 
-        images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
+        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_path, docid, folder_path)
 
         #Get the true positives, false positives and false negatives
         metrics_list = []
@@ -58,7 +58,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name):
 
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
-        images_with_bbs = evaluation_utils.draw_bounding_boxes(images_true, predicted_boxes, true_boxes)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, predicted_boxes, true_boxes)
 
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{savefolder_name}/{docid}_{i}.png')
@@ -124,18 +124,14 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
 
         pdf_bytes = model_utils.download_pdf(docid, base_url)
         languages = ['no', 'en', 'da']
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions, keywords_dict = extended_model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = extended_model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
 
         for i, text in enumerate(all_text):
             with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
                 file.write(text)
-        
-        #Save keywords_and_ssn_found dictionary as .json file
-        with open(f'{savefolder_name}/{docid}_keywords_and_ssn_found.json', 'w') as file:
-            json.dump(keywords_dict, file, indent=4)
 
-        images_true, true_boxes = evaluation_utils.get_images_and_bb_from_docid(organized_labels_path, docid, folder_path)
+        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_path, docid, folder_path)
 
 
         #Get the true positives, false positives and false negatives
@@ -148,7 +144,7 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
 
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, model_bbs, true_boxes, predicted_keyword, predicted_regex, show=False)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes_detailed(images_true, model_bbs, true_boxes, predicted_keyword, predicted_regex, show=False)
 
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{savefolder_name}/{docid}_{i}.png')
@@ -203,8 +199,6 @@ def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, 
     predicted_bbs_keywords = []
     predicted_bbs_regex = []
 
-    keywords_dict = {}
-
     for i, image in enumerate(images):
         text_tess, bounding_boxes_tess = model_utils.apply_tesseractocr(image, languages, config, elektronisk_tinglyst)
         text_easy, bounding_boxes_easy = model_utils.apply_easyocr(image, languages, config, elektronisk_tinglyst)
@@ -223,10 +217,8 @@ def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, 
 
         if not elektronisk_tinglyst:
 
-            keyword_boxes, keywords_and_ssn_found = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest_above, num_closest_below=num_closest_below)
+            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest_above, num_closest_below=num_closest_below)
             predicted_bbs_keywords.append(keyword_boxes)
-
-            keywords_dict[i] = keywords_and_ssn_found
 
 
             all_boxes = bbs + keyword_boxes
@@ -242,7 +234,7 @@ def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, 
 
     clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
 
-    return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions, keywords_dict
+    return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
 
 
 

@@ -25,9 +25,6 @@ keywords = [('personnr', 2),
             ('personnummer', 3), 
             ('fødselsnummer', 3), 
             ('fodselsnummer', 3), 
-            #('født', 1), 
-            #('fødselsdato', 3), 
-            #('fodselsdato', 3), 
             ('fpnr', 1), 
             ('fødsnr', 1), 
             ('fodsnr', 1), 
@@ -298,6 +295,16 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = 
 
 
 def get_all_bbs(df):
+    """
+    Get all bounding boxes from a DataFrame.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the bounding boxes.
+
+    Returns:
+    list: A list of bounding boxes.
+    """
+
     all_bbs = []
     for iter, row in df.iterrows():
         bb = [row['height'], row['width'], row['left'], row['top']]
@@ -503,8 +510,19 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
     return scaled_boxes
 
 def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
+    """
+    Apply keyword search to a DataFrame of bounding boxes.
 
-    predicted_boxes_keyword, keywords_and_ssn_found = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
+    Parameters:
+    bounding_boxes (pd.DataFrame): The DataFrame containing the bounding boxes.
+    num_indexes (int): The number of indexes to search for.
+    num_closest (list): The number of closest bounding boxes to find above and below the keyword.
+
+    Returns:
+    list: A list of bounding boxes.
+    """
+
+    predicted_boxes_keyword = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
 
     return predicted_boxes_keyword
 
@@ -638,37 +656,6 @@ def remove_duplicates(bounding_boxes):
     return unique_bounding_boxes
 
 
-def can_be_int(s):
-    """
-    Check if a string can be converted to an integer.
-
-    Parameters:
-    s (str): The string to check.
-
-    Returns:
-    str: 'whole_number' if the string can be a whole number, 'last_five' if the string is the last five digits of a number, False otherwise.
-    """
-
-    n_ints = 0
-    s = s.replace(" ", "")
-    s = re.findall(r'.', s)
-
-    for char in s:
-        try:
-            integer = int(char)
-            n_ints += 1
-        except:
-            continue
-    
-    if n_ints > 9 and n_ints < 14:
-        return 'whole_number'
-    if n_ints > 2 and len(s) == 5:
-        return 'last_five'
-    
-    else:
-        return False
-
-
 def can_be_ssn(s):
     """
     Check if a string can be converted to an integer or represents the last five digits of a number.
@@ -690,14 +677,12 @@ def can_be_ssn(s):
             int_count += 1
 
     # Return 'last_five' if the string is 4 or 5 digits long and contains more than 2 digits
-    if len(s) == 5:
-        if int_count > 3:
-            return 'last_five'
+    if len(s) == 5 and int_count > 3:
+        return 'last_five'
     
     # Return 'whole_number' if the string is 10 or 11 digits long and contains more than 9 digits
-    if len(s) > 9 and len(s) < 14: 
-        if int_count > 9:
-            return 'whole_number'
+    if len(s) > 9 and len(s) < 14 and int_count > 9: 
+        return 'whole_number'
         
     return False
     
@@ -714,8 +699,6 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
     """
 
     bounding_boxes = bounding_boxes.reset_index()
-
-    keywords_and_ssn_found = []
     
     indexes = []
     predicted_boxes = []
@@ -732,12 +715,10 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
                 if check == 'last_five':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
-                    keywords_and_ssn_found.append({'found_by':'index', 'type':'last_five', 'text':row['text'], 'keyword':keyword_})
 
                 if check == 'whole_number':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
-                    keywords_and_ssn_found.append({'found_by':'index', 'type':'whole_number', 'text':row['text'], 'keyword':keyword_})
 
 
         closest_bbs = find_closest_bounding_boxes_constrained(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest_above=num_closest_above, num_closest_below=num_closest_below)
@@ -746,13 +727,12 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
             check  = can_be_ssn(row[1]['text'])
             if check == 'last_five':
                 predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
-                keywords_and_ssn_found.append({'found_by':'closest_boxes', 'type':'last_five', 'text':row[1]['text'], 'keyword':keyword_})
 
             if check == 'whole_number':
                 predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
-                keywords_and_ssn_found.append({'found_by':'closest_boxes', 'type':'whole_number', 'text':row[1]['text'], 'keyword':keyword_})
+                
             
-    return predicted_boxes, keywords_and_ssn_found
+    return predicted_boxes
 
 
 def format_box_to_iou(box):
@@ -823,29 +803,37 @@ def remove_overlapping_boxes(predicted_boxes, iou_threshold = 0.2):
 
 
 def ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst):
-
-    text_tess = bounding_boxes_tess = None
-    text_easy = bounding_boxes_easy = None
-
+    """
+    Perform OCR using Tesseract and/or EasyOCR based on the provided flags.
+    
+    Parameters:
+    - image: The image to process.
+    - run_tesseract (bool): Flag to run Tesseract OCR.
+    - run_easyocr (bool): Flag to run EasyOCR.
+    - languages (list): List of languages for EasyOCR.
+    - tess_config (str): Configuration for Tesseract OCR.
+    - elektronisk_tinglyst (bool): Additional configuration flag.
+    
+    Returns:
+    - bounding_boxes (pd.DataFrame): DataFrame of bounding boxes from OCR.
+    - text (str): Concatenated OCR text results.
+    """
+    
+    text_parts = []
+    bounding_boxes_parts = []
+    
     if run_tesseract:
         text_tess, bounding_boxes_tess = apply_tesseractocr(image, tess_config, elektronisk_tinglyst)
+        text_parts.append(text_tess)
+        bounding_boxes_parts.append(bounding_boxes_tess)
     
     if run_easyocr:
         text_easy, bounding_boxes_easy = apply_easyocr(image, languages, elektronisk_tinglyst)
+        text_parts.append(text_easy)
+        bounding_boxes_parts.append(bounding_boxes_easy)
 
-    if run_tesseract and run_easyocr:
-        text = f"{text_tess} {text_easy}"
-        bounding_boxes = pd.concat([bounding_boxes_tess, bounding_boxes_easy], ignore_index=True)
-    elif run_tesseract:
-        text = text_tess
-        bounding_boxes = bounding_boxes_tess
-    elif run_easyocr:
-        text = text_easy
-        bounding_boxes = bounding_boxes_easy
-    else:
-        text = ""
-        bounding_boxes = pd.DataFrame()  # Assuming bounding_boxes should be a DataFrame
+    text = " ".join(text_parts)
+    bounding_boxes = pd.concat(bounding_boxes_parts, ignore_index=True) if bounding_boxes_parts else pd.DataFrame()
 
     return bounding_boxes, text
-
 
