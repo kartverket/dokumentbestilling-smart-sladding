@@ -113,20 +113,6 @@ def scale_bounding_box(bbox, ratio):
     return [height*ratio, width*ratio, x*ratio, y*ratio]
 
 
-def get_pdf_dimensions(pdf_path):
-    """
-    Get the dimensions of a PDF file.
-    --MARK! Assuming that all pages have the same dimensions.
-
-    Parameters:
-    pdf_path (str): The path to the PDF file.
-
-    Returns:
-    list: A tuples containing the width and height of each page in the PDF file.
-    """
-    pdf = PyPDF2.PdfReader(open(pdf_path, "rb"))
-    media_box = pdf.pages[0].mediabox
-    return (float(media_box.width),float(media_box.height))
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
@@ -267,6 +253,53 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     bbs_scaled = [[scale_bounding_box(bb, dimension_ratio) for bb in page] for page in bbs] 
     return images, bbs_scaled
 
+
+def draw_bounding_boxes(images, predicted_bboxes, true_bboxes):
+    """
+    Draw bounding boxes on images.
+
+    Parameters:
+    images (list): A list of images.
+    predicted_bboxes (list): A list of predicted bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+    true_bboxes (list): A list of labelled bounding boxes separated by page [[bb1, bb2, ...], [bb1, bb2, ...], ...] where bb is [height, width, x, y].
+
+    Returns:
+    list: A list of images with bounding boxes.
+    """
+    images_with_bb = []
+    for i, image in enumerate(images):
+        fig, ax = plt.subplots(figsize=(20, 20))
+        ax.imshow(image)
+
+        # Combine true and predicted bounding boxes with labels
+        combined_bbs = []
+        combined_bbs += [(bb, 'True') for bb in true_bboxes[i]]
+        combined_bbs += [(bb, 'Predicted') for bb in predicted_bboxes[i]]
+
+        # Plot each bounding box with appropriate label and color
+        for bb, label in combined_bbs:
+            if label == 'True':
+                edgecolor = 'green'
+                linestyle = '-'
+                legend_label = 'True (label)'
+            if label == 'Predicted':
+                edgecolor = 'red'
+                linestyle = '--'
+                legend_label = 'Predicted (label)'
+
+            rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2, linestyle=linestyle,
+                                 edgecolor=edgecolor, facecolor="none", label=legend_label)
+            ax.add_patch(rect)
+
+        # Creating a legend with unique handles
+        handles, labels = ax.get_legend_handles_labels()
+        unique = {(h.get_edgecolor(), l): h for h, l in zip(handles, labels)}.values()
+        if unique:
+            ax.legend(unique, [h.get_label() for h in unique], loc='upper right')
+
+        images_with_bb.append(fig)
+
+    return images_with_bb
 
 def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_key, pred_regex, show=False):
     """

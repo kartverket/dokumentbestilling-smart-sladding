@@ -623,6 +623,21 @@ def get_levenshtein_distance(s1, s2):
     return Levenshtein.distance(s1, s2)
 
 
+def remove_duplicates(bounding_boxes):
+    """
+    Get unique bounding boxes.
+    Parameters:
+    bounding_boxes (list): A list of bounding boxes.
+    Returns:
+    list: A list of unique bounding boxes.
+    """
+    bounding_boxes_tuples = [tuple(box) for box in bounding_boxes]
+    unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
+    unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+
+    return unique_bounding_boxes
+
+
 def can_be_int(s):
     """
     Check if a string can be converted to an integer.
@@ -772,7 +787,7 @@ def calculate_iou(boxes_a, boxes_b):
     return box_iou(torch.tensor(boxes_a_copy), torch.tensor(boxes_b_copy)).numpy()
 
 
-def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
+def remove_overlapping_boxes(predicted_boxes, iou_threshold = 0.2):
 
     clean_predicted_boxes = []
 
