@@ -30,17 +30,20 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
     for i, image in enumerate(images):
 
         bounding_boxes, text = model_utils.ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst)
-        bbs = model_utils.apply_regex_search(bounding_boxes, text)
+        predicted_boxes_regex = model_utils.apply_regex_search(bounding_boxes, text)
 
         if not elektronisk_tinglyst:
 
             if run_keyword_search:
 
-                unique_bounding_boxes = model_utils.apply_keyword_search(bounding_boxes, num_indexes, num_closest)
-                predicted_boxes.append(unique_bounding_boxes)
+                predicted_boxes_keyword = model_utils.apply_keyword_search(bounding_boxes, num_indexes, num_closest)
+
+                all_boxes = predicted_boxes_regex + predicted_boxes_keyword
+
+                predicted_boxes.append(all_boxes)
 
         if elektronisk_tinglyst:
-            predicted_boxes.append(bbs)
+            predicted_boxes.append(predicted_boxes_regex)
 
     clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
 
@@ -77,7 +80,9 @@ def main(docid, base_url):
                 "height": bb[0],
                 "width": bb[1],
                 "x": bb[2],
-                "y": bb[3]
+                "y": bb[3],
+                "type": "PERSONNUMMER",
+                "ml_generated": "true",
             })
 
     return json_responses

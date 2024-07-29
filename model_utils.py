@@ -503,14 +503,10 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
     return scaled_boxes
 
 def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
-    keyword_boxes = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
-    all_boxes = bounding_boxes + keyword_boxes
 
-    bounding_boxes_tuples = [tuple(box) for box in all_boxes]
-    unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
-    unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+    predicted_boxes_keyword, keywords_and_ssn_found = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
 
-    return unique_bounding_boxes
+    return predicted_boxes_keyword
 
 
 def find_closest_bounding_boxes(df, search_word, num_closest=10):
