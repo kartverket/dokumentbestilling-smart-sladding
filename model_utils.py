@@ -238,7 +238,7 @@ def format_easyocr_result_to_df(result):
     return data_df, text
 
 
-def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
+def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
     """
     Extract text and bounding boxes from an image.
 
@@ -265,7 +265,7 @@ def apply_tesseractocr(image, languages = [], config = r'--oem 1 --psm 11', elek
     return text, bounding_boxes
 
 
-def apply_easyocr(image, languages = ['no', 'en', 'da'], config = '', elektronisk_tinglyst = False):
+def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = False):
     """
     Apply EasyOCR to an image.
 
@@ -425,7 +425,7 @@ def find_matches(text):
     return tagged_matches
 
 
-def get_boxes_to_blur(tagged_matches, bounding_boxes):
+def apply_regex_search(bounding_boxes, text):
     """
     Get bounding boxes for matches found in a text.
 
@@ -436,7 +436,8 @@ def get_boxes_to_blur(tagged_matches, bounding_boxes):
     Returns:
     list: A list of bounding boxes for the matches.
     """
-    
+    tagged_matches = find_matches(text)
+
     matches_list = []
 
     for i in tagged_matches:
@@ -500,6 +501,16 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
         scaled_boxes.append(page_boxes)
 
     return scaled_boxes
+
+def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
+    keyword_boxes = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
+    all_boxes = bounding_boxes + keyword_boxes
+
+    bounding_boxes_tuples = [tuple(box) for box in all_boxes]
+    unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
+    unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+
+    return unique_bounding_boxes
 
 
 def find_closest_bounding_boxes(df, search_word, num_closest=10):
@@ -798,3 +809,32 @@ def remove_duplicated_boxes(predicted_boxes, iou_threshold = 0.2):
             clean_predicted_boxes.append([])
 
     return clean_predicted_boxes
+
+
+def ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst):
+
+    text_tess = bounding_boxes_tess = None
+    text_easy = bounding_boxes_easy = None
+
+    if run_tesseract:
+        text_tess, bounding_boxes_tess = apply_tesseractocr(image, tess_config, elektronisk_tinglyst)
+    
+    if run_easyocr:
+        text_easy, bounding_boxes_easy = apply_easyocr(image, languages, elektronisk_tinglyst)
+
+    if run_tesseract and run_easyocr:
+        text = f"{text_tess} {text_easy}"
+        bounding_boxes = pd.concat([bounding_boxes_tess, bounding_boxes_easy], ignore_index=True)
+    elif run_tesseract:
+        text = text_tess
+        bounding_boxes = bounding_boxes_tess
+    elif run_easyocr:
+        text = text_easy
+        bounding_boxes = bounding_boxes_easy
+    else:
+        text = ""
+        bounding_boxes = pd.DataFrame()  # Assuming bounding_boxes should be a DataFrame
+
+    return bounding_boxes, text
+
+
