@@ -191,31 +191,8 @@ def scale_bounding_box(bbox, ratio):
     height, width, x, y = bbox
     return [height*ratio, width*ratio, x*ratio, y*ratio]
 
-def scale_all_bounding_boxes(bounding_boxes, ratio):
-    """
-    Scales all bounding boxes in a list by a given ratio.
 
-    Parameters:
-    bounding_boxes (list): A list of bounding boxes.
-    ratio (float): The scaling ratio.
-
-    Returns:
-    list: A new list of bounding boxes scaled by the given ratio.
-    """
-
-    scaled_boxes = []
-
-    for page in bounding_boxes:
-        page_boxes = []
-        for bbox in page:
-            if bbox:
-                page_boxes.append(scale_bounding_box(bbox, ratio))
-        scaled_boxes.append(page_boxes)
-
-    return scaled_boxes
-
-
-def get_images_and_bb_from_docid(labels_df, docid, folder_path):
+def get_true_boxes_from_docid(labels_df, docid, folder_path):
     """
     Get the images and bounding boxes for a document from the document id(dokument-ident).
 
@@ -254,7 +231,7 @@ def get_images_and_bb_from_docid(labels_df, docid, folder_path):
     return images, bbs_scaled
 
 
-def draw_bounding_boxes(images, predicted_bboxes, true_bboxes):
+def visualize_bounding_boxes(images, predicted_bboxes, true_bboxes):
     """
     Draw bounding boxes on images.
 
@@ -301,7 +278,7 @@ def draw_bounding_boxes(images, predicted_bboxes, true_bboxes):
 
     return images_with_bb
 
-def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_key, pred_regex, show=False):
+def visualize_bounding_boxes_detailed(images, all_bbs, true_bbs, pred_key, pred_regex, show=False):
     """
     Visualize bounding boxes on images.
 
@@ -369,30 +346,6 @@ def visualize_bounding_boxes(images, all_bbs, true_bbs, pred_key, pred_regex, sh
     plt.close('all')
 
     return images_with_bb
-
-def test_and_visualize_doc(doc_id, visualize=False):
-    """
-    Test the model on a document and visualize the results.
-
-    Parameters:
-    doc_id (str): The document ID.
-    visualize (bool): Whether to visualize the bounding boxes.
-
-    Returns:
-    list: A list of images with bounding boxes.
-    """
-
-    pdf_path = f'../valideringssett/dokumenter/{doc_id}.pdf'
-
-    organized_labels_path = pd.read_csv("../valideringssett/organized_data.csv")
-
-    images_true, true_boxes = get_images_and_bb_from_docid(organized_labels_path, doc_id)
-
-    images_pred, predicted_boxes = model_main.main(pdf_path)
-    
-    images_with_bbs = visualize_bounding_boxes(images_true, true_boxes, predicted_boxes, show=visualize)
-    
-    return images_with_bbs
 
 
 def get_metrics_and_cm(total_tp, total_fp, total_fn):
