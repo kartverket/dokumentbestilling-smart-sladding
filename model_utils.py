@@ -363,6 +363,21 @@ def format_dnumber(dnumber):
     return is_personal_number, personal_number
 
 
+def find_overlapping_matches(pattern, text):
+    matches = []
+    for match in re.finditer(pattern, text):
+        matches.append(match.group(0))
+        # Move the start position forward to look for overlaps
+        start = match.start() + 1
+        while start < start + 10:
+            match = re.search(pattern, text[start:])
+            if match:
+                matches.append(match.group(0))
+                start += match.start() + 1
+            else:
+                break
+    return matches
+
 def find_matches(text):
     """
     Find matches in a text using regular expressions.
@@ -383,8 +398,7 @@ def find_matches(text):
     index = 0
 
     for pattern, tag in zip(patterns, categories):
-        matches = re.findall(pattern, text)
-
+        matches = find_overlapping_matches(pattern, text)
         for match in matches:
             
             if tag == 'dnummer':
