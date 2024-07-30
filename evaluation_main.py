@@ -123,8 +123,7 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
         docids.append(docid)
 
         pdf_bytes = model_utils.download_pdf(docid, base_url)
-        languages = ['no', 'en', 'da']
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = extended_model(pdf_bytes, languages, config, num_indexes=num_indexes, num_closest_above=num_closest_above, num_closest_below=num_closest_below)
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = extended_model(pdf_bytes)
 
 
         for i, text in enumerate(all_text):
@@ -170,7 +169,7 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
     return total_results, total_tp, total_fp, total_fn, df_results
 
 
-def extended_model(pdf_file, languages, run_tesseract, run_easyocr, run_keyword_search, tess_config, num_indexes, num_closest):
+def extended_model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=True, languages = ['no', 'da', 'en'], tess_config=r'--oem 1 --psm 11', num_indexes=3, num_closest=[6,12]):
     """
     Extract text from a PDF file and blur out sensitive information.
 
