@@ -43,6 +43,9 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
                 unique_bounding_boxes = model_utils.remove_duplicates(all_boxes)
 
                 predicted_boxes.append(unique_bounding_boxes)
+            
+            else:
+                predicted_boxes.append(predicted_boxes_regex)
 
         if elektronisk_tinglyst:
             predicted_boxes.append(predicted_boxes_regex)
