@@ -170,7 +170,7 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
     return total_results, total_tp, total_fp, total_fn, df_results
 
 
-def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, num_closest_below):
+def extended_model(pdf_file, languages, run_tesseract, run_easyocr, run_keyword_search, tess_config, num_indexes, num_closest):
     """
     Extract text from a PDF file and blur out sensitive information.
 
@@ -196,45 +196,41 @@ def extended_model(pdf_file, languages, config, num_indexes, num_closest_above, 
     model_bbs = []
     all_text = []
     predicted_boxes = []
-    predicted_bbs_keywords = []
-    predicted_bbs_regex = []
+    all_predicted_bbs_keywords = []
+    all_predicted_bbs_regex = []
 
     for i, image in enumerate(images):
-        text_tess, bounding_boxes_tess = model_utils.apply_tesseractocr(image, languages, config, elektronisk_tinglyst)
-        text_easy, bounding_boxes_easy = model_utils.apply_easyocr(image, languages, config, elektronisk_tinglyst)
 
-        text = text_tess + ' ' + text_easy
-
-        bounding_boxes = pd.concat([bounding_boxes_tess, bounding_boxes_easy], ignore_index=True)
+        bounding_boxes, text = model_utils.ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst)
+        predicted_boxes_regex = model_utils.apply_regex_search(bounding_boxes, text)
 
         model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
         all_text.append(text)
-
-        tagged_matches = model_utils.find_matches(text)
-
-        bbs = model_utils.get_boxes_to_blur(tagged_matches, bounding_boxes)
-        predicted_bbs_regex.append(bbs)
+        all_predicted_bbs_regex.append(predicted_boxes_regex)
 
         if not elektronisk_tinglyst:
 
-            keyword_boxes = model_utils.get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest_above, num_closest_below=num_closest_below)
-            predicted_bbs_keywords.append(keyword_boxes)
+            if run_keyword_search:
 
+                predicted_boxes_keyword = model_utils.apply_keyword_search(bounding_boxes, num_indexes, num_closest)
 
-            all_boxes = bbs + keyword_boxes
+                all_predicted_bbs_keywords.append(predicted_boxes_keyword)
 
-            bounding_boxes_tuples = [tuple(box) for box in all_boxes]
-            unique_bounding_boxes_tuples = set(bounding_boxes_tuples)
-            unique_bounding_boxes = [list(box) for box in unique_bounding_boxes_tuples]
+                all_boxes = predicted_boxes_regex + predicted_boxes_keyword
 
-            predicted_boxes.append(unique_bounding_boxes)
+                unique_bounding_boxes = model_utils.remove_duplicates(all_boxes)
+
+                predicted_boxes.append(unique_bounding_boxes)
+            
+            else:
+                predicted_boxes.append(predicted_boxes_regex)
 
         if elektronisk_tinglyst:
-            predicted_boxes.append(bbs)
+            predicted_boxes.append(predicted_boxes_regex)
 
-    clean_predicted_boxes = model_utils.remove_duplicated_boxes(predicted_boxes)
+    clean_predicted_boxes = model_utils.remove_overlapping_boxes(predicted_boxes)
 
-    return images, all_text, model_bbs, clean_predicted_boxes, predicted_bbs_keywords, predicted_bbs_regex, dimensions
+    return images, all_text, model_bbs, clean_predicted_boxes, all_predicted_bbs_keywords, all_predicted_bbs_regex, dimensions
 
 
 

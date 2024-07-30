@@ -34,7 +34,8 @@ keywords = [('personnr', 2),
             ('fødselsnrorgnr', 3),
             ('fødselsorganisasjonsnummer', 4),
             ('identifikasjonsnummer', 3),
-            ('fødselsnrforetaksnr', 3)]
+            ('fødselsnrforetaksnr', 3),
+            ('underorganisasjonsnrfødselsnr', 4)]
 
 
 def download_pdf(docid, base_url):
