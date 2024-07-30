@@ -31,9 +31,6 @@ COPY requirements.txt /smart_sladding_ml/
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-#Download Language files
-#RUN python -c "import easyocr; easyocr.Reader(['no', 'en', 'da'], model_storage_directory='/smart_sladding_ml/easyocr_models')"
-
 EXPOSE 5070
 
 # Specify the command to run your application

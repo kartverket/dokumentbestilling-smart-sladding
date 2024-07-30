@@ -677,6 +677,9 @@ def can_be_ssn(s):
         if char.isdigit():
             int_count += 1
 
+    if s.startswith('00') or s.endswith('000'):
+        return False
+
     # Return 'last_five' if the string is 4 or 5 digits long and contains more than 2 digits
     if len(s) == 5 and int_count > 3:
         return 'last_five'
