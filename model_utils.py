@@ -61,40 +61,12 @@ def download_pdf(docid, base_url):
     return response.content
 
 
-def adjust_image_contrast(images, contrast_factor):
-    """
-    Adjust the contrast of a list of images.
-
-    Parameters:
-    images (list PIL.Image): The images to adjust.
-    contrast_factor (float): The contrast factor.
-
-    Returns:
-    list PIL.Image: The adjusted images.
-    """
-    enhanced_images = []
-
-    for image in images:
-        # Create an ImageEnhance object
-        enhancer = PIL.ImageEnhance.Contrast(image)
-
-        # Enhance the image contrast
-        enhanced_image = enhancer.enhance(contrast_factor)
-
-        # Append the enhanced image to the list
-        enhanced_images.append(enhanced_image)
-
-    return enhanced_images
-
-
-def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_factor = 1.5):
+def convert_pdf_bytes_to_images(pdf_bytes):
     """
     Convert a PDF file to a list of images.
 
     Parameters:
     pdf_bytes (bytes): The PDF file as bytes.
-    adjust_contrast (bool): Whether to adjust the contrast of the images.
-    contrast_factor (float): The contrast factor.
 
     Returns:
     list: A list of images.
@@ -102,11 +74,6 @@ def convert_pdf_bytes_to_images(pdf_bytes, adjust_contrast = False, contrast_fac
     """
 
     images = convert_from_bytes(pdf_bytes)
-
-    if adjust_contrast:
-
-        # Adjust the contrast of the images
-        images = adjust_image_contrast(images, contrast_factor)
 
     width, height = images[0].size
     dimensions = (width, height)
