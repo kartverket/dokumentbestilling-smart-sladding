@@ -27,7 +27,7 @@ def download_and_save_pdf(url, filename):
     return filename
 
 
-def download_all_documents(tinglyst_dokument_csv_path, save_folder_path, base_url):
+def download_all_documents(docids_csv_path, save_folder_path, base_url):
     """
     Download all documents from a CSV file containing document information.
 
@@ -37,11 +37,10 @@ def download_all_documents(tinglyst_dokument_csv_path, save_folder_path, base_ur
     """
 
     # Load the CSV file containing document information
-    df_doc = pd.read_csv(tinglyst_dokument_csv_path)
+    df_doc = pd.read_csv(docids_csv_path)
 
     # Combine the document information to create the document ID
-    df_doc_ids =  df_doc["1980"].astype(str) + "_" + df_doc["14847"].astype(str) + "_" + df_doc["101"].astype(str)
-    df_doc_ids[len(df_doc_ids)] = "1980_14847_101"
+    df_doc_ids =  df_doc["dokument_aar"].astype(str) + "_" + df_doc["dokument_nr"].astype(str) + "_" + df_doc["embete"].astype(str)
 
     # Create the save folder if it does not exist
     try:
@@ -78,7 +77,7 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
 
     #Load the CSV file containing all the document ids
     df_td = pd.read_csv(path_to_bestilling_tinglyst_dokument)
-    df_td["dokument_nr_embete"] = df_td["1980"].astype(str) + "_" + df_td["14847"].astype(str) + "_" + df_td["101"].astype(str)
+    df_td["dokument_nr_embete"] = df_td["dokument_aar"].astype(str) + "_" + df_td["dokument_nr"].astype(str) + "_" + df_td["embete"].astype(str)
 
     #Create lists for all the bounding boxes and document ids
     bbs_all = []
@@ -157,4 +156,16 @@ def get_validation_set_main(tinglyst_dokument_cvs_path, path_to_labels, save_doc
     return df
 
 if __name__ == "__main__":
-    df = get_validation_set_main("valideringssett/bestilling_tinglyst_dokument.csv", "valideringssett/labels.csv", "valideringssett/dokumenter" ,"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok", "valideringssett/organized_labels.csv")
+
+    base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
+
+    docids_csv_file_path = '../valideringssett/all_docids.csv'
+
+    save_documents_path = '../valideringssett/all_documents'
+
+    all_labels_path = '../valideringssett/all_labels.csv'
+
+    save_organized_labels_path = '../valideringssett/organized_labels_all.csv'
+
+
+    df = get_validation_set_main(docids_csv_file_path, all_labels_path, save_documents_path, base_url, save_organized_labels_path)
