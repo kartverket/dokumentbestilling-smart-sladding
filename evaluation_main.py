@@ -7,7 +7,7 @@ import time
 import json
 
 
-def evaluate_model(folder_path, labels_path, savefolder_name):
+def evaluate_model(folder_path, organized_labels_path, savefolder_name):
     """
     Evaluate the model on a set of documents.
 
@@ -27,7 +27,7 @@ def evaluate_model(folder_path, labels_path, savefolder_name):
 
     base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
 
-    organized_labels_path = pd.read_csv(labels_path)
+    organized_labels_df = pd.read_csv(organized_labels_path)
 
     total_results = []
     total_tp, total_fp, total_fn = 0,0,0
@@ -38,17 +38,18 @@ def evaluate_model(folder_path, labels_path, savefolder_name):
     fns = []
 
     #Loop through all docu
-    for index, dokument in enumerate(os.listdir(folder_path)):
-        pdf_path = folder_path + dokument
-        #remove .pdf from the name
-        docid = dokument[:-4]
+    for index, row in organized_labels_df.iterrows():
+        docid = row['dokument_nr_embete']
         docids.append(docid)
 
-        pdf_bytes = model_utils.download_pdf(docid, base_url)
+        document_path = f'{folder_path}/{docid}.pdf'
+
+        with open(document_path, 'rb') as file:
+            pdf_bytes = file.read()
+
         predicted_boxes, dimensions = model_main.model(pdf_bytes)
 
-
-        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_path, docid, folder_path)
+        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_df, docid, folder_path)
 
         #Get the true positives, false positives and false negatives
         metrics_list = []
@@ -230,7 +231,6 @@ def extended_model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_s
     clean_predicted_boxes = model_utils.remove_overlapping_boxes(predicted_boxes)
 
     return images, all_text, model_bbs, clean_predicted_boxes, all_predicted_bbs_keywords, all_predicted_bbs_regex, dimensions
-
 
 
 ## RESULTS ALL DOCUMENTS
