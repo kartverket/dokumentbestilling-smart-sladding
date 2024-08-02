@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 ## How to test
 
-# Teste modellen for ett dokument
+### Teste modellen for ett dokument
 For å kjøre ett dokument med dokument id (doc_id) på formatet '<dokument_aar>_<dokument_nr>_<embete>' kjører man:
 ```sh
 #Run prediction on a document with doc_id on format '<dokument_aar>_<dokument_nr>_<embete>' and save the images with the predicted bounding boxes
@@ -27,7 +27,7 @@ predicted_boxes = get_predicted_boxes_on_doc(doc_id, "https://dokumentbestilling
 ```
 Denne funksjonen returnerer de predikerte avgrensingsboksene og lagrer et bilde med disse.
 
-# Evaluere et sett med flere dokumenter
+### Evaluere et sett med flere dokumenter
 For å evaluere flere dokumenter kjører man:
 ```sh
 total_results, total_tp, total_fp, total_fn, df_results = evaluate_model(document_folder, labels_csv, docids_csv, savefolder_name)
