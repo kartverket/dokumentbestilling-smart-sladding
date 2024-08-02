@@ -163,6 +163,22 @@ def convert_pdf_path_to_images(pdf_path):
     dimensions = (width, height)
     return images, dimensions
 
+def convert_pdf_bytes_to_images(pdf_bytes):
+    """
+    Convert a PDF file to a list of images.
+
+    Parameters:
+    pdf_bytes (bytes): The PDF file content in bytes.
+
+    Returns:
+    list: A list of images.
+    tuple: A tuple containing the width and height of the images.
+    """
+    images = convert_from_bytes(pdf_bytes)
+    width, height = images[0].size
+    dimensions = (width, height)
+    return images, dimensions
+
 
 def get_pdf_pagecount(pdf_path):
     """
@@ -250,8 +266,10 @@ def visualize_bounding_boxes(images, predicted_bboxes, true_bboxes):
 
         # Combine true and predicted bounding boxes with labels
         combined_bbs = []
-        combined_bbs += [(bb, 'True') for bb in true_bboxes[i]]
-        combined_bbs += [(bb, 'Predicted') for bb in predicted_bboxes[i]]
+        if len(true_bboxes) > 0:
+            combined_bbs += [(bb, 'True') for bb in true_bboxes[i]]
+        if len(predicted_bboxes) > 0:
+            combined_bbs += [(bb, 'Predicted') for bb in predicted_bboxes[i]]
 
         # Plot each bounding box with appropriate label and color
         for bb, label in combined_bbs:
@@ -403,3 +421,47 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
     plt.xlabel('Actual labels')
     plt.tight_layout()
     plt.show()
+
+
+def get_predicted_boxes_on_doc(docid, base_url):
+    """
+    Get the predicted bounding boxes for a document.
+    Need to be on kartverket VPN to download documents and therefore also to run this function.
+
+    Parameters:
+    docid (str): The document ID. <dokumener_aar>_<dokument_nr>_<embete>
+    base_url (str): The base URL to the document.
+
+    Returns:
+    list: A list of predicted bounding boxes.
+    """
+
+    # Download the PDF file
+    pdf_bytes = model_utils.download_pdf(docid, base_url)
+
+    # Get the predicted bounding boxes
+    predicted_boxes, image_dimensions = model_main.model(pdf_bytes)
+
+    # Get the dimensions of the PDF file
+    predicted_boxes_scaled = model_utils.scale_and_pad_all_bounding_boxes(predicted_boxes, ratio=1)
+
+    # Convert the PDF file to images
+    images, dimensions = convert_pdf_bytes_to_images(pdf_bytes)
+
+    # Get the images with the bounding boxes painted on them
+    images_with_bb = visualize_bounding_boxes(images, predicted_boxes_scaled, [])
+
+    # Save the images with the bounding boxes
+    for i, image in enumerate(images_with_bb):
+        image.savefig(f'predicted_boxes_{docid}_page_{i}.png')
+
+    return predicted_boxes_scaled
+
+
+if __name__ == "__main__":
+
+    #Run prediction on document '2023_62529_200' and save the images with the predicted bounding boxes
+    predicted_boxes = get_predicted_boxes_on_doc('2023_62529_200', "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
+
+    #Run prediction on document '1980_619_29' and save the images with the predicted bounding boxes
+    predicted_boxes = get_predicted_boxes_on_doc('1980_619_29', "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
