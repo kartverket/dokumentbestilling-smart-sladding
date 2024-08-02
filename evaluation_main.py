@@ -6,28 +6,25 @@ import model_utils
 import time
 import json
 
-
-def evaluate_model(folder_path, organized_labels_path, savefolder_name):
+def evaluate_model(document_folder, labels_csv, docids_csv, savefolder_name):
     """
-    Evaluate the model on a set of documents.
+    Evaluate the model on a set of documents and save the images with bounding boxes(ground truth and predicted) and the text extracted from the documents.
 
     Parameters:
-    folder_path (str): The path to the folder containing the documents.
-    labels_path (str): The path to the csv file containing the labels.
-    savefolder_name (str): The name of the folder where the results will be saved.
-    model_function (function): The function that will be used to extract the text and bounding boxes from the images.
-
-    Returns:
-    total_results (list): A list of dictionaries containing the results per document.
-    total_tp (int): The total number of true positives.
-    total_fp (int): The total number of false positives.
-    total_fn (int): The total number of false negatives.
-    df_results (pd.DataFrame): A DataFrame containing the results per document.
+    document_folder (str): The path to the folder containing the documents.
+    labels_csv (str): The path to the CSV file containing the labels. Has to contain only the accepted labels(The correct labels).
+    docids_csv (str): The path to the CSV file containing the document IDs.
+    savefolder_name (str): The path to the folder to save the results to.
     """
 
-    base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
 
-    organized_labels_df = pd.read_csv(organized_labels_path)
+    #Load labels
+    labels_df = pd.read_csv(labels_csv)
+    labels_df['docid'] = labels_df['dokument_aar'].astype(str) + '_' + labels_df['dokument_nr'].astype(str) + '_' + labels_df['embete'].astype(str)
+
+    #load document-ids
+    docids_df = pd.read_csv(docids_csv)
+    docids_df['docid'] = docids_df['dokument_aar'].astype(str) + '_' + docids_df['dokument_nr'].astype(str) + '_' + docids_df['embete'].astype(str)
 
     total_results = []
     total_tp, total_fp, total_fn = 0,0,0
@@ -37,117 +34,65 @@ def evaluate_model(folder_path, organized_labels_path, savefolder_name):
     fps = []
     fns = []
 
-    #Loop through all docu
-    for index, row in organized_labels_df.iterrows():
-        docid = row['dokument_nr_embete']
-        docids.append(docid)
+    for index, row in docids_df.iterrows():
 
-        document_path = f'{folder_path}/{docid}.pdf'
+        print(index)
+
+        docid = row['docid']
+        print(docid)
+        document_path = f'{document_folder}/{docid}.pdf'
 
         with open(document_path, 'rb') as file:
             pdf_bytes = file.read()
 
-        predicted_boxes, dimensions = model_main.model(pdf_bytes)
+        dimensions_2 = evaluation_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
-        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_df, docid, folder_path)
+        true_labels = labels_df[labels_df['docid'] == docid]
 
-        #Get the true positives, false positives and false negatives
+        predicted_boxes, dimensions_model = model_main.model(pdf_bytes)
+
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = extended_model(pdf_bytes)
+
+        ratio = dimensions_model[0]/dimensions_2[0]
+
+        page_count = evaluation_utils.get_pdf_pagecount(document_path)
+
+        images_true, dimensions_pdf = model_utils.convert_pdf_bytes_to_images(pdf_bytes)
+
         metrics_list = []
-        for i,j in zip(true_boxes, predicted_boxes):
-            matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(i, j)
-            metrics_list.append(metrics)
+
+        true_boxes_doc = []
+
+        #Loop through all pages
+        for i in range(page_count):
+
+            true_boxes_page = []
+
+            try:
+                predicted_boxes_page = predicted_boxes[i]
+                true_boxes_page_df = true_labels[true_labels['sidetall'] == i+1]
+
+                for index_2, box_row in true_boxes_page_df.iterrows():
+                    box = [box_row['height'], box_row['width'], box_row['x'], box_row['y']]
+                    true_boxes_page.append(evaluation_utils.scale_bounding_box(box, ratio))
+
+                matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(true_boxes_page, predicted_boxes_page)
+                metrics_list.append(metrics)
+            except:
+                print(f"No boxes on page {i+1}")
+            true_boxes_doc.append(true_boxes_page)
 
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, predicted_boxes, true_boxes)
+        #images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, predicted_boxes, true_boxes_doc)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes_detailed(images_true, model_bbs, true_boxes_doc, predicted_keyword, predicted_regex, show=False)
 
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{savefolder_name}/{docid}_{i}.png')
-    
-        tps.append(results['TP'])
-        fps.append(results['FP'])
-        fns.append(results['FN'])
-    
-        total_tp += results['TP']
-        total_fp += results['FP']
-        total_fn += results['FN']
-
-        print(total_tp, total_fp, total_fn)
-        
-        total_results.append(results)
-        print(index)
-
-    print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
-
-    df_results = pd.DataFrame({'docid': docids, 'TP': tps, 'FP': fps, 'FN': fns})
-    df_results.to_csv(f'{savefolder_name}/results_per_doc.csv', index=False)
-
-    return total_results, total_tp, total_fp, total_fn, df_results
-
-
-
-def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oem 3 --psm 11', num_indexes = 3, num_closest_above = 3, num_closest_below = 7):
-    """
-    Evaluate the model on a set of documents.
-
-    Parameters:
-    folder_path (str): The path to the folder containing the documents.
-    labels_path (str): The path to the csv file containing the labels.
-    savefolder_name (str): The name of the folder where the results will be saved.
-    model_function (function): The function that will be used to extract the text and bounding boxes from the images.
-
-    Returns:
-    total_results (list): A list of dictionaries containing the results per document.
-    total_tp (int): The total number of true positives.
-    total_fp (int): The total number of false positives.
-    total_fn (int): The total number of false negatives.
-    df_results (pd.DataFrame): A DataFrame containing the results per document.
-    """
-
-    base_url = "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok"
-
-    organized_labels_path = pd.read_csv(labels_path)
-
-    total_results = []
-    total_tp, total_fp, total_fn = 0,0,0
-
-    docids = []
-    tps = []
-    fps = []
-    fns = []
-
-    #Loop through all docu
-    for index, dokument in enumerate(os.listdir(folder_path)):
-        pdf_path = folder_path + dokument
-        #remove .pdf from the name
-        docid = dokument[:-4]
-        docids.append(docid)
-
-        pdf_bytes = model_utils.download_pdf(docid, base_url)
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = extended_model(pdf_bytes)
-
 
         for i, text in enumerate(all_text):
             with open(f'{savefolder_name}/{docid}_{i}.txt', 'w') as file:
                 file.write(text)
-
-        images_true, true_boxes = evaluation_utils.get_true_boxes_from_docid(organized_labels_path, docid, folder_path)
-
-
-        #Get the true positives, false positives and false negatives
-        metrics_list = []
-        for i,j in zip(true_boxes, predicted_boxes):
-            matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(i, j)
-            metrics_list.append(metrics)
-
-
-        results = evaluation_utils.metrics_perdocument(metrics_list)
-
-
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes_detailed(images_true, model_bbs, true_boxes, predicted_keyword, predicted_regex, show=False)
-
-        for i, img in enumerate(images_with_bbs):
-            img.savefig(f'{savefolder_name}/{docid}_{i}.png')
     
         tps.append(results['TP'])
         fps.append(results['FP'])
@@ -157,10 +102,10 @@ def investigate_model(folder_path, labels_path, savefolder_name, config = r'--oe
         total_fp += results['FP']
         total_fn += results['FN']
 
-        print(total_tp, total_fp, total_fn)
+        print(f'True Positives on doc: {results["TP"]}, False Positives on doc: {results["FP"]}, False Negatives on doc: {results["FN"]}')
+        print(f'Total True Positives: {total_tp}, Total False Positives: {total_fp}, Total False Negatives:  {total_fn}')
         
         total_results.append(results)
-        print(index)
 
     print(f"Total TP: {total_tp}, Total FP: {total_fp}, Total FN: {total_fn}")
 
@@ -247,8 +192,6 @@ def extended_model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_s
 ## RESULTS ELEKTRONISK TINGLYST
 #Total TP: 162, Total FP: 0, Total FN: 0
 
-
-
 ##RESUULTS ALL DOCUMENTS()
 # Config: '--oem 1 --psm 11'
 # With Ocr peronnummer, boxsplitting and keywords
@@ -258,8 +201,6 @@ def extended_model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_s
 #Recall: 0.6027851458885941
 #F1: 0.7351395066720583
 #Accuracy: 0.5812020460358056
-
-
 
 ##RESUULTS ALL DOCUMENTS EASYOCR AFTER 444 DOCUMENTS
 # With Ocr peronnummer, boxsplitting and keywords

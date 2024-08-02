@@ -388,9 +388,20 @@ def find_matches(text):
     Returns:
     list: A list of matches with corresponding tag and index.
     """
-
-    pattern_personummer = re.compile(r'(?:0[1-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d') #obs: tillater ikke space mellom tallene i dag, måned, år
-    pattern_dnummer = re.compile(r'[4,5,6,7]\s*(?:[0-9]|[12][0-9]|3[01])\s*(?:0[1-9]|1[0-2])\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d\s*\d')
+    pattern_personummer = re.compile(
+                                        r'^(?:0[1-9]|[12][0-9]|3[01])\s*'  # Day (01-31)
+                                        r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
+                                        r'\d\s*\d\s*'
+                                        r'\d\s*\d\s*\d\s*\d\s*\d'        # Five additional digits
+                                    )
+    
+    pattern_dnummer = re.compile(
+                                    r'^[4-7]\s*'                        # Leading digit (4, 5, 6, or 7)
+                                    r'(?:[0-9])\s*'                    # Single digit day (0-9)
+                                    r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
+                                    r'\d\s*\d\s*'                      # Year (00-99)
+                                    r'\d\s*\d\s*\d\s*\d\s*\d'            # Five additional digits
+                                )
 
     patterns = [pattern_personummer, pattern_dnummer]
     categories = ['personnummer', 'dnummer']
