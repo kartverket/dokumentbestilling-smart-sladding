@@ -22,7 +22,6 @@ pip install -r requirements.txt
 ### Teste modellen for ett dokument
 For å kjøre ett dokument med dokument id (doc_id) på formatet '<dokument_aar>_<dokument_nr>_<embete>' kjører man:
 ```sh
-#Run prediction on a document with doc_id on format '<dokument_aar>_<dokument_nr>_<embete>' and save the images with the predicted bounding boxes
 predicted_boxes = get_predicted_boxes_on_doc(doc_id, "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
 ```
 Denne funksjonen returnerer de predikerte avgrensingsboksene og lagrer et bilde med disse.
