@@ -17,4 +17,19 @@ cd smart_sladding_ml
 pip install -r requirements.txt
 ```
 
+## How to test
 
+# Teste modellen for ett dokument
+For å kjøre ett dokument med dokument id (doc_id) på formatet '<dokument_aar>_<dokument_nr>_<embete>' kjører man:
+```sh
+#Run prediction on a document with doc_id on format '<dokument_aar>_<dokument_nr>_<embete>' and save the images with the predicted bounding boxes
+predicted_boxes = get_predicted_boxes_on_doc(doc_id, "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
+```
+Denne funksjonen returnerer de predikerte avgrensingsboksene og lagrer et bilde med disse.
+
+# Evaluere et sett med flere dokumenter
+For å evaluere flere dokumenter kjører man:
+```sh
+total_results, total_tp, total_fp, total_fn, df_results = evaluate_model(document_folder, labels_csv, docids_csv, savefolder_name)
+```
+Denne funksjonen returnerer total_results (en liste med metrics per side per dokument), total_tp (totalt antall true positives), total_fp (totalt antall false positives), total_fn (totalt antall false negatives) og df_results (dataframe med antall true positives, false positives og false negatives per dokument). Funksjonen trenger document_folder (path til mappen med de nedlastede dokumentene), labels_cv (path til en .csv fil med de labella boksene per dokument), docids_csv (path til en .csv fil med dokument id til de ulike dokumentene som skal bli evaluert) og savefolder_name (path til en folder der bilder av de evaluerte dokumentene blir lagret).
