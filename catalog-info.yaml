@@ -1,1 +1,57 @@
+# nonk8s
+apiVersion: "backstage.io/v1alpha1"
+kind: "Component"
+metadata:
+  name: "smart_sladding_ml"
+  tags:
+  - "private"
+  - "internal"
+spec:
+  type: "service"
+  lifecycle: "production"
+  owner: "eiendom"
+  providesApis:
+  - "smart_sladding_ml-api"
+---
+apiVersion: "backstage.io/v1alpha1"
+kind: "Group"
+metadata:
+  name: "security_champion_smart_sladding_ml"
+  title: "Security Champion smart_sladding_ml"
+spec:
+  type: "security_champion"
+  parent: "eiendom_security_champions"
+  members:
+  - "DanielBerge"
+  children:
+  - "resource:smart_sladding_ml"
+---
+apiVersion: "backstage.io/v1alpha1"
+kind: "Resource"
+metadata:
+  name: "smart_sladding_ml"
+  links:
+  - url: "https://github.com/kartverket/smart_sladding_ml"
+    title: "smart_sladding_ml på GitHub"
+spec:
+  type: "repo"
+  owner: "security_champion_smart_sladding_ml"
+  dependencyOf:
+  - "component:smart_sladding_ml"
+---
+apiVersion: "backstage.io/v1alpha1"
+kind: "API"
+metadata:
+  name: "smart_sladding_ml-api"
+  tags:
+  - "internal"
+spec:
+  type: "openapi"
+  lifecycle: "production"
+  owner: "eiendom"
+  definition: |
+    openapi: "3.0.0"
+    info:
+        title: smart_sladding_ml API
+    paths:
 
