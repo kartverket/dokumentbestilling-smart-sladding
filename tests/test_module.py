@@ -35,7 +35,6 @@ def json_response():
             {'page': 1, 'height': 686.88, 'width': 77.03999999999999, 'x': 6.4799999999999995, 'y': 23.4}]
 
 # Test functions
-
 def test_find_matches(personnumber, not_personnumber, dnumber):
     assert model_utils.find_matches(f"This is a test with a valid personnumber {personnumber}") == [[f'{personnumber}', 'personnummer', 0]]
     assert model_utils.find_matches(f'This is a test with an invalid personnumber {not_personnumber}') == []
@@ -50,6 +49,5 @@ def test_check_controldigits(personnumber, not_personnumber, dnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.format_dnumber(dnumber) == (True, "30053238021")
 
-# def test_main(doc_id, json_response):
-#     assert model_main.main(doc_id) == json_response
-
+def test_main(doc_id, json_response):
+    assert model_main.main(doc_id) == json_response
