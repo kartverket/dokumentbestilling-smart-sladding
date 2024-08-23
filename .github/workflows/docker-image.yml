@@ -3,6 +3,7 @@ name: Deploy Image to GHCR
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 on:
   push:
