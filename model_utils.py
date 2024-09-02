@@ -50,7 +50,7 @@ def download_pdf(docid, base_url):
     bytes: The content of the PDF file.
     """
 
-    url = f"{base_url}/{docid}.pdf"
+    url = f"{base_url}/{docid}"
     response = requests.get(url)
 
     if response.status_code == 200:
