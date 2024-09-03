@@ -1,12 +1,13 @@
 import requests
 import model_main
 
-base_url = 'http://localhost:8080/intern/pantebok/gjenpart'
+api_base_url = 'http://localhost:8080/intern/pantebok/gjenpart'
 database_base_url = 'http://localhost:8000/'
 
 def hentDokumenterTilSladding():
     dokumenter = requests.get(f'{database_base_url}/ubehandlede_dokumenter')
 
+    print(dokumenter.json())
     for dokument in dokumenter.json():
         dokumentaar = dokument.get('dokumentaar')
         dokumentnummer = dokument.get('dokumentnummer')
@@ -14,7 +15,7 @@ def hentDokumenterTilSladding():
 
         docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
-        sladdinger = model_main.main(docid, base_url)
+        sladdinger = model_main.main(docid, api_base_url)
 
         transformed_sladdinger = [
             {
@@ -22,19 +23,22 @@ def hentDokumenterTilSladding():
                 'dokumentnummer': dokumentnummer,
                 'embetenummer': embetenummer,
                 'sidetall': sladding.get('page'),
-                'index': 0,
+                'index': i,
                 'type': 'PERSONNUMMER',
                 'height': sladding.get('height'),
                 'width': sladding.get('width'),
                 'x': sladding.get('x'),
                 'y': sladding.get('y'),
                 'mlGenerated': True,
+                'mlStatus': ''
             }
-            for sladding in sladdinger
+            for i, sladding in enumerate(sladdinger)
         ]
 
-        for sladding in sladdinger:
+        if (transformed_sladdinger != []):
             requests.put(f'{database_base_url}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}', json=transformed_sladdinger)
+
+        requests.patch(f'{database_base_url}/dokument_behandlet', json=dokument)
 
 
 if __name__ == '__main__':
