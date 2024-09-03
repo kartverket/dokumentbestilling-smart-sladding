@@ -12,7 +12,6 @@ pymupdf
 requests
 datasets
 pytest
-flask
 requests
 pymupdf
 python-dotenv
