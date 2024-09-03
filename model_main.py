@@ -19,7 +19,6 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
 
     elektronisk_tinglyst = model_utils.is_elektronisk_tinglyst(pdf_file)
 
-    #Logger
     if elektronisk_tinglyst:
         print('Elektronisk tinglyst, skipping keyword detection')
     else:

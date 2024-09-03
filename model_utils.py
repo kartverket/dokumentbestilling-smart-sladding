@@ -224,7 +224,7 @@ def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst
     bounding_boxes = bounding_boxes.dropna()
     
     if not elektronisk_tinglyst:
-        #drop alle special characters
+        # Drop alle special characters
         bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
         text = remove_special_characters(text)
     return text, bounding_boxes
