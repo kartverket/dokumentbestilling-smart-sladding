@@ -16,8 +16,6 @@ on:
         value: ${{ jobs.push-python-image.outputs.image_sha }}
   workflow_dispatch:
   
-
-
 jobs:
   push-python-image:
     runs-on: ubuntu-latest
@@ -39,25 +37,30 @@ jobs:
 
       - name: 'Build and Push Python Image'
         run: |
-          IMAGE_TAG=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}
+          IMAGE_TAG=ghcr.io/${{ github.repository }}:${{ github.sha }}
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG
 
       - name: 'Tag the image with "latest"'
         run: |
           IMAGE_TAG=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}
-          docker tag $IMAGE_TAG ghcr.io/kartverket/smart_sladding_ml:latest
-          docker push ghcr.io/kartverket/smart_sladding_ml:latest
+          docker tag $IMAGE_TAG ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:latest
 
       - name: Set output with build values
         id: setOutput
         run: |
-          echo "image_sha=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_sha=ghcr.io/${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
   argocd-sync:
-    needs: push-python-image
-    uses: kartverket/eiet-apps/.github/workflows/kopier-image-smartsladding-dev.yml@main
+    needs: build
+    uses: kartverket/eiet-apps/.github/workflows/release-app.yml@main
     with:
-      imageurl: ${{ needs.push-python-image.outputs.image_sha }}
-        
-        
+      imageurl: ghcr.io/${{ github.repository }}:${{ needs.push-python-image.outputs.short_sha }}
+      branch: ${{ github.head_ref || github.ref_name }}
+      namespace_prefix: dokumentbestilling
+      version_file: smart-sladding-version
+      ingress_file: smart-sladding-ingress
+      ingress_prefix: smart-sladding
+      application: dokumentbestilling-smart-sladding
+
