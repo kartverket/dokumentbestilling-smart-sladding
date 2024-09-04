@@ -11,16 +11,16 @@ on:
       - main
   workflow_call:
     outputs:
-      image_sha:
+      short_sha:
         description: "The sha of the image"
-        value: ${{ jobs.push-python-image.outputs.image_sha }}
+        value: ${{ jobs.push-python-image.outputs.short_sha }}
   workflow_dispatch:
   
 jobs:
   push-python-image:
     runs-on: ubuntu-latest
     outputs:
-      image_sha: ${{ steps.setOutput.outputs.image_sha }}
+      short_sha: ${{ steps.setOutput.outputs.short_sha }}
     steps:
       - name: 'Checkout GitHub Action'
         uses: actions/checkout@v2
@@ -50,7 +50,7 @@ jobs:
       - name: Set output with build values
         id: setOutput
         run: |
-          echo "image_sha=ghcr.io/${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "short_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
 
   argocd-sync:
     needs: push-python-image
