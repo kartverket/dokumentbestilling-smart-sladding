@@ -21,7 +21,7 @@ RUN apt-get update \
 WORKDIR /smart_sladding_ml
 
 # Copy your application code into the container
-COPY . /smart_sladding_ml
+COPY /app /smart_sladding_ml
 
 COPY requirements.txt /smart_sladding_ml/
 RUN pip install --upgrade pip \
