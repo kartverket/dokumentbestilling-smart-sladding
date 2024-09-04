@@ -27,4 +27,4 @@ COPY requirements.txt /smart_sladding_ml/
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "-u", "/app.py"]
+CMD ["python", "-u", "/smart_sladding_ml/app.py"]
