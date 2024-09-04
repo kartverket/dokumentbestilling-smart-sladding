@@ -17,6 +17,10 @@ def database_base_url():
 def hentDokumenterTilSladding():
     dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
 
+    if dokumenter.status_code != 200:
+        print(f'Kunne ikke hente ubehandlede dokumenter. Statuskode: {dokumenter.status_code}')
+        return
+
     print(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
 
     for dokument in dokumenter.json():
