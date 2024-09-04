@@ -19,7 +19,6 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
 
     elektronisk_tinglyst = model_utils.is_elektronisk_tinglyst(pdf_file)
 
-    #Logger
     if elektronisk_tinglyst:
         print('Elektronisk tinglyst, skipping keyword detection')
     else:
@@ -91,5 +90,5 @@ def main(docid, base_url):
     return json_responses
     
 if __name__ == '__main__':
-    res = main('2023_62529_200',"https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
+    res = main('2023_62529_200',"http://localhost:8080/intern/pantebok/gjenpart")
     print(res)

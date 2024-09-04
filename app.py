@@ -1,1 +1,67 @@
-print("Her kommer SKIP job")
+import requests
+import model_main
+import os
+
+def api_base_url():
+    if os.getenv('API_URL') == None:
+        return 'http://localhost:8080/'
+    else:
+       return os.getenv('API_URL')
+def database_base_url():
+    if os.getenv('DATABASE_URL') == None:
+        return 'http://localhost:8000/'
+    else:
+        return os.getenv('DATABASE_URL')
+
+
+def hentDokumenterTilSladding():
+    dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
+
+    print(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
+
+    for dokument in dokumenter.json():
+        dokumentaar = dokument.get('dokumentaar')
+        dokumentnummer = dokument.get('dokumentnummer')
+        embetenummer = dokument.get('embetenummer')
+
+        docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
+
+        print(f'Kjører modell på: {docid}')
+        sladdinger = model_main.main(docid, f'{api_base_url()}intern/pantebok/gjenpart')
+
+        transformed_sladdinger = [
+            {
+                'dokumentaar': dokumentaar,
+                'dokumentnummer': dokumentnummer,
+                'embetenummer': embetenummer,
+                'sidetall': sladding.get('page'),
+                'index': i,
+                'type': 'PERSONNUMMER',
+                'height': sladding.get('height'),
+                'width': sladding.get('width'),
+                'x': sladding.get('x'),
+                'y': sladding.get('y'),
+                'mlGenerated': True,
+                'mlStatus': ''
+            }
+            for i, sladding in enumerate(sladdinger)
+        ]
+
+        if (transformed_sladdinger != []):
+            response = requests.put(f'{database_base_url()}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}', json=transformed_sladdinger)
+
+            if response.status_code == 200:
+                print(f'Sendt sladdinger for dokument: {docid} til databasen')
+            else:
+                print(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen. Statuskode: {response.status_code}')
+
+        response = requests.patch(f'{database_base_url()}/dokument_behandlet', json=dokument)
+
+        if response.status_code == 200:
+            print(f'Merket dokument: {docid} som behandlet')
+        else:
+            print(f'Kunne ikke merke dokument: {docid} som behandlet. Statuskode: {response.status_code}')
+
+
+if __name__ == '__main__':
+    hentDokumenterTilSladding()
