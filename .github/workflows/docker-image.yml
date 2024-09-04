@@ -53,7 +53,7 @@ jobs:
           echo "image_sha=ghcr.io/${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
   argocd-sync:
-    needs: build
+    needs: push-python-image
     uses: kartverket/eiet-apps/.github/workflows/release-app.yml@main
     with:
       imageurl: ghcr.io/${{ github.repository }}:${{ needs.push-python-image.outputs.short_sha }}
