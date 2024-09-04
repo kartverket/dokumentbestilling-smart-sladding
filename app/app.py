@@ -19,7 +19,7 @@ def hentDokumenterTilSladding():
 
     if dokumenter.status_code != 200:
         print(f'Kunne ikke hente ubehandlede dokumenter. Statuskode: {dokumenter.status_code}')
-        return
+        raise Exception('Kunne ikke hente ubehandlede dokumenter')
 
     print(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
 
