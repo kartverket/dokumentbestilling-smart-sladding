@@ -53,14 +53,14 @@ def hentDokumenterTilSladding():
             if response.status_code == 200:
                 print(f'Sendt sladdinger for dokument: {docid} til databasen')
             else:
-                print(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen')
+                print(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen. Statuskode: {response.status_code}')
 
         response = requests.patch(f'{database_base_url()}/dokument_behandlet', json=dokument)
 
         if response.status_code == 200:
             print(f'Merket dokument: {docid} som behandlet')
         else:
-            print(f'Kunne ikke merke dokument: {docid} som behandlet')
+            print(f'Kunne ikke merke dokument: {docid} som behandlet. Statuskode: {response.status_code}')
 
 
 if __name__ == '__main__':
