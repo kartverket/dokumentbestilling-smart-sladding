@@ -43,7 +43,7 @@ jobs:
 
       - name: 'Tag the image with "latest"'
         run: |
-          IMAGE_TAG=ghcr.io/kartverket/smart_sladding_ml:${{ github.sha }}
+          IMAGE_TAG=ghcr.io/${{ github.repository }}:${{ github.sha }}
           docker tag $IMAGE_TAG ghcr.io/${{ github.repository }}:latest
           docker push ghcr.io/${{ github.repository }}:latest
 
