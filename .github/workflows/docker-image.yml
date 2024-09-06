@@ -60,7 +60,5 @@ jobs:
       branch: ${{ github.head_ref || github.ref_name }}
       namespace_prefix: dokumentbestilling
       version_file: smart-sladding-version
-      ingress_file: smart-sladding-ingress
-      ingress_prefix: smart-sladding
       application: dokumentbestilling-smart-sladding
 
