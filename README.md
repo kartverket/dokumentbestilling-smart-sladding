@@ -17,6 +17,11 @@ cd smart_sladding_ml
 pip install -r requirements.txt
 ```
 
+Last ned Poppler `brew install poppler`
+Last ned Tesseract `brew install tesseract`
+
+NB: Hvis du får SSL-problematikk på Mac, så kan du sjekke ut denne Stack Overflow-responsen https://stackoverflow.com/a/57795811
+
 ## How to test
 
 ### Teste modellen for ett dokument

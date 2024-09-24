@@ -4,7 +4,7 @@ from pdf2image import convert_from_bytes
 import requests
 import fitz
 import Levenshtein
-import PIL
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import easyocr
@@ -280,147 +280,86 @@ def get_all_bbs(df):
 
     return all_bbs
 
-
-def check_controldigits(number):
+def check_control_digits(fnr):
     """
-    Check if the control digits of a Norwegian personal number are correct.
+    Validate the control digits of a Norwegian fødselsnummer or D-number.
 
     Parameters:
-    number (str): The personal number to validate.
+    fnr (str): The fødselsnummer or D-number to validate (11-digit string).
 
     Returns:
-    bool: True if the control digits are correct, False otherwise.
+    bool: True if valid, False otherwise.
     """
+    weights_first = [3, 7, 6, 1, 8, 9, 4, 5, 2]
+    weights_second = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
 
-    # Remove whitespace
-    number = re.sub(r'\s*', '', number)
+    def calculate_control_digit(number, weights):
+        total = sum(int(n) * w for n, w in zip(number, weights))
+        remainder = total % 11
+        if remainder == 0:
+            return '0'
+        elif remainder == 1:
+            return None  # Invalid control digit
+        else:
+            return str(11 - remainder)
 
-    # Split into digits
-    digits = [int(d) for d in number]
+    first_control = calculate_control_digit(fnr[:9], weights_first)
+    second_control = calculate_control_digit(fnr[:10], weights_second)
 
-    if len(digits) == 11:
-        # Weights for control number 1 (K1)
-        weights_k1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
-
-        # Calculate K1
-        k1_sum = sum(d * w for d, w in zip(digits[:9], weights_k1))
-        k1 = 11 - (k1_sum % 11)
-        if k1 == 11:
-            k1 = 0
-        if k1 == 10:
-            return False  
-
-        # Weights for control number 2 (K2)
-        weights_k2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
-
-        # Calculate K2
-        k2_sum = sum(d * w for d, w in zip(digits[:9] + [k1], weights_k2))
-        k2 = 11 - (k2_sum % 11)
-        if k2 == 11:
-            k2 = 0
-        if k2 == 10:
-            return False 
-
-        # Check if the control numbers are correct
-        return digits[9] == k1 and digits[10] == k2
-    
-    return False
-
-
-def format_dnumber(dnumber):
-    """
-    Format a D-number to a personal number.
-
-    Parameters:
-    dnumber (str): The D-number to format.
-
-    Returns:
-    bool: True if the D-number is a valid personal number, False otherwise.
-    str: The formatted personal number.
-    """
-
-    is_personal_number = True
-    # Remove whitespace to get the original D-number
-    dnumber = re.sub(r'\s*', '', dnumber)
-
-    # Extract the day, month, year, and sequence parts
-    day = int(dnumber[:2])
-    month = int(dnumber[2:4])
-    year = int(dnumber[4:6])
-    sequence = int(dnumber[6:11])
-    
-    # The first digit of the day should be in the range 4-7
-    if day < 40 or day > 71:
-        is_personal_number = False
-    
-    # Validate control digits using the modulus 11 algorithm
-    # Remove the added 4 to get the original day part for control digit calculation
-    day -= 40
-    
-    # Concatenate the original parts
-    personal_number = f'{day:02d}{month:02d}{year:02d}{sequence}'
-
-    return is_personal_number, personal_number
-
-
-def find_overlapping_matches(pattern, text):
-    matches = []
-    for match in re.finditer(pattern, text):
-        matches.append(match.group(0))
-        # Move the start position forward to look for overlaps
-        start = match.start() + 1
-        while start < start + 10:
-            match = re.search(pattern, text[start:])
-            if match:
-                matches.append(match.group(0))
-                start += match.start() + 1
-            else:
-                break
-    return matches
+    return first_control == fnr[9] and second_control == fnr[10]
 
 def find_matches(text):
     """
-    Find matches in a text using regular expressions.
+    Find and validate Norwegian fødselsnummer and D-numbers in a text, handling various formats.
 
     Parameters:
     text (str): The text to search for matches.
 
     Returns:
-    list: A list of matches with corresponding tag and index.
+    list: A list of matches with corresponding tag ('fødselsnummer' or 'D-number') and index.
     """
-    pattern_personummer = re.compile(
-                                        r'^(?:0[1-9]|[12][0-9]|3[01])\s*'  # Day (01-31)
-                                        r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
-                                        r'\d\s*\d\s*'
-                                        r'\d\s*\d\s*\d\s*\d\s*\d'        # Five additional digits
-                                    )
-    
-    pattern_dnummer = re.compile(
-                                    r'^[4-7]\s*'                        # Leading digit (4, 5, 6, or 7)
-                                    r'(?:[0-9])\s*'                    # Single digit day (0-9)
-                                    r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
-                                    r'\d\s*\d\s*'                      # Year (00-99)
-                                    r'\d\s*\d\s*\d\s*\d\s*\d'            # Five additional digits
-                                )
-
-    patterns = [pattern_personummer, pattern_dnummer]
-    categories = ['personnummer', 'dnummer']
+    # Regular expression to match numbers with optional separators
+    pattern = re.compile(
+        r'\b'  # Word boundary
+        r'(?:(?:\d{1,2}[\s\.\-\/]*){5}\d{1,5})'  # Matches digit groupings with optional separators
+        r'\b'
+    )
     tagged_matches = []
     index = 0
 
-    for pattern, tag in zip(patterns, categories):
-        matches = find_overlapping_matches(pattern, text)
-        for match in matches:
-            
-            if tag == 'dnummer':
-                is_personal_number, match_f = format_dnumber(match)
-                if is_personal_number and check_controldigits(match_f):
-                    tagged_matches.append([match, tag, index])
-                    index += 1
+    matches = pattern.findall(text)
+    for match in matches:
+        # Remove all non-digit characters to get continuous digits
+        fnr = re.sub(r'\D', '', match)
 
-            if tag == 'personnummer' and check_controldigits(match):
-                tagged_matches.append([match, tag, index])
-                index += 1
+        if len(fnr) != 11 or not fnr.isdigit():
+            continue  # Skip invalid matches
+
+        day_str = fnr[:2]
+        month_str = fnr[2:4]
+        year_str = fnr[4:6]
+
+        # Check if it's a D-number (day between 41 and 71)
+        day = int(day_str)
+        is_d_number = False
+        if 41 <= day <= 71:
+            day -= 40
+            is_d_number = True
+
+        # Build the birth date string
+        birth_date_str = f"{day:02d}{month_str}{year_str}"
+
+        # Attempt to parse the birth date
+        try:
+            datetime.strptime(birth_date_str, '%d%m%y')
+        except ValueError:
+            continue  # Invalid date, skip this match
+
+        # Validate control digits
+        if check_control_digits(fnr):
+            tag = 'dnummer' if is_d_number else 'personnummer'
+            tagged_matches.append([match, tag, index])
+            index += 1
 
     return tagged_matches
 
