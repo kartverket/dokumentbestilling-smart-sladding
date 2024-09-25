@@ -119,8 +119,6 @@ def is_elektronisk_tinglyst(pdf_bytes):
     # Get and print the metadata
     metadata = pdf_document.metadata
 
-    print(metadata)
-
     if metadata['title'] == 'Dokument til signering':
         return True
     else:
