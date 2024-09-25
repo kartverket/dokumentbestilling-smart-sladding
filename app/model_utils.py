@@ -118,6 +118,9 @@ def is_elektronisk_tinglyst(pdf_bytes):
 
     # Get and print the metadata
     metadata = pdf_document.metadata
+
+    print(metadata)
+
     if metadata['title'] == 'Dokument til signering':
         return True
     else:
@@ -320,9 +323,7 @@ def find_matches(text):
     """
     # Regular expression to match numbers with optional separators
     pattern = re.compile(
-        r'\b'  # Word boundary
-        r'(?:(?:\d{1,2}[\s\.\-\/]*){5}\d{1,5})'  # Matches digit groupings with optional separators
-        r'\b'
+        r'(?:\d(?:\D)?){6}\D{0,3}(?:\d(?:\D)?){5}'
     )
     tagged_matches = []
     index = 0
@@ -376,7 +377,6 @@ def apply_regex_search(bounding_boxes, text):
     Returns:
     list: A list of bounding boxes for the last 5 digits of the matches.
     """
-    tagged_matches = find_matches(text)
 
     # Find matches in the text
     tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
@@ -390,6 +390,7 @@ def apply_regex_search(bounding_boxes, text):
     # Sort the DataFrame by 'top_group' and then by 'left'
     bounding_boxes = bounding_boxes.sort_values(by=['top_group', 'left']).reset_index(drop=True)
 
+    print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
 
     # Initialize a list to collect all bounding boxes for the last 5 digits
     bounding_boxes_list = []
@@ -422,18 +423,6 @@ def apply_regex_search(bounding_boxes, text):
                 # Remove multiple spaces
                 window_text_normalized = re.sub(r'\s+', ' ', window_text)
 
-        if len(sep_matches[-1]) == 5:
-            splitted = True
-            matches_list.append([sep_matches[-1], i[1], i[2], splitted])
-        
-        else:
-            matches_list.append([i[0], i[1], i[2], splitted])
-
-    bbs = []
-    for match in matches_list:
-        pattern = re.compile(re.escape(match[0]), re.IGNORECASE)
-        # Initialize a list to collect bounding boxes for each match
-        match_bbs = []
                 # Check if the window text matches the full match text
                 if re.search(re.escape(full_match_text), window_text_normalized, re.IGNORECASE):
                     # Now, find bounding boxes for last 5 digits
@@ -487,12 +476,6 @@ def apply_regex_search(bounding_boxes, text):
 
                         char_idx = length  # Update character index for next bounding box
 
-    bbs_clean = []
-    for bb in bbs:
-        if bb not in bbs_clean:
-            bbs_clean.append(bb)
-
-    return bbs_clean
                     # Continue searching for other occurrences; do not break
     return bounding_boxes_list
 
