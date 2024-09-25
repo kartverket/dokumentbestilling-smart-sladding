@@ -388,8 +388,6 @@ def apply_regex_search(bounding_boxes, text):
     # Sort the DataFrame by 'top_group' and then by 'left'
     bounding_boxes = bounding_boxes.sort_values(by=['top_group', 'left']).reset_index(drop=True)
 
-    print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
-
     # Initialize a list to collect all bounding boxes for the last 5 digits
     bounding_boxes_list = []
     processed_coords = set()  # To keep track of coordinates already added
