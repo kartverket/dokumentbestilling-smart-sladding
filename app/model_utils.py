@@ -366,22 +366,61 @@ def find_matches(text):
 
 def apply_regex_search(bounding_boxes, text):
     """
-    Get bounding boxes for matches found in a text.
+    Get bounding boxes for the last 5 digits of matches found in a text,
+    considering cases where the matched text spans multiple bounding boxes.
 
     Parameters:
-    tagged_matches (list): A list of matches with corresponding tag and index.
-    bounding_boxes (pd.DataFrame): A DataFrame containing the bounding boxes.
+    bounding_boxes (pd.DataFrame): A DataFrame containing the bounding boxes with 'text', 'left', 'top', 'width', 'height' columns.
+    text (str): The text to search for matches.
 
     Returns:
-    list: A list of bounding boxes for the matches.
+    list: A list of bounding boxes for the last 5 digits of the matches.
     """
     tagged_matches = find_matches(text)
 
-    matches_list = []
+    # Find matches in the text
+    tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
 
-    for i in tagged_matches:
-        splitted = False
-        sep_matches = re.split(r'\s+', i[0])
+    # Define a tolerance level for 'top' positions
+    tolerance = 3  # Adjust this value based on your data's scale
+
+    # Create a new column 'top_group' by grouping 'top' positions within the tolerance
+    bounding_boxes['top_group'] = (bounding_boxes['top'] // tolerance) * tolerance
+
+    # Sort the DataFrame by 'top_group' and then by 'left'
+    bounding_boxes = bounding_boxes.sort_values(by=['top_group', 'left']).reset_index(drop=True)
+
+
+    # Initialize a list to collect all bounding boxes for the last 5 digits
+    bounding_boxes_list = []
+    processed_coords = set()  # To keep track of coordinates already added
+
+    # For each match
+    for match in tagged_matches:
+        full_match_text = match[0].strip()  # e.g., '11 11 11 11111'
+        last_five_digits = ''.join(re.findall(r'\d', full_match_text))[-5:]  # Get last 5 digits
+
+        # Prepare regex patterns
+        full_match_pattern = re.escape(full_match_text)
+        last_five_digits_pattern = re.escape(last_five_digits)
+
+        # Initialize variables for sliding window
+        num_boxes = len(bounding_boxes)
+        max_window_size = min(11, num_boxes)  # Adjust based on expected match length
+
+        # Slide over bounding boxes
+        for start_idx in range(num_boxes):
+            for window_size in range(1, max_window_size + 1):
+                end_idx = start_idx + window_size
+                if end_idx > num_boxes:
+                    break
+
+                # Get the text from the current window of bounding boxes
+                window_boxes = bounding_boxes.iloc[start_idx:end_idx]
+                window_text = ' '.join(window_boxes['text']).strip()
+
+                # Remove multiple spaces
+                window_text_normalized = re.sub(r'\s+', ' ', window_text)
 
         if len(sep_matches[-1]) == 5:
             splitted = True
@@ -395,17 +434,58 @@ def apply_regex_search(bounding_boxes, text):
         pattern = re.compile(re.escape(match[0]), re.IGNORECASE)
         # Initialize a list to collect bounding boxes for each match
         match_bbs = []
+                # Check if the window text matches the full match text
+                if re.search(re.escape(full_match_text), window_text_normalized, re.IGNORECASE):
+                    # Now, find bounding boxes for last 5 digits
+                    # Concatenate texts and keep track of character positions
+                    cumulative_text = ''
+                    cumulative_lengths = []
+                    for idx, text_piece in enumerate(window_boxes['text']):
+                        cumulative_text += text_piece
+                        cumulative_lengths.append(len(cumulative_text))
 
-        for index, row in bounding_boxes.iterrows():
-            if pattern.search(row['text']):
-                if match[3]:
-                    loc = [row['height'], row['width'], row['left'], row['top']]
-                else:
-                    loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
-                match_bbs.append(loc)
-        
-        # Extend the main bounding boxes list with all matches found for this pattern
-        bbs.extend(match_bbs)
+                    # Find the position of last 5 digits in the cumulative text
+                    last_five_digits_start = cumulative_text.rfind(last_five_digits)
+                    if last_five_digits_start == -1:
+                        continue
+                    last_five_digits_end = last_five_digits_start + len(last_five_digits)
+
+                    # Map these positions back to the bounding boxes
+                    char_idx = 0
+                    for i, length in enumerate(cumulative_lengths):
+                        box_start = char_idx
+                        box_end = length
+                        if last_five_digits_start < box_end and last_five_digits_end > box_start:
+                            # The last 5 digits are in this bounding box
+                            bb = window_boxes.iloc[i]
+
+                            # Determine overlap
+                            overlap_start = max(last_five_digits_start, box_start)
+                            overlap_end = min(last_five_digits_end, box_end)
+                            overlap_length = overlap_end - overlap_start
+                            box_text_length = box_end - box_start
+
+                            # Calculate proportion of the bounding box width that corresponds to the last 5 digits
+                            proportion = overlap_length / box_text_length
+
+                            # Adjust the bounding box
+                            if box_text_length == overlap_length:
+                                # Entire bounding box corresponds to last 5 digits
+                                adjusted_bb = bb[['height', 'width', 'left', 'top']].to_list()
+                            else:
+                                # Need to split the bounding box
+                                char_width = bb['width'] / box_text_length
+                                new_left = bb['left'] + char_width * (overlap_start - box_start)
+                                new_width = char_width * overlap_length
+                                adjusted_bb = [bb['height'], new_width, new_left, bb['top']]
+
+                            # Create a tuple of coordinates to check for duplicates
+                            coord_tuple = tuple(adjusted_bb)
+                            if coord_tuple not in processed_coords:
+                                bounding_boxes_list.append(adjusted_bb)
+                                processed_coords.add(coord_tuple)
+
+                        char_idx = length  # Update character index for next bounding box
 
     bbs_clean = []
     for bb in bbs:
@@ -413,6 +493,8 @@ def apply_regex_search(bounding_boxes, text):
             bbs_clean.append(bb)
 
     return bbs_clean
+                    # Continue searching for other occurrences; do not break
+    return bounding_boxes_list
 
 
 def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2):
