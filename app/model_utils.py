@@ -13,6 +13,7 @@ import torch
 from torchvision.ops import box_iou
 import copy as cp
 
+MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES = 50
 
 #List with keywords and their corresponding allowed Levenshtein distance
 keywords = [('personnr', 2), 
@@ -363,6 +364,29 @@ def find_matches(text):
     return tagged_matches
 
 
+def sort_bounding_boxes(df, k=0.025):
+    """
+    Sort bounding boxes by reading order.
+
+    Parameters:
+    df (pd.DataFrame): DataFrame containing bounding boxes with columns 'left', 'top', 'width', 'height', 'text'.
+    k (float): Tweakable parameter to adjust the influence of the 'left' coordinate on the sorting.
+               Higher values of 'k' give more weight to boxes on the left, even if they are slightly lower.
+
+    Returns:
+    pd.DataFrame: Sorted DataFrame.
+    """
+    # Compute a weighted top coordinate
+    df['weighted_top'] = df['top'] + (df['left'] * k)
+
+    # Sort by weighted top and then by left coordinate
+    df_sorted = df.sort_values(by=['weighted_top', 'left'], ascending=[True, True]).reset_index(drop=True)
+
+    # Drop the temporary 'weighted_top' column
+    df_sorted = df_sorted.drop(columns='weighted_top')
+
+    return df_sorted
+
 def apply_regex_search(bounding_boxes, text):
     """
     Get bounding boxes for the last 5 digits of matches found in a text,
@@ -379,8 +403,7 @@ def apply_regex_search(bounding_boxes, text):
     # Find matches in the text
     tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
 
-    # Define a tolerance level for 'top' positions
-    tolerance = 3  # Adjust this value based on your data's scale
+    bounding_boxes = sort_bounding_boxes(bounding_boxes)
 
     # Create a new column 'top_group' by grouping 'top' positions within the tolerance
     bounding_boxes['top_group'] = (bounding_boxes['top'] // tolerance) * tolerance
@@ -436,10 +459,12 @@ def apply_regex_search(bounding_boxes, text):
                     last_five_digits_end = last_five_digits_start + len(last_five_digits)
 
                     # Map these positions back to the bounding boxes
+                    last_five_bbs = []
                     char_idx = 0
-                    for i, length in enumerate(cumulative_lengths):
+                    for i, text_piece in enumerate(window_boxes['text']):
+                        length = len(text_piece)
                         box_start = char_idx
-                        box_end = length
+                        box_end = char_idx + length
                         if last_five_digits_start < box_end and last_five_digits_end > box_start:
                             # The last 5 digits are in this bounding box
                             bb = window_boxes.iloc[i]
@@ -450,27 +475,64 @@ def apply_regex_search(bounding_boxes, text):
                             overlap_length = overlap_end - overlap_start
                             box_text_length = box_end - box_start
 
-                            # Calculate proportion of the bounding box width that corresponds to the last 5 digits
-                            proportion = overlap_length / box_text_length
-
                             # Adjust the bounding box
                             if box_text_length == overlap_length:
                                 # Entire bounding box corresponds to last 5 digits
-                                adjusted_bb = bb[['height', 'width', 'left', 'top']].to_list()
+                                adjusted_bb = {
+                                    'height': bb['height'],
+                                    'width': bb['width'],
+                                    'left': bb['left'],
+                                    'top': bb['top']
+                                }
                             else:
                                 # Need to split the bounding box
                                 char_width = bb['width'] / box_text_length
                                 new_left = bb['left'] + char_width * (overlap_start - box_start)
                                 new_width = char_width * overlap_length
-                                adjusted_bb = [bb['height'], new_width, new_left, bb['top']]
+                                adjusted_bb = {
+                                    'height': bb['height'],
+                                    'width': new_width,
+                                    'left': new_left,
+                                    'top': bb['top']
+                                }
+
+                            last_five_bbs.append(adjusted_bb)
+
+                        char_idx = box_end  # Update character index for next bounding box
+
+                    if last_five_bbs:
+                        # Check distances between bounding boxes
+                        last_five_bbs = sorted(last_five_bbs, key=lambda x: x['left'])
+
+                        distances = []
+                        for j in range(len(last_five_bbs) - 1):
+                            bb_current = last_five_bbs[j]
+                            bb_next = last_five_bbs[j + 1]
+                            distance = bb_next['left'] - (bb_current['left'] + bb_current['width'])
+                            distances.append(distance)
+
+                        max_distance = max(distances) if distances else 0
+
+                        if max_distance <= MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES:  # Threshold in pixels
+                            # Merge bounding boxes
+                            left = min(bb['left'] for bb in last_five_bbs)
+                            top = min(bb['top'] for bb in last_five_bbs)
+                            right = max(bb['left'] + bb['width'] for bb in last_five_bbs)
+                            bottom = max(bb['top'] + bb['height'] for bb in last_five_bbs)
+                            width = right - left
+                            height = bottom - top
+
+                            merged_bb = [height, width, left, top]
 
                             # Create a tuple of coordinates to check for duplicates
-                            coord_tuple = tuple(adjusted_bb)
+                            coord_tuple = tuple(merged_bb)
                             if coord_tuple not in processed_coords:
-                                bounding_boxes_list.append(adjusted_bb)
+                                bounding_boxes_list.append(merged_bb)
                                 processed_coords.add(coord_tuple)
-
-                        char_idx = length  # Update character index for next bounding box
+                        else:
+                            # Discard bounding boxes as they are too far apart
+                            print("Discarded bounding boxes due to large distance:", max_distance)
+                            pass
 
                     # Continue searching for other occurrences; do not break
     return bounding_boxes_list
@@ -821,11 +883,13 @@ def ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_t
     if run_tesseract:
         text_tess, bounding_boxes_tess = apply_tesseractocr(image, tess_config, elektronisk_tinglyst)
         text_parts.append(text_tess)
+        bounding_boxes_tess['type'] = 'tesseract'
         bounding_boxes_parts.append(bounding_boxes_tess)
     
     if run_easyocr:
         text_easy, bounding_boxes_easy = apply_easyocr(image, languages, elektronisk_tinglyst)
         text_parts.append(text_easy)
+        bounding_boxes_easy['type'] = 'easyocr'
         bounding_boxes_parts.append(bounding_boxes_easy)
 
     text = " ".join(text_parts)

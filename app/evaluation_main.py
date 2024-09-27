@@ -147,7 +147,9 @@ def extended_model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_s
     for i, image in enumerate(images):
 
         bounding_boxes, text = model_utils.ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_tinglyst)
-        predicted_boxes_regex = model_utils.apply_regex_search(bounding_boxes, text)
+        predicted_boxes_regex_tesseract = model_utils.apply_regex_search(bounding_boxes[bounding_boxes['type'] == 'tesseract'], text)
+        predicted_boxes_regex_easyocr = model_utils.apply_regex_search(bounding_boxes[bounding_boxes['type'] == 'easyocr'], text)
+        predicted_boxes_regex = predicted_boxes_regex_tesseract + predicted_boxes_regex_easyocr
 
         model_bbs.append(model_utils.get_all_bbs(bounding_boxes))
         all_text.append(text)
