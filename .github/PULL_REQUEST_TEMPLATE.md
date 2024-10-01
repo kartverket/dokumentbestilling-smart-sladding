@@ -1,6 +1,3 @@
-🎯 **Issue:** 
-
-
 ✓ **Hva jeg har gjort:** 
 
 
