@@ -1,18 +1,6 @@
 import requests
 import model_main
-import os
-
-def api_base_url():
-    if os.getenv('API_URL') == None:
-        return 'http://localhost:8080/'
-    else:
-       return os.getenv('API_URL')
-def database_base_url():
-    if os.getenv('DATABASE_URL') == None:
-        return 'http://localhost:8000/'
-    else:
-        return os.getenv('DATABASE_URL')
-
+from url_utils import database_base_url, api_base_url
 
 def hentDokumenterTilSladding():
     dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')

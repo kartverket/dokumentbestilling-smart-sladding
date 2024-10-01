@@ -5,30 +5,30 @@ import requests
 import fitz
 import Levenshtein
 from datetime import datetime
-import numpy as np
-import pandas as pd
 import easyocr
 from io import BytesIO
 import torch
 from torchvision.ops import box_iou
 import copy as cp
+import numpy as np
+import pandas as pd
 
 MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES = 50
 
-#List with keywords and their corresponding allowed Levenshtein distance
-keywords = [('personnr', 2), 
-            ('pers nr', 1), 
-            ('persnr', 1), 
+# List with keywords and their corresponding allowed Levenshtein distance
+keywords = [('personnr', 2),
+            ('pers nr', 1),
+            ('persnr', 1),
             ('pnr', 0),
             ('fnr', 0),
-            ('fødselsnr', 2), 
-            ('fodselsnr', 2), 
-            ('personnummer', 3), 
-            ('fødselsnummer', 3), 
-            ('fodselsnummer', 3), 
-            ('fpnr', 1), 
-            ('fødsnr', 1), 
-            ('fodsnr', 1), 
+            ('fødselsnr', 2),
+            ('fodselsnr', 2),
+            ('personnummer', 3),
+            ('fødselsnummer', 3),
+            ('fodselsnummer', 3),
+            ('fpnr', 1),
+            ('fødsnr', 1),
+            ('fodsnr', 1),
             ('identifikasjonsnummer', 3),
             ('fnrorgnr', 1),
             ('fødselsnrorganisasjonsnr', 4),
@@ -92,7 +92,7 @@ def pil_to_cv2(image):
     Returns:
     np.array: The OpenCV image.
     """
-    
+
     # Convert PIL Image to RGB
     image = image.convert('RGB')
     # Convert to numpy array
@@ -112,7 +112,7 @@ def is_elektronisk_tinglyst(pdf_bytes):
     Returns:
     bool: True if the PDF file is electronically registered, False otherwise.
     """
-     
+
     pdf_stream = BytesIO(pdf_bytes)
 
     pdf_document = fitz.open(stream=pdf_stream, filetype="pdf")
@@ -124,7 +124,7 @@ def is_elektronisk_tinglyst(pdf_bytes):
         return True
     else:
         return False
-    
+
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
@@ -138,7 +138,7 @@ def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
     # Open the PDF from bytes
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
+
     page = pdf_document.load_page(0)
     rect = page.rect
     return (rect.width, rect.height)
@@ -174,7 +174,7 @@ def format_bb_coordinates(bb):
     w = bb[2][0] - bb[3][0]
     x = bb[0][0]
     y = bb[0][1]
-    
+
     return h, w, x, y
 
 
@@ -195,17 +195,16 @@ def format_easyocr_result_to_df(result):
     for line in result:
         h, w, x, y = format_bb_coordinates(line[0])
         new_data = pd.DataFrame([
-        {'left': x, 'top': y, 'height': h, 'width': w, 'text': line[1]}
+            {'left': x, 'top': y, 'height': h, 'width': w, 'text': line[1]}
         ])
         data_df = pd.concat([data_df, new_data], ignore_index=True)
 
         text += line[1] + " "
 
-
     return data_df, text
 
 
-def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
+def apply_tesseractocr(image, config=r'--oem 1 --psm 11', elektronisk_tinglyst=False):
     """
     Extract text and bounding boxes from an image.
 
@@ -224,7 +223,7 @@ def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
-    
+
     if not elektronisk_tinglyst:
         # Drop alle special characters
         bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
@@ -232,7 +231,7 @@ def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst
     return text, bounding_boxes
 
 
-def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = False):
+def apply_easyocr(image, languages=['no', 'en', 'da'], elektronisk_tinglyst=False):
     """
     Apply EasyOCR to an image.
 
@@ -249,16 +248,16 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = 
 
     reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
 
-    result = reader.readtext(image, width_ths = 0.01)
+    result = reader.readtext(image, width_ths=0.01)
 
     result_df, text = format_easyocr_result_to_df(result)
 
     text = text.replace('\n', ' ')
 
     result_df = result_df.dropna()
-    
+
     if not elektronisk_tinglyst:
-        #drop alle special characters
+        # drop alle special characters
         result_df['text'] = result_df['text'].apply(remove_special_characters)
         text = remove_special_characters(text)
     return text, result_df
@@ -281,6 +280,7 @@ def get_all_bbs(df):
         all_bbs.append(bb)
 
     return all_bbs
+
 
 def check_control_digits(fnr):
     """
@@ -310,6 +310,7 @@ def check_control_digits(fnr):
 
     return first_control == fnr[9] and second_control == fnr[10]
 
+
 def find_matches(text):
     """
     Find and validate Norwegian fødselsnummer and D-numbers in a text, handling various formats.
@@ -328,6 +329,9 @@ def find_matches(text):
     index = 0
 
     matches = pattern.findall(text)
+
+    # print("##\nMatches: \n", matches, "\n##")
+
     for match in matches:
         # Remove all non-digit characters to get continuous digits
         fnr = re.sub(r'\D', '', match)
@@ -358,7 +362,7 @@ def find_matches(text):
         # Validate control digits
         if check_control_digits(fnr):
             tag = 'dnummer' if is_d_number else 'personnummer'
-            tagged_matches.append([match, tag, index])
+            tagged_matches.append([match.strip(), tag, index])
             index += 1
 
     return tagged_matches
@@ -376,6 +380,9 @@ def sort_bounding_boxes(df, k=0.025):
     Returns:
     pd.DataFrame: Sorted DataFrame.
     """
+    # Create a copy of the DataFrame to avoid SettingWithCopyWarning
+    df = df.copy()
+
     # Compute a weighted top coordinate
     df['weighted_top'] = df['top'] + (df['left'] * k)
 
@@ -386,6 +393,7 @@ def sort_bounding_boxes(df, k=0.025):
     df_sorted = df_sorted.drop(columns='weighted_top')
 
     return df_sorted
+
 
 def apply_regex_search(bounding_boxes, text):
     """
@@ -405,11 +413,7 @@ def apply_regex_search(bounding_boxes, text):
 
     bounding_boxes = sort_bounding_boxes(bounding_boxes)
 
-    # Create a new column 'top_group' by grouping 'top' positions within the tolerance
-    bounding_boxes['top_group'] = (bounding_boxes['top'] // tolerance) * tolerance
-
-    # Sort the DataFrame by 'top_group' and then by 'left'
-    bounding_boxes = bounding_boxes.sort_values(by=['top_group', 'left']).reset_index(drop=True)
+    # print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
 
     # Initialize a list to collect all bounding boxes for the last 5 digits
     bounding_boxes_list = []
@@ -419,10 +423,6 @@ def apply_regex_search(bounding_boxes, text):
     for match in tagged_matches:
         full_match_text = match[0].strip()  # e.g., '11 11 11 11111'
         last_five_digits = ''.join(re.findall(r'\d', full_match_text))[-5:]  # Get last 5 digits
-
-        # Prepare regex patterns
-        full_match_pattern = re.escape(full_match_text)
-        last_five_digits_pattern = re.escape(last_five_digits)
 
         # Initialize variables for sliding window
         num_boxes = len(bounding_boxes)
@@ -535,10 +535,11 @@ def apply_regex_search(bounding_boxes, text):
                             pass
 
                     # Continue searching for other occurrences; do not break
+    # print("##\nBounding boxes list: \n", bounding_boxes_list, "\n##")
     return bounding_boxes_list
 
 
-def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2):
+def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor=0.2):
     """
     Scales all bounding boxes in a list by a given ratio.
 
@@ -564,7 +565,8 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
 
     return scaled_boxes
 
-def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
+
+def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3, 7]):
     """
     Apply keyword search to a DataFrame of bounding boxes.
 
@@ -577,9 +579,81 @@ def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
     list: A list of bounding boxes.
     """
 
-    predicted_boxes_keyword = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
+    predicted_boxes_keyword = get_bbs_from_keywords(bounding_boxes, num_indexes=num_indexes, num_closest_above=num_closest[0], num_closest_below=num_closest[1])
 
     return predicted_boxes_keyword
+
+
+def find_closest_bounding_boxes_general(
+        df,
+        search_word,
+        num_closest=10,
+        num_closest_above=None,
+        num_closest_below=None,
+):
+    """
+    General function to find the closest bounding boxes to a word in a DataFrame.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the bounding boxes.
+    search_word (str): The word to search for.
+    num_closest (int, optional): The number of closest bounding boxes to find.
+    num_closest_above (int, optional): The number of closest bounding boxes above the word.
+    num_closest_below (int, optional): The number of closest bounding boxes below the word.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the closest bounding boxes.
+    """
+    # Make a copy to avoid modifying the original DataFrame
+    df_copy = df.copy()
+
+    # Precompute centers
+    df_copy['center_x'] = df_copy['left'] + df_copy['width'] / 2
+    df_copy['center_y'] = df_copy['top'] + df_copy['height'] / 2
+
+    # Search for all instances of the word in the DataFrame
+    word_rows = df_copy[df_copy['text'] == search_word]
+
+    if word_rows.empty:
+        return False
+
+    # Create a list to hold the closest bounding boxes for each instance of the search word
+    all_closest_boxes = []
+
+    for _, word_row in word_rows.iterrows():
+        # Get the center coordinates of the word
+        word_center_x = word_row['center_x']
+        word_center_y = word_row['center_y']
+
+        # Compute distances to all other centers
+        df_copy['distance'] = np.sqrt(pd.to_numeric((df_copy['center_x'] - word_center_x) ** 2 + (df_copy['center_y'] - word_center_y) ** 2))
+
+        # Exclude the word itself
+        df_excl_word = df_copy[df_copy['text'] != search_word]
+
+        if num_closest_above is not None and num_closest_below is not None:
+            # Filter boxes above and below
+            above_boxes = df_excl_word[df_excl_word['top'] < word_row['top']]
+            below_boxes = df_excl_word[df_excl_word['top'] >= word_row['top']]
+
+            # Sort by distance and select closest bounding boxes
+            closest_above_boxes = above_boxes.nsmallest(num_closest_above, 'distance')
+            closest_below_boxes = below_boxes.nsmallest(num_closest_below, 'distance')
+
+            # Append to the list
+            all_closest_boxes.append(closest_above_boxes)
+            all_closest_boxes.append(closest_below_boxes)
+        else:
+            # Get the closest bounding boxes
+            closest_boxes = df_excl_word.nsmallest(num_closest, 'distance')
+            all_closest_boxes.append(closest_boxes)
+
+    # Concatenate all closest boxes DataFrames into one DataFrame
+    closest_boxes_df = (
+        pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
+    )
+
+    return closest_boxes_df
 
 
 def find_closest_bounding_boxes(df, search_word, num_closest=10):
@@ -594,39 +668,8 @@ def find_closest_bounding_boxes(df, search_word, num_closest=10):
     Returns:
     pd.DataFrame: A DataFrame containing the closest bounding boxes.
     """
+    return find_closest_bounding_boxes_general(df, search_word, num_closest=num_closest)
 
-    # Search for all instances of the word in the DataFrame
-    word_rows = df[df['text'] == search_word]
-
-    if word_rows.empty:
-        return False
-
-    # Create a list to hold the closest bounding boxes for each instance of the search word
-    all_closest_boxes = []
-
-    # Calculate distances and find closest bounding boxes
-    for _, word_row in word_rows.iterrows():
-        # Get the bounding box coordinates of the found word
-        word_bbox = word_row[['left', 'top', 'width', 'height']].values
-        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
-
-        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
-        def calculate_distance(row):
-            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
-            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
-
-        df['distance'] = df.apply(calculate_distance, axis=1)
-
-        # Sort by distance and select the five closest bounding boxes (excluding the word itself)
-        closest_boxes = df[df['text'] != search_word].sort_values(by='distance').head(num_closest)
-
-        # Append the closest boxes for this instance to the list
-        all_closest_boxes.append(closest_boxes)
-
-    # Concatenate all closest boxes DataFrames into one DataFrame
-    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
-
-    return closest_boxes_df
 
 def find_closest_bounding_boxes_constrained(df, search_word, num_closest_above=3, num_closest_below=7):
     """
@@ -635,51 +678,18 @@ def find_closest_bounding_boxes_constrained(df, search_word, num_closest_above=3
     Parameters:
     df (pd.DataFrame): The DataFrame containing the bounding boxes.
     search_word (str): The word to search for.
-    num_closest_above (int): The number of closest bounding boxes to find above the word.
-    num_closest_below (int): The number of closest bounding boxes to find below the word.
+    num_closest_above (int): The number of closest bounding boxes above the word.
+    num_closest_below (int): The number of closest bounding boxes below the word.
 
     Returns:
     pd.DataFrame: A DataFrame containing the closest bounding boxes.
     """
-
-    # Search for all instances of the word in the DataFrame
-    word_rows = df[df['text'] == search_word]
-
-    if word_rows.empty:
-        return False
-
-    # Create a list to hold the closest bounding boxes for each instance of the search word
-    all_closest_boxes = []
-
-    # Calculate distances and find closest bounding boxes
-    for _, word_row in word_rows.iterrows():
-        # Get the bounding box coordinates of the found word
-        word_bbox = word_row[['left', 'top', 'width', 'height']].values
-        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
-
-        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
-        def calculate_distance(row):
-            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
-            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
-
-        df['distance'] = df.apply(calculate_distance, axis=1)
-
-        # Filter the boxes above and below
-        above_boxes = df[(df['top'] < word_row['top']) & (df['text'] != search_word)]
-        below_boxes = df[(df['top'] >= word_row['top']) & (df['text'] != search_word)]
-
-        # Sort by distance and select the closest bounding boxes for above and below
-        closest_above_boxes = above_boxes.sort_values(by='distance').head(num_closest_above)
-        closest_below_boxes = below_boxes.sort_values(by='distance').head(num_closest_below)
-
-        # Append the closest boxes for this instance to the list
-        all_closest_boxes.append(closest_above_boxes)
-        all_closest_boxes.append(closest_below_boxes)
-
-    # Concatenate all closest boxes DataFrames into one DataFrame
-    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
-
-    return closest_boxes_df
+    return find_closest_bounding_boxes_general(
+        df,
+        search_word,
+        num_closest_above=num_closest_above,
+        num_closest_below=num_closest_below,
+    )
 
 
 def get_levenshtein_distance(s1, s2):
@@ -737,13 +747,13 @@ def can_be_ssn(s):
     # Return 'last_five' if the string is 4 or 5 digits long and contains more than 2 digits
     if len(s) == 5 and int_count > 3:
         return 'last_five'
-    
+
     # Return 'whole_number' if the string is 10 or 11 digits long and contains more than 9 digits
-    if len(s) > 9 and len(s) < 14 and int_count > 9: 
+    if len(s) > 9 and len(s) < 14 and int_count > 9:
         return 'whole_number'
-        
+
     return False
-    
+
 
 def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, num_closest_below=7):
     """
@@ -757,7 +767,7 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
     """
 
     bounding_boxes = bounding_boxes.reset_index()
-    
+
     indexes = []
     predicted_boxes = []
     for keyword in keywords:
@@ -767,29 +777,27 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
 
     for index, keyword_ in indexes:
 
-        for next in range(index, index+num_indexes):
+        for next in range(index, index + num_indexes):
             if next < len(bounding_boxes):
-                check  = can_be_ssn(bounding_boxes.iloc[next]['text'])
+                check = can_be_ssn(bounding_boxes.iloc[next]['text'])
                 if check == 'last_five':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
 
                 if check == 'whole_number':
                     row = bounding_boxes.iloc[next]
-                    predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
-
+                    predicted_boxes.append([row['height'], 0.45 * row['width'], row['left'] + 0.55 * row['width'], row['top']])
 
         closest_bbs = find_closest_bounding_boxes_constrained(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
         for row in closest_bbs.iterrows():
-            check  = can_be_ssn(row[1]['text'])
+            check = can_be_ssn(row[1]['text'])
             if check == 'last_five':
                 predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
 
             if check == 'whole_number':
-                predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
-                
-            
+                predicted_boxes.append([row[1]['height'], 0.45 * row[1]['width'], row[1]['left'] + 0.55 * row[1]['width'], row[1]['top']])
+
     return predicted_boxes
 
 
@@ -825,25 +833,24 @@ def calculate_iou(boxes_a, boxes_b):
     return box_iou(torch.tensor(boxes_a_copy), torch.tensor(boxes_b_copy)).numpy()
 
 
-def remove_overlapping_boxes(predicted_boxes, iou_threshold = 0.2):
-
+def remove_overlapping_boxes(predicted_boxes, iou_threshold=0.2):
     clean_predicted_boxes = []
 
     for page in predicted_boxes:
 
         if len(page) > 0:
-            
+
             iou_matrix = calculate_iou(page, page)
 
             remove_indexes_page = []
-            #Search only over the diagonl of the matrix
+            # Search only over the diagonl of the matrix
 
             num_rows, num_cols = iou_matrix.shape
 
             for i in range(num_rows):
                 for j in range(i + 1, num_cols):
                     if iou_matrix[i][j] > iou_threshold:
-                        
+
                         area_i = page[i][0] * page[i][1]
                         area_j = page[j][0] * page[j][1]
 

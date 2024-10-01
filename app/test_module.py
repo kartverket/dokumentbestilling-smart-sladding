@@ -2,14 +2,15 @@ import pytest
 import sys
 import os
 
+import url_utils
+import model_utils
+import model_main
+
 # Determine the absolute path to the app directory
 app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'app'))
 
 # Add the app directory to the Python path
 sys.path.insert(0, app_path)
-
-import model_utils
-import model_main
 
 # Fixtures
 @pytest.fixture
@@ -35,12 +36,12 @@ def doc_id():
 @pytest.fixture
 def json_response():
     return [
-        {'page': 1, 'height': 279.72, 'width': 405.36, 'x': 6.48, 'y': 23.4},
-        {'page': 1, 'height': 574.92, 'width': 208.44, 'x': 6.48, 'y': 23.4},
-        {'page': 1, 'height': 702.72, 'width': 77.4, 'x': 6.48, 'y': 23.04},
-        {'page': 1, 'height': 295.2, 'width': 405.36, 'x': 6.48, 'y': 23.04},
-        {'page': 1, 'height': 590.76, 'width': 208.44, 'x': 6.48, 'y': 23.4},
-        {'page': 1, 'height': 686.88, 'width': 77.04, 'x': 6.48, 'y': 23.4}
+        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 403.55999999999995, 'y': 277.91999999999996},
+        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 206.64, 'y': 573.12},
+        {'page': 1, 'height': 10.08, 'width': 26.64, 'x': 75.6, 'y': 700.9200000000001},
+        {'page': 1, 'height': 10.08, 'width': 26.64, 'x': 403.55999999999995, 'y': 293.4},
+        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 206.64, 'y': 588.96},
+        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 75.24, 'y': 685.08}
     ]
 
 # Test functions
@@ -64,4 +65,4 @@ def test_format_dnumber(dnumber):
     assert model_utils.find_matches(dnumber) == [[dnumber, 'dnummer', 0]]
 
 def test_main(doc_id, json_response):
-    assert model_main.main(doc_id) == json_response
+    assert model_main.main(doc_id, f'{url_utils.api_base_url()}intern/pantebok/gjenpart') == json_response

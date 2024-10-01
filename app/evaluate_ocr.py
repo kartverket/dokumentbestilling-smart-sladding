@@ -21,7 +21,7 @@ def draw_bounding_boxes(image, detections, threshold=0.25):
 
             cv2.putText(image, text, tuple(map(int, bbox[0])), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.65, (255, 0, 0), 2)
 
-image_path = "app/dokumenter/2013_98_200.pdf"
+image_path = "valideringssett/all_documents/2013_98_200.pdf"
 images = convert_from_path(image_path, fmt='jpeg')
 reader = easyocr.Reader(['no', 'en', 'da'], gpu=False)
 
