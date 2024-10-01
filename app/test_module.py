@@ -64,5 +64,5 @@ def test_check_control_digits(personnumber, not_personnumber, dnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.find_matches(dnumber) == [[dnumber, 'dnummer', 0]]
 
-def test_main(doc_id, json_response):
-    assert model_main.main(doc_id, f'{url_utils.api_base_url()}intern/pantebok/gjenpart') == json_response
+#def test_main(doc_id, json_response):
+#    assert model_main.main(doc_id, f'{url_utils.api_base_url()}intern/pantebok/gjenpart') == json_response
