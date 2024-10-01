@@ -4,7 +4,6 @@ import os
 
 from url_utils import api_base_url
 
-
 def process_pdf(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=True,
                 languages=['no', 'da', 'en'], tess_config=r'--oem 1 --psm 11',
                 num_indexes=3, num_closest=[6, 12], extended=False, save_bbs_path=None, save_text_path=None):
@@ -106,12 +105,12 @@ def model(pdf_file, run_tesseract=True, run_easyocr=True, run_keyword_search=Tru
                        languages, tess_config, num_indexes, num_closest, extended=False)
 
 
-def main(docid, base_url):
+def main(document_url):
     """
     Extract text from a PDF file and blur out sensitive information.
 
     Parameters:
-    docid (str): the document ID.
+    document_url (str): The URL to the PDF document (either local or remote).
 
     Returns:
     images (list): A list of images.
@@ -119,7 +118,10 @@ def main(docid, base_url):
     json_responses (list): A list of json responses (dict).
     ratio (float): The ratio between the PDF and image dimensions.
     """
-    pdf_bytes = model_utils.download_pdf(docid, base_url)
+    if not document_url.startswith('http'):
+        pdf_bytes = open(document_url, 'rb').read()
+    else:
+        pdf_bytes = model_utils.download_pdf(document_url)
 
     pdf_dimensions = model_utils.get_pdf_dimensions_from_byte_file(pdf_bytes)
 
@@ -142,5 +144,6 @@ def main(docid, base_url):
     return json_responses
     
 if __name__ == '__main__':
-    res = main('2023_72893_200', f'{api_base_url()}intern/pantebok/gjenpart')
+    docid = '2023_72893_200'
+    res = main(f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false')
     print(res)

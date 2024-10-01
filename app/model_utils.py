@@ -39,7 +39,7 @@ keywords = [('personnr', 2),
             ('underorganisasjonsnrfødselsnr', 4)]
 
 
-def download_pdf(docid, base_url):
+def download_pdf(document_url):
     """
     Download a PDF file from a URL.
 
@@ -51,8 +51,7 @@ def download_pdf(docid, base_url):
     bytes: The content of the PDF file.
     """
 
-    url = f"{base_url}/{docid}?attestering=false"
-    response = requests.get(url)
+    response = requests.get(document_url)
 
     if response.status_code == 200:
         print("PDF downloaded successfully.")

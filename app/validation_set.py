@@ -5,7 +5,7 @@ import model_utils
 from url_utils import api_base_url
 
 
-def download_and_save_pdf(docid, base_url, filename):
+def download_and_save_pdf(document_url, filename):
     """
     Download a PDF file from a URL and save it to the local file system.
 
@@ -16,7 +16,7 @@ def download_and_save_pdf(docid, base_url, filename):
     """
 
     try:
-        response_content = model_utils.download_pdf(docid, base_url)
+        response_content = model_utils.download_pdf(document_url)
         with open(filename, 'wb') as file:
             file.write(response_content)
         print("PDF downloaded successfully.")
@@ -48,7 +48,7 @@ def download_all_documents(docids_csv_path, save_folder_path, base_url):
         # Download and save each document
         for doc in df_doc_ids:
             filename = save_folder_path + "/" + doc + ".pdf"
-            download_and_save_pdf(doc, base_url, filename)
+            download_and_save_pdf(f"{base_url}/{doc}?attestering=false", filename)
 
 
     except FileExistsError:

@@ -30,18 +30,10 @@ def dnumber():
     return "55079012350"
 
 @pytest.fixture
-def doc_id():
-    return '2023_72893_200'
-
-@pytest.fixture
 def json_response():
     return [
-        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 403.55999999999995, 'y': 277.91999999999996},
-        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 206.64, 'y': 573.12},
-        {'page': 1, 'height': 10.08, 'width': 26.64, 'x': 75.6, 'y': 700.9200000000001},
-        {'page': 1, 'height': 10.08, 'width': 26.64, 'x': 403.55999999999995, 'y': 293.4},
-        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 206.64, 'y': 588.96},
-        {'page': 1, 'height': 10.08, 'width': 27.0, 'x': 75.24, 'y': 685.08}
+        {'page': 1, 'height': 11.19903206291591, 'width': 27.486842105263158, 'x': 112.01467029643072, 'y': 605.5983061101028},
+        {'page': 2, 'height': 11.19903206291591, 'width': 29.556563823351482, 'x': 217.57047791893524, 'y': 57.392014519056254}
     ]
 
 # Test functions
@@ -64,5 +56,5 @@ def test_check_control_digits(personnumber, not_personnumber, dnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.find_matches(dnumber) == [[dnumber, 'dnummer', 0]]
 
-#def test_main(doc_id, json_response):
-#    assert model_main.main(doc_id, f'{url_utils.api_base_url()}intern/pantebok/gjenpart') == json_response
+def test_main(json_response):
+    assert model_main.main('testdokument-2.pdf') == json_response
