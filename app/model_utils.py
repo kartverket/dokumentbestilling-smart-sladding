@@ -4,30 +4,31 @@ from pdf2image import convert_from_bytes
 import requests
 import fitz
 import Levenshtein
-import PIL
-import numpy as np
-import pandas as pd
+from datetime import datetime
 import easyocr
 from io import BytesIO
 import torch
 from torchvision.ops import box_iou
 import copy as cp
+import numpy as np
+import pandas as pd
 
+MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES = 50
 
-#List with keywords and their corresponding allowed Levenshtein distance
-keywords = [('personnr', 2), 
-            ('pers nr', 1), 
-            ('persnr', 1), 
+# List with keywords and their corresponding allowed Levenshtein distance
+keywords = [('personnr', 2),
+            ('pers nr', 1),
+            ('persnr', 1),
             ('pnr', 0),
             ('fnr', 0),
-            ('fødselsnr', 2), 
-            ('fodselsnr', 2), 
-            ('personnummer', 3), 
-            ('fødselsnummer', 3), 
-            ('fodselsnummer', 3), 
-            ('fpnr', 1), 
-            ('fødsnr', 1), 
-            ('fodsnr', 1), 
+            ('fødselsnr', 2),
+            ('fodselsnr', 2),
+            ('personnummer', 3),
+            ('fødselsnummer', 3),
+            ('fodselsnummer', 3),
+            ('fpnr', 1),
+            ('fødsnr', 1),
+            ('fodsnr', 1),
             ('identifikasjonsnummer', 3),
             ('fnrorgnr', 1),
             ('fødselsnrorganisasjonsnr', 4),
@@ -38,7 +39,7 @@ keywords = [('personnr', 2),
             ('underorganisasjonsnrfødselsnr', 4)]
 
 
-def download_pdf(docid, base_url):
+def download_pdf(document_url):
     """
     Download a PDF file from a URL.
 
@@ -50,8 +51,7 @@ def download_pdf(docid, base_url):
     bytes: The content of the PDF file.
     """
 
-    url = f"{base_url}/{docid}?attestering=false"
-    response = requests.get(url)
+    response = requests.get(document_url)
 
     if response.status_code == 200:
         print("PDF downloaded successfully.")
@@ -91,7 +91,7 @@ def pil_to_cv2(image):
     Returns:
     np.array: The OpenCV image.
     """
-    
+
     # Convert PIL Image to RGB
     image = image.convert('RGB')
     # Convert to numpy array
@@ -111,18 +111,19 @@ def is_elektronisk_tinglyst(pdf_bytes):
     Returns:
     bool: True if the PDF file is electronically registered, False otherwise.
     """
-     
+
     pdf_stream = BytesIO(pdf_bytes)
 
     pdf_document = fitz.open(stream=pdf_stream, filetype="pdf")
 
     # Get and print the metadata
     metadata = pdf_document.metadata
+
     if metadata['title'] == 'Dokument til signering':
         return True
     else:
         return False
-    
+
 
 def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
@@ -136,7 +137,7 @@ def get_pdf_dimensions_from_byte_file(pdf_bytes):
     """
     # Open the PDF from bytes
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
+
     page = pdf_document.load_page(0)
     rect = page.rect
     return (rect.width, rect.height)
@@ -172,7 +173,7 @@ def format_bb_coordinates(bb):
     w = bb[2][0] - bb[3][0]
     x = bb[0][0]
     y = bb[0][1]
-    
+
     return h, w, x, y
 
 
@@ -193,17 +194,16 @@ def format_easyocr_result_to_df(result):
     for line in result:
         h, w, x, y = format_bb_coordinates(line[0])
         new_data = pd.DataFrame([
-        {'left': x, 'top': y, 'height': h, 'width': w, 'text': line[1]}
+            {'left': x, 'top': y, 'height': h, 'width': w, 'text': line[1]}
         ])
         data_df = pd.concat([data_df, new_data], ignore_index=True)
 
         text += line[1] + " "
 
-
     return data_df, text
 
 
-def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst = False):
+def apply_tesseractocr(image, config=r'--oem 1 --psm 11', elektronisk_tinglyst=False):
     """
     Extract text and bounding boxes from an image.
 
@@ -222,7 +222,7 @@ def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst
     data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DATAFRAME, config=config)
     bounding_boxes = data[['left', 'top', 'width', 'height', 'text']]
     bounding_boxes = bounding_boxes.dropna()
-    
+
     if not elektronisk_tinglyst:
         # Drop alle special characters
         bounding_boxes['text'] = bounding_boxes['text'].apply(remove_special_characters)
@@ -230,7 +230,7 @@ def apply_tesseractocr(image, config = r'--oem 1 --psm 11', elektronisk_tinglyst
     return text, bounding_boxes
 
 
-def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = False):
+def apply_easyocr(image, languages=['no', 'en', 'da'], elektronisk_tinglyst=False):
     """
     Apply EasyOCR to an image.
 
@@ -247,16 +247,16 @@ def apply_easyocr(image, languages = ['no', 'en', 'da'], elektronisk_tinglyst = 
 
     reader = easyocr.Reader(languages, model_storage_directory='../tmp/.EasyOCR/model', user_network_directory='../tmp/.EasyOCR/user_network')
 
-    result = reader.readtext(image, width_ths = 0.01)
+    result = reader.readtext(image, width_ths=0.01)
 
     result_df, text = format_easyocr_result_to_df(result)
 
     text = text.replace('\n', ' ')
 
     result_df = result_df.dropna()
-    
+
     if not elektronisk_tinglyst:
-        #drop alle special characters
+        # drop alle special characters
         result_df['text'] = result_df['text'].apply(remove_special_characters)
         text = remove_special_characters(text)
     return text, result_df
@@ -281,202 +281,264 @@ def get_all_bbs(df):
     return all_bbs
 
 
-def check_controldigits(number):
+def check_control_digits(fnr):
     """
-    Check if the control digits of a Norwegian personal number are correct.
+    Validate the control digits of a Norwegian fødselsnummer or D-number.
 
     Parameters:
-    number (str): The personal number to validate.
+    fnr (str): The fødselsnummer or D-number to validate (11-digit string).
 
     Returns:
-    bool: True if the control digits are correct, False otherwise.
+    bool: True if valid, False otherwise.
     """
+    weights_first = [3, 7, 6, 1, 8, 9, 4, 5, 2]
+    weights_second = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
 
-    # Remove whitespace
-    number = re.sub(r'\s*', '', number)
+    def calculate_control_digit(number, weights):
+        total = sum(int(n) * w for n, w in zip(number, weights))
+        remainder = total % 11
+        if remainder == 0:
+            return '0'
+        elif remainder == 1:
+            return None  # Invalid control digit
+        else:
+            return str(11 - remainder)
 
-    # Split into digits
-    digits = [int(d) for d in number]
+    first_control = calculate_control_digit(fnr[:9], weights_first)
+    second_control = calculate_control_digit(fnr[:10], weights_second)
 
-    if len(digits) == 11:
-        # Weights for control number 1 (K1)
-        weights_k1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
+    return first_control == fnr[9] and second_control == fnr[10]
 
-        # Calculate K1
-        k1_sum = sum(d * w for d, w in zip(digits[:9], weights_k1))
-        k1 = 11 - (k1_sum % 11)
-        if k1 == 11:
-            k1 = 0
-        if k1 == 10:
-            return False  
-
-        # Weights for control number 2 (K2)
-        weights_k2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
-
-        # Calculate K2
-        k2_sum = sum(d * w for d, w in zip(digits[:9] + [k1], weights_k2))
-        k2 = 11 - (k2_sum % 11)
-        if k2 == 11:
-            k2 = 0
-        if k2 == 10:
-            return False 
-
-        # Check if the control numbers are correct
-        return digits[9] == k1 and digits[10] == k2
-    
-    return False
-
-
-def format_dnumber(dnumber):
-    """
-    Format a D-number to a personal number.
-
-    Parameters:
-    dnumber (str): The D-number to format.
-
-    Returns:
-    bool: True if the D-number is a valid personal number, False otherwise.
-    str: The formatted personal number.
-    """
-
-    is_personal_number = True
-    # Remove whitespace to get the original D-number
-    dnumber = re.sub(r'\s*', '', dnumber)
-
-    # Extract the day, month, year, and sequence parts
-    day = int(dnumber[:2])
-    month = int(dnumber[2:4])
-    year = int(dnumber[4:6])
-    sequence = int(dnumber[6:11])
-    
-    # The first digit of the day should be in the range 4-7
-    if day < 40 or day > 71:
-        is_personal_number = False
-    
-    # Validate control digits using the modulus 11 algorithm
-    # Remove the added 4 to get the original day part for control digit calculation
-    day -= 40
-    
-    # Concatenate the original parts
-    personal_number = f'{day:02d}{month:02d}{year:02d}{sequence}'
-
-    return is_personal_number, personal_number
-
-
-def find_overlapping_matches(pattern, text):
-    matches = []
-    for match in re.finditer(pattern, text):
-        matches.append(match.group(0))
-        # Move the start position forward to look for overlaps
-        start = match.start() + 1
-        while start < start + 10:
-            match = re.search(pattern, text[start:])
-            if match:
-                matches.append(match.group(0))
-                start += match.start() + 1
-            else:
-                break
-    return matches
 
 def find_matches(text):
     """
-    Find matches in a text using regular expressions.
+    Find and validate Norwegian fødselsnummer and D-numbers in a text, handling various formats.
 
     Parameters:
     text (str): The text to search for matches.
 
     Returns:
-    list: A list of matches with corresponding tag and index.
+    list: A list of matches with corresponding tag ('fødselsnummer' or 'D-number') and index.
     """
-    pattern_personummer = re.compile(
-                                        r'^(?:0[1-9]|[12][0-9]|3[01])\s*'  # Day (01-31)
-                                        r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
-                                        r'\d\s*\d\s*'
-                                        r'\d\s*\d\s*\d\s*\d\s*\d'        # Five additional digits
-                                    )
-    
-    pattern_dnummer = re.compile(
-                                    r'^[4-7]\s*'                        # Leading digit (4, 5, 6, or 7)
-                                    r'(?:[0-9])\s*'                    # Single digit day (0-9)
-                                    r'(?:0[1-9]|1[0-2])\s*'            # Month (01-12)
-                                    r'\d\s*\d\s*'                      # Year (00-99)
-                                    r'\d\s*\d\s*\d\s*\d\s*\d'            # Five additional digits
-                                )
-
-    patterns = [pattern_personummer, pattern_dnummer]
-    categories = ['personnummer', 'dnummer']
+    # Regular expression to match numbers with optional separators
+    pattern = re.compile(
+        r'(?:\d(?:\D)?){6}\D{0,3}(?:\d(?:\D)?){5}'
+    )
     tagged_matches = []
     index = 0
 
-    for pattern, tag in zip(patterns, categories):
-        matches = find_overlapping_matches(pattern, text)
-        for match in matches:
-            
-            if tag == 'dnummer':
-                is_personal_number, match_f = format_dnumber(match)
-                if is_personal_number and check_controldigits(match_f):
-                    tagged_matches.append([match, tag, index])
-                    index += 1
+    matches = pattern.findall(text)
 
-            if tag == 'personnummer' and check_controldigits(match):
-                tagged_matches.append([match, tag, index])
-                index += 1
+    # print("##\nMatches: \n", matches, "\n##")
+
+    for match in matches:
+        # Remove all non-digit characters to get continuous digits
+        fnr = re.sub(r'\D', '', match)
+
+        if len(fnr) != 11 or not fnr.isdigit():
+            continue  # Skip invalid matches
+
+        day_str = fnr[:2]
+        month_str = fnr[2:4]
+        year_str = fnr[4:6]
+
+        # Check if it's a D-number (day between 41 and 71)
+        day = int(day_str)
+        is_d_number = False
+        if 41 <= day <= 71:
+            day -= 40
+            is_d_number = True
+
+        # Build the birth date string
+        birth_date_str = f"{day:02d}{month_str}{year_str}"
+
+        # Attempt to parse the birth date
+        try:
+            datetime.strptime(birth_date_str, '%d%m%y')
+        except ValueError:
+            continue  # Invalid date, skip this match
+
+        # Validate control digits
+        if check_control_digits(fnr):
+            tag = 'dnummer' if is_d_number else 'personnummer'
+            tagged_matches.append([match.strip(), tag, index])
+            index += 1
 
     return tagged_matches
 
 
-def apply_regex_search(bounding_boxes, text):
+def sort_bounding_boxes(df, k=0.025):
     """
-    Get bounding boxes for matches found in a text.
+    Sort bounding boxes by reading order.
 
     Parameters:
-    tagged_matches (list): A list of matches with corresponding tag and index.
-    bounding_boxes (pd.DataFrame): A DataFrame containing the bounding boxes.
+    df (pd.DataFrame): DataFrame containing bounding boxes with columns 'left', 'top', 'width', 'height', 'text'.
+    k (float): Tweakable parameter to adjust the influence of the 'left' coordinate on the sorting.
+               Higher values of 'k' give more weight to boxes on the left, even if they are slightly lower.
 
     Returns:
-    list: A list of bounding boxes for the matches.
+    pd.DataFrame: Sorted DataFrame.
     """
-    tagged_matches = find_matches(text)
+    # Create a copy of the DataFrame to avoid SettingWithCopyWarning
+    df = df.copy()
 
-    matches_list = []
+    # Compute a weighted top coordinate
+    df['weighted_top'] = df['top'] + (df['left'] * k)
 
-    for i in tagged_matches:
-        splitted = False
-        sep_matches = re.split(r'\s+', i[0])
+    # Sort by weighted top and then by left coordinate
+    df_sorted = df.sort_values(by=['weighted_top', 'left'], ascending=[True, True]).reset_index(drop=True)
 
-        if len(sep_matches[-1]) == 5:
-            splitted = True
-            matches_list.append([sep_matches[-1], i[1], i[2], splitted])
-        
-        else:
-            matches_list.append([i[0], i[1], i[2], splitted])
+    # Drop the temporary 'weighted_top' column
+    df_sorted = df_sorted.drop(columns='weighted_top')
 
-    bbs = []
-    for match in matches_list:
-        pattern = re.compile(re.escape(match[0]), re.IGNORECASE)
-        # Initialize a list to collect bounding boxes for each match
-        match_bbs = []
-
-        for index, row in bounding_boxes.iterrows():
-            if pattern.search(row['text']):
-                if match[3]:
-                    loc = [row['height'], row['width'], row['left'], row['top']]
-                else:
-                    loc = [row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']]
-                match_bbs.append(loc)
-        
-        # Extend the main bounding boxes list with all matches found for this pattern
-        bbs.extend(match_bbs)
-
-    bbs_clean = []
-    for bb in bbs:
-        if bb not in bbs_clean:
-            bbs_clean.append(bb)
-
-    return bbs_clean
+    return df_sorted
 
 
-def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2):
+def apply_regex_search(bounding_boxes, text):
+    """
+    Get bounding boxes for the last 5 digits of matches found in a text,
+    considering cases where the matched text spans multiple bounding boxes.
+
+    Parameters:
+    bounding_boxes (pd.DataFrame): A DataFrame containing the bounding boxes with 'text', 'left', 'top', 'width', 'height' columns.
+    text (str): The text to search for matches.
+
+    Returns:
+    list: A list of bounding boxes for the last 5 digits of the matches.
+    """
+
+    # Find matches in the text
+    tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
+
+    bounding_boxes = sort_bounding_boxes(bounding_boxes)
+
+    # print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
+
+    # Initialize a list to collect all bounding boxes for the last 5 digits
+    bounding_boxes_list = []
+    processed_coords = set()  # To keep track of coordinates already added
+
+    # For each match
+    for match in tagged_matches:
+        full_match_text = match[0].strip()  # e.g., '11 11 11 11111'
+        last_five_digits = ''.join(re.findall(r'\d', full_match_text))[-5:]  # Get last 5 digits
+
+        # Initialize variables for sliding window
+        num_boxes = len(bounding_boxes)
+        max_window_size = min(11, num_boxes)  # Adjust based on expected match length
+
+        # Slide over bounding boxes
+        for start_idx in range(num_boxes):
+            for window_size in range(1, max_window_size + 1):
+                end_idx = start_idx + window_size
+                if end_idx > num_boxes:
+                    break
+
+                # Get the text from the current window of bounding boxes
+                window_boxes = bounding_boxes.iloc[start_idx:end_idx]
+                window_text = ' '.join(window_boxes['text']).strip()
+
+                # Remove multiple spaces
+                window_text_normalized = re.sub(r'\s+', ' ', window_text)
+
+                # Check if the window text matches the full match text
+                if re.search(re.escape(full_match_text), window_text_normalized, re.IGNORECASE):
+                    # Now, find bounding boxes for last 5 digits
+                    # Concatenate texts and keep track of character positions
+                    cumulative_text = ''
+                    cumulative_lengths = []
+                    for idx, text_piece in enumerate(window_boxes['text']):
+                        cumulative_text += text_piece
+                        cumulative_lengths.append(len(cumulative_text))
+
+                    # Find the position of last 5 digits in the cumulative text
+                    last_five_digits_start = cumulative_text.rfind(last_five_digits)
+                    if last_five_digits_start == -1:
+                        continue
+                    last_five_digits_end = last_five_digits_start + len(last_five_digits)
+
+                    # Map these positions back to the bounding boxes
+                    last_five_bbs = []
+                    char_idx = 0
+                    for i, text_piece in enumerate(window_boxes['text']):
+                        length = len(text_piece)
+                        box_start = char_idx
+                        box_end = char_idx + length
+                        if last_five_digits_start < box_end and last_five_digits_end > box_start:
+                            # The last 5 digits are in this bounding box
+                            bb = window_boxes.iloc[i]
+
+                            # Determine overlap
+                            overlap_start = max(last_five_digits_start, box_start)
+                            overlap_end = min(last_five_digits_end, box_end)
+                            overlap_length = overlap_end - overlap_start
+                            box_text_length = box_end - box_start
+
+                            # Adjust the bounding box
+                            if box_text_length == overlap_length:
+                                # Entire bounding box corresponds to last 5 digits
+                                adjusted_bb = {
+                                    'height': bb['height'],
+                                    'width': bb['width'],
+                                    'left': bb['left'],
+                                    'top': bb['top']
+                                }
+                            else:
+                                # Need to split the bounding box
+                                char_width = bb['width'] / box_text_length
+                                new_left = bb['left'] + char_width * (overlap_start - box_start)
+                                new_width = char_width * overlap_length
+                                adjusted_bb = {
+                                    'height': bb['height'],
+                                    'width': new_width,
+                                    'left': new_left,
+                                    'top': bb['top']
+                                }
+
+                            last_five_bbs.append(adjusted_bb)
+
+                        char_idx = box_end  # Update character index for next bounding box
+
+                    if last_five_bbs:
+                        # Check distances between bounding boxes
+                        last_five_bbs = sorted(last_five_bbs, key=lambda x: x['left'])
+
+                        distances = []
+                        for j in range(len(last_five_bbs) - 1):
+                            bb_current = last_five_bbs[j]
+                            bb_next = last_five_bbs[j + 1]
+                            distance = bb_next['left'] - (bb_current['left'] + bb_current['width'])
+                            distances.append(distance)
+
+                        max_distance = max(distances) if distances else 0
+
+                        if max_distance <= MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES:  # Threshold in pixels
+                            # Merge bounding boxes
+                            left = min(bb['left'] for bb in last_five_bbs)
+                            top = min(bb['top'] for bb in last_five_bbs)
+                            right = max(bb['left'] + bb['width'] for bb in last_five_bbs)
+                            bottom = max(bb['top'] + bb['height'] for bb in last_five_bbs)
+                            width = right - left
+                            height = bottom - top
+
+                            merged_bb = [height, width, left, top]
+
+                            # Create a tuple of coordinates to check for duplicates
+                            coord_tuple = tuple(merged_bb)
+                            if coord_tuple not in processed_coords:
+                                bounding_boxes_list.append(merged_bb)
+                                processed_coords.add(coord_tuple)
+                        else:
+                            # Discard bounding boxes as they are too far apart
+                            print("Discarded bounding boxes due to large distance:", max_distance)
+                            pass
+
+                    # Continue searching for other occurrences; do not break
+    # print("##\nBounding boxes list: \n", bounding_boxes_list, "\n##")
+    return bounding_boxes_list
+
+
+def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor=0.2):
     """
     Scales all bounding boxes in a list by a given ratio.
 
@@ -502,7 +564,8 @@ def scale_and_pad_all_bounding_boxes(bounding_boxes, ratio, padding_factor = 0.2
 
     return scaled_boxes
 
-def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
+
+def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3, 7]):
     """
     Apply keyword search to a DataFrame of bounding boxes.
 
@@ -515,9 +578,81 @@ def apply_keyword_search(bounding_boxes, num_indexes=3, num_closest=[3,7]):
     list: A list of bounding boxes.
     """
 
-    predicted_boxes_keyword = get_bbs_from_keywords(bounding_boxes, num_indexes = num_indexes, num_closest_above = num_closest[0], num_closest_below=num_closest[1])
+    predicted_boxes_keyword = get_bbs_from_keywords(bounding_boxes, num_indexes=num_indexes, num_closest_above=num_closest[0], num_closest_below=num_closest[1])
 
     return predicted_boxes_keyword
+
+
+def find_closest_bounding_boxes_general(
+        df,
+        search_word,
+        num_closest=10,
+        num_closest_above=None,
+        num_closest_below=None,
+):
+    """
+    General function to find the closest bounding boxes to a word in a DataFrame.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the bounding boxes.
+    search_word (str): The word to search for.
+    num_closest (int, optional): The number of closest bounding boxes to find.
+    num_closest_above (int, optional): The number of closest bounding boxes above the word.
+    num_closest_below (int, optional): The number of closest bounding boxes below the word.
+
+    Returns:
+    pd.DataFrame: A DataFrame containing the closest bounding boxes.
+    """
+    # Make a copy to avoid modifying the original DataFrame
+    df_copy = df.copy()
+
+    # Precompute centers
+    df_copy['center_x'] = df_copy['left'] + df_copy['width'] / 2
+    df_copy['center_y'] = df_copy['top'] + df_copy['height'] / 2
+
+    # Search for all instances of the word in the DataFrame
+    word_rows = df_copy[df_copy['text'] == search_word]
+
+    if word_rows.empty:
+        return False
+
+    # Create a list to hold the closest bounding boxes for each instance of the search word
+    all_closest_boxes = []
+
+    for _, word_row in word_rows.iterrows():
+        # Get the center coordinates of the word
+        word_center_x = word_row['center_x']
+        word_center_y = word_row['center_y']
+
+        # Compute distances to all other centers
+        df_copy['distance'] = np.sqrt(pd.to_numeric((df_copy['center_x'] - word_center_x) ** 2 + (df_copy['center_y'] - word_center_y) ** 2))
+
+        # Exclude the word itself
+        df_excl_word = df_copy[df_copy['text'] != search_word]
+
+        if num_closest_above is not None and num_closest_below is not None:
+            # Filter boxes above and below
+            above_boxes = df_excl_word[df_excl_word['top'] < word_row['top']]
+            below_boxes = df_excl_word[df_excl_word['top'] >= word_row['top']]
+
+            # Sort by distance and select closest bounding boxes
+            closest_above_boxes = above_boxes.nsmallest(num_closest_above, 'distance')
+            closest_below_boxes = below_boxes.nsmallest(num_closest_below, 'distance')
+
+            # Append to the list
+            all_closest_boxes.append(closest_above_boxes)
+            all_closest_boxes.append(closest_below_boxes)
+        else:
+            # Get the closest bounding boxes
+            closest_boxes = df_excl_word.nsmallest(num_closest, 'distance')
+            all_closest_boxes.append(closest_boxes)
+
+    # Concatenate all closest boxes DataFrames into one DataFrame
+    closest_boxes_df = (
+        pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
+    )
+
+    return closest_boxes_df
 
 
 def find_closest_bounding_boxes(df, search_word, num_closest=10):
@@ -532,39 +667,8 @@ def find_closest_bounding_boxes(df, search_word, num_closest=10):
     Returns:
     pd.DataFrame: A DataFrame containing the closest bounding boxes.
     """
+    return find_closest_bounding_boxes_general(df, search_word, num_closest=num_closest)
 
-    # Search for all instances of the word in the DataFrame
-    word_rows = df[df['text'] == search_word]
-
-    if word_rows.empty:
-        return False
-
-    # Create a list to hold the closest bounding boxes for each instance of the search word
-    all_closest_boxes = []
-
-    # Calculate distances and find closest bounding boxes
-    for _, word_row in word_rows.iterrows():
-        # Get the bounding box coordinates of the found word
-        word_bbox = word_row[['left', 'top', 'width', 'height']].values
-        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
-
-        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
-        def calculate_distance(row):
-            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
-            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
-
-        df['distance'] = df.apply(calculate_distance, axis=1)
-
-        # Sort by distance and select the five closest bounding boxes (excluding the word itself)
-        closest_boxes = df[df['text'] != search_word].sort_values(by='distance').head(num_closest)
-
-        # Append the closest boxes for this instance to the list
-        all_closest_boxes.append(closest_boxes)
-
-    # Concatenate all closest boxes DataFrames into one DataFrame
-    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
-
-    return closest_boxes_df
 
 def find_closest_bounding_boxes_constrained(df, search_word, num_closest_above=3, num_closest_below=7):
     """
@@ -573,51 +677,18 @@ def find_closest_bounding_boxes_constrained(df, search_word, num_closest_above=3
     Parameters:
     df (pd.DataFrame): The DataFrame containing the bounding boxes.
     search_word (str): The word to search for.
-    num_closest_above (int): The number of closest bounding boxes to find above the word.
-    num_closest_below (int): The number of closest bounding boxes to find below the word.
+    num_closest_above (int): The number of closest bounding boxes above the word.
+    num_closest_below (int): The number of closest bounding boxes below the word.
 
     Returns:
     pd.DataFrame: A DataFrame containing the closest bounding boxes.
     """
-
-    # Search for all instances of the word in the DataFrame
-    word_rows = df[df['text'] == search_word]
-
-    if word_rows.empty:
-        return False
-
-    # Create a list to hold the closest bounding boxes for each instance of the search word
-    all_closest_boxes = []
-
-    # Calculate distances and find closest bounding boxes
-    for _, word_row in word_rows.iterrows():
-        # Get the bounding box coordinates of the found word
-        word_bbox = word_row[['left', 'top', 'width', 'height']].values
-        word_center = (word_bbox[0] + word_bbox[2] / 2, word_bbox[1] + word_bbox[3] / 2)
-
-        # Calculate the Euclidean distance from the found word's center to all other bounding boxes' centers
-        def calculate_distance(row):
-            bbox_center = (row['left'] + row['width'] / 2, row['top'] + row['height'] / 2)
-            return np.sqrt((word_center[0] - bbox_center[0])**2 + (word_center[1] - bbox_center[1])**2)
-
-        df['distance'] = df.apply(calculate_distance, axis=1)
-
-        # Filter the boxes above and below
-        above_boxes = df[(df['top'] < word_row['top']) & (df['text'] != search_word)]
-        below_boxes = df[(df['top'] >= word_row['top']) & (df['text'] != search_word)]
-
-        # Sort by distance and select the closest bounding boxes for above and below
-        closest_above_boxes = above_boxes.sort_values(by='distance').head(num_closest_above)
-        closest_below_boxes = below_boxes.sort_values(by='distance').head(num_closest_below)
-
-        # Append the closest boxes for this instance to the list
-        all_closest_boxes.append(closest_above_boxes)
-        all_closest_boxes.append(closest_below_boxes)
-
-    # Concatenate all closest boxes DataFrames into one DataFrame
-    closest_boxes_df = pd.concat(all_closest_boxes).drop_duplicates().reset_index(drop=True)
-
-    return closest_boxes_df
+    return find_closest_bounding_boxes_general(
+        df,
+        search_word,
+        num_closest_above=num_closest_above,
+        num_closest_below=num_closest_below,
+    )
 
 
 def get_levenshtein_distance(s1, s2):
@@ -675,13 +746,13 @@ def can_be_ssn(s):
     # Return 'last_five' if the string is 4 or 5 digits long and contains more than 2 digits
     if len(s) == 5 and int_count > 3:
         return 'last_five'
-    
+
     # Return 'whole_number' if the string is 10 or 11 digits long and contains more than 9 digits
-    if len(s) > 9 and len(s) < 14 and int_count > 9: 
+    if len(s) > 9 and len(s) < 14 and int_count > 9:
         return 'whole_number'
-        
+
     return False
-    
+
 
 def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, num_closest_below=7):
     """
@@ -695,7 +766,7 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
     """
 
     bounding_boxes = bounding_boxes.reset_index()
-    
+
     indexes = []
     predicted_boxes = []
     for keyword in keywords:
@@ -705,29 +776,27 @@ def get_bbs_from_keywords(bounding_boxes, num_indexes=3, num_closest_above=3, nu
 
     for index, keyword_ in indexes:
 
-        for next in range(index, index+num_indexes):
+        for next in range(index, index + num_indexes):
             if next < len(bounding_boxes):
-                check  = can_be_ssn(bounding_boxes.iloc[next]['text'])
+                check = can_be_ssn(bounding_boxes.iloc[next]['text'])
                 if check == 'last_five':
                     row = bounding_boxes.iloc[next]
                     predicted_boxes.append([row['height'], row['width'], row['left'], row['top']])
 
                 if check == 'whole_number':
                     row = bounding_boxes.iloc[next]
-                    predicted_boxes.append([row['height'], 0.45*row['width'], row['left'] + 0.55*row['width'], row['top']])
-
+                    predicted_boxes.append([row['height'], 0.45 * row['width'], row['left'] + 0.55 * row['width'], row['top']])
 
         closest_bbs = find_closest_bounding_boxes_constrained(bounding_boxes, bounding_boxes.iloc[index]['text'], num_closest_above=num_closest_above, num_closest_below=num_closest_below)
 
         for row in closest_bbs.iterrows():
-            check  = can_be_ssn(row[1]['text'])
+            check = can_be_ssn(row[1]['text'])
             if check == 'last_five':
                 predicted_boxes.append([row[1]['height'], row[1]['width'], row[1]['left'], row[1]['top']])
 
             if check == 'whole_number':
-                predicted_boxes.append([row[1]['height'], 0.45*row[1]['width'], row[1]['left'] + 0.55*row[1]['width'], row[1]['top']])
-                
-            
+                predicted_boxes.append([row[1]['height'], 0.45 * row[1]['width'], row[1]['left'] + 0.55 * row[1]['width'], row[1]['top']])
+
     return predicted_boxes
 
 
@@ -763,25 +832,24 @@ def calculate_iou(boxes_a, boxes_b):
     return box_iou(torch.tensor(boxes_a_copy), torch.tensor(boxes_b_copy)).numpy()
 
 
-def remove_overlapping_boxes(predicted_boxes, iou_threshold = 0.2):
-
+def remove_overlapping_boxes(predicted_boxes, iou_threshold=0.2):
     clean_predicted_boxes = []
 
     for page in predicted_boxes:
 
         if len(page) > 0:
-            
+
             iou_matrix = calculate_iou(page, page)
 
             remove_indexes_page = []
-            #Search only over the diagonl of the matrix
+            # Search only over the diagonl of the matrix
 
             num_rows, num_cols = iou_matrix.shape
 
             for i in range(num_rows):
                 for j in range(i + 1, num_cols):
                     if iou_matrix[i][j] > iou_threshold:
-                        
+
                         area_i = page[i][0] * page[i][1]
                         area_j = page[j][0] * page[j][1]
 
@@ -821,11 +889,13 @@ def ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_t
     if run_tesseract:
         text_tess, bounding_boxes_tess = apply_tesseractocr(image, tess_config, elektronisk_tinglyst)
         text_parts.append(text_tess)
+        bounding_boxes_tess['type'] = 'tesseract'
         bounding_boxes_parts.append(bounding_boxes_tess)
     
     if run_easyocr:
         text_easy, bounding_boxes_easy = apply_easyocr(image, languages, elektronisk_tinglyst)
         text_parts.append(text_easy)
+        bounding_boxes_easy['type'] = 'easyocr'
         bounding_boxes_parts.append(bounding_boxes_easy)
 
     text = " ".join(text_parts)

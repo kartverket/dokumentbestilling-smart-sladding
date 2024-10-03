@@ -17,6 +17,11 @@ cd smart_sladding_ml
 pip install -r requirements.txt
 ```
 
+Last ned Poppler `brew install poppler`
+Last ned Tesseract `brew install tesseract`
+
+NB: Hvis du får SSL-problematikk på Mac, så kan du sjekke ut denne Stack Overflow-responsen https://stackoverflow.com/a/57795811
+
 ## How to test
 
 ### Teste modellen for ett dokument
@@ -26,9 +31,8 @@ predicted_boxes = get_predicted_boxes_on_doc(doc_id, "https://dokumentbestilling
 ```
 Denne funksjonen returnerer de predikerte avgrensingsboksene og lagrer et bilde med disse.
 
-### Evaluere et sett med flere dokumenter
-For å evaluere flere dokumenter kjører man:
-```sh
-total_results, total_tp, total_fp, total_fn, df_results = evaluate_model(document_folder, labels_csv, docids_csv, savefolder_name)
-```
-Denne funksjonen returnerer total_results (en liste med metrics per side per dokument), total_tp (totalt antall true positives), total_fp (totalt antall false positives), total_fn (totalt antall false negatives) og df_results (dataframe med antall true positives, false positives og false negatives per dokument). Funksjonen trenger document_folder (path til mappen med de nedlastede dokumentene), labels_cv (path til en .csv fil med de labella boksene per dokument), docids_csv (path til en .csv fil med dokument id til de ulike dokumentene som skal bli evaluert) og savefolder_name (path til en folder der bilder av de evaluerte dokumentene blir lagret).
+### Evaluere på flere dokumenter
+For å evaluere modellen på flere dokumenter, kan man kjøre `evaluation_main.py`. Denne filen tar inn en liste med dokumenter og kjører modellen på disse.  
+Hvis du oppdaterer `current_model_version_number`, så vil en ny minor version gjøre at den kjører reglene på nytt, men med cachet OCR-lesing. Ved ny major-versjon, så vil den kjøre OCR-lesing på nytt.  
+
+Første gang du kjører evaluering, vil du måtte kjøre OCR på alle dokumenter. Dette tar ofte mange(8+) timer for 1400 dokumenter.

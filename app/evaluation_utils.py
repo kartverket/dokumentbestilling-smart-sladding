@@ -1,9 +1,6 @@
 import numpy as np
-import torch
-from torchvision.ops import box_iou
 import matplotlib.pyplot as plt
 import PyPDF2
-import pandas as pd
 import model_main
 import ast
 from pdf2image import convert_from_path, convert_from_bytes
@@ -437,7 +434,11 @@ def get_predicted_boxes_on_doc(docid, base_url):
     """
 
     # Download the PDF file
-    pdf_bytes = model_utils.download_pdf(docid, base_url)
+    #pdf_bytes = model_utils.download_pdf(docid, base_url)
+
+    # Load document bytes from dokument.pdf
+    with open(f'valideringssett/all_documents/{docid}.pdf', 'rb') as f:
+        pdf_bytes = f.read()
 
     # Get the predicted bounding boxes
     predicted_boxes, image_dimensions = model_main.model(pdf_bytes)
@@ -453,15 +454,16 @@ def get_predicted_boxes_on_doc(docid, base_url):
 
     # Save the images with the bounding boxes
     for i, image in enumerate(images_with_bb):
-        image.savefig(f'predicted_boxes_{docid}_page_{i}.png')
+        image.savefig(f'app/predicted_boxes/{docid}_page_{i}.png')
 
     return predicted_boxes_scaled
 
 
 if __name__ == "__main__":
-
-    #Run prediction on document '2023_62529_200' and save the images with the predicted bounding boxes
-    predicted_boxes = get_predicted_boxes_on_doc('2023_62529_200', "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
-
-    #Run prediction on document '1980_619_29' and save the images with the predicted bounding boxes
-    predicted_boxes = get_predicted_boxes_on_doc('1980_619_29', "https://dokumentbestilling-smart-sladding-manual.atkv3-dev.kartverket-intern.cloud/pantebok")
+    predicted_boxes = get_predicted_boxes_on_doc('1980_14847_101', "")
+    predicted_boxes = get_predicted_boxes_on_doc('1980_1349_50', "")
+    predicted_boxes = get_predicted_boxes_on_doc('1980_3856_18', "")
+    predicted_boxes = get_predicted_boxes_on_doc('2000_9000027_200', "")
+    predicted_boxes = get_predicted_boxes_on_doc('2012_52_200', "")
+    predicted_boxes = get_predicted_boxes_on_doc('2013_98_200', "")
+    predicted_boxes = get_predicted_boxes_on_doc('1980_2784_27', "")

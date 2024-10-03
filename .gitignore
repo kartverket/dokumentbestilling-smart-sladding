@@ -5,3 +5,12 @@ venv/
 __pycache__/
 *.pyc
 tests/__pycache__/
+.env
+app/dokumenter/**
+app/predicted_boxes/**
+valideringssett/all_documents/
+valideringssett/organized_labels_all.csv
+valideringssett/results/**/**/images
+valideringssett/results/**/**/bbs
+valideringssett/results/**/**/texts
+tmp/
