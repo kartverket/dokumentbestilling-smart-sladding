@@ -61,7 +61,7 @@ def download_pdf(document_url):
     return response.content
 
 
-def convert_pdf_bytes_to_images(pdf_bytes):
+def convert_pdf_bytes_to_images(pdf_bytes, only_first_page=False):
     """
     Convert a PDF file to a list of images.
 
@@ -78,7 +78,8 @@ def convert_pdf_bytes_to_images(pdf_bytes):
     width, height = images[0].size
     dimensions = (width, height)
 
-    return images, dimensions
+    # Only get the first image of the document
+    return (images[:1] if only_first_page else images, dimensions)
 
 
 def pil_to_cv2(image):
@@ -366,34 +367,6 @@ def find_matches(text):
 
     return tagged_matches
 
-
-def sort_bounding_boxes(df, k=0.025):
-    """
-    Sort bounding boxes by reading order.
-
-    Parameters:
-    df (pd.DataFrame): DataFrame containing bounding boxes with columns 'left', 'top', 'width', 'height', 'text'.
-    k (float): Tweakable parameter to adjust the influence of the 'left' coordinate on the sorting.
-               Higher values of 'k' give more weight to boxes on the left, even if they are slightly lower.
-
-    Returns:
-    pd.DataFrame: Sorted DataFrame.
-    """
-    # Create a copy of the DataFrame to avoid SettingWithCopyWarning
-    df = df.copy()
-
-    # Compute a weighted top coordinate
-    df['weighted_top'] = df['top'] + (df['left'] * k)
-
-    # Sort by weighted top and then by left coordinate
-    df_sorted = df.sort_values(by=['weighted_top', 'left'], ascending=[True, True]).reset_index(drop=True)
-
-    # Drop the temporary 'weighted_top' column
-    df_sorted = df_sorted.drop(columns='weighted_top')
-
-    return df_sorted
-
-
 def apply_regex_search(bounding_boxes, text):
     """
     Get bounding boxes for the last 5 digits of matches found in a text,
@@ -409,8 +382,6 @@ def apply_regex_search(bounding_boxes, text):
 
     # Find matches in the text
     tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
-
-    bounding_boxes = sort_bounding_boxes(bounding_boxes)
 
     # print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
 
@@ -815,8 +786,8 @@ def calculate_iou(boxes_a, boxes_b):
     """
     Calculates the Intersection over Union (IoU) between two lists of boxes.
     Parameters:
-        box_a (list): A list containing lists of coordinates on the form [height, width, left, top].
-        box_b (list): A list containing lists of coordinates on the form [height, width, left, top].
+        boxes_a (list): A list containing lists of coordinates on the form [height, width, left, top].
+        boxes_b (list): A list containing lists of coordinates on the form [height, width, left, top].
     Returns:
         np.array: A matrix containing the IoU between the boxes in box_a and box_b.
     """

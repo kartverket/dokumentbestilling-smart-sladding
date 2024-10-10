@@ -10,6 +10,7 @@ import time
 header_printing_interval = 20
 header_text = f'{"Index":<5} {"Time(s)":<8} {"Document":<20} {"Pages":<6} {"TP":<3} {"FP":<3} {"FN":<3} {"Total Time(s)":<13} {"Total TP":<9} {"Total FP":<9} {"Total FN":<9} {"Precision":<10} {"Recall":<10} {"F1":<10} {"Accuracy":<10}'
 
+
 def get_precision(tp, fp):
     return round(tp / (tp + fp), 2)
 
@@ -22,10 +23,14 @@ def get_f1(precision, recall):
     return round(2 * (precision * recall) / (precision + recall), 2)
 
 
+def flatten(xss):
+    return [x for xs in xss for x in xs]
+
+
 def get_accuracy(tp, fp, fn):
     return round(tp / (tp + fp + fn), 2)
 
-def evaluate_model(current_model_version_number, document_folder, labels_csv, docids_csv, savefolder_name):
+def evaluate_model(current_model_version_number, document_folder, labels_csv, docids_csv, savefolder_name, filter_docids_file_ref=None):
     """
     Evaluate the model on a set of documents and save the images with bounding boxes(ground truth and predicted) and the text extracted from the documents.
 
@@ -54,6 +59,11 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
     current_results = pd.DataFrame([], columns=['Document', 'Page', 'Time(s)', 'TP', 'FP', 'FN'])
     try:
         current_results = pd.read_csv(results_path)
+        if filter_docids_file_ref is not None:
+            with open(filter_docids_file_ref, 'r') as file:
+                filter_docids = file.read().splitlines()
+            current_results = current_results[current_results['Document'].isin(filter_docids)].reset_index(drop=True)
+
         for index, row in current_results.iterrows():
             if index % header_printing_interval == 0:
                 print(header_text)
@@ -71,6 +81,11 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
     if not os.path.exists(f'{major_versioned_savefolder_name}/texts'):
         os.makedirs(f'{major_versioned_savefolder_name}/texts')
 
+    if filter_docids_file_ref is not None:
+        with open(filter_docids_file_ref, 'r') as file:
+            filter_docids = file.read().splitlines()
+        docids_df = docids_df[docids_df['docid'].isin(filter_docids)].reset_index(drop=True)
+
     for index, row in docids_df.iterrows():
         if row['docid'] in current_results['Document'].values:
             continue
@@ -86,7 +101,7 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
 
         true_labels = labels_df[labels_df['docid'] == docid]
 
-        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, image_dimensions = model_main.extended_model(
+        images, all_text, model_bbs, predicted_boxes, predicted_keyword, predicted_regex, predicted_hjemmel, image_dimensions = model_main.extended_model(
             pdf_bytes,
             save_bbs_path=major_versioned_savefolder_name + f'/bbs/{docid}',
             save_text_path=major_versioned_savefolder_name + f'/texts/{docid}'
@@ -124,7 +139,7 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
         results = evaluation_utils.metrics_perdocument(metrics_list)
 
         # images_with_bbs = evaluation_utils.visualize_bounding_boxes(images_true, predicted_boxes, true_boxes_doc)
-        images_with_bbs = evaluation_utils.visualize_bounding_boxes_detailed(images_true, model_bbs, true_boxes_doc, predicted_keyword, predicted_regex, show=False)
+        images_with_bbs = evaluation_utils.visualize_bounding_boxes_detailed(images_true, model_bbs, true_boxes_doc, predicted_keyword, predicted_regex, predicted_hjemmel, show=False)
 
         for i, img in enumerate(images_with_bbs):
             img.savefig(f'{versioned_savefolder_name}/images/{docid}_{i}.png')
@@ -135,7 +150,10 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
             'Time(s)': round(time.time() - time0, 1),
             'TP': results['TP'],
             'FP': results['FP'],
-            'FN': results['FN']
+            'FN': results['FN'],
+            'hasRegexBbs': len(flatten(predicted_regex)) > 0,
+            'hasKeywordBbs': len(flatten(predicted_keyword)) > 0,
+            'hasHjemmelBbs': len(flatten(predicted_hjemmel)) > 0
         }, index=[0])], ignore_index=True)
         current_results.to_csv(results_path, index=False)
 
@@ -149,7 +167,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 if __name__ == '__main__':
-    current_model_version_number = "1.0"
+    current_model_version_number = "1.17"
 
     evaluate_model(
         current_model_version_number,
@@ -159,7 +177,8 @@ if __name__ == '__main__':
         "valideringssett/all_docids.csv",
 
         #Output:
-        "valideringssett/results"
+        "valideringssett/results",
+        #'valideringssett/filter_lists/only_docs_with_hjemmel.txt'
     )
 
 ## RESULTS ALL DOCUMENTS

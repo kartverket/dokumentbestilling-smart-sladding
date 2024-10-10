@@ -6,6 +6,7 @@ import ast
 from pdf2image import convert_from_path, convert_from_bytes
 import fitz
 import model_utils
+from url_utils import api_base_url
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.2):
     """
@@ -21,6 +22,15 @@ def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.2):
     unmatched_preds: np.array, shape=(m, 4), m is the number of unmatched predicted bboxes in one page, 4 is the number of bbox coordinates.
     metrics: dict, contains the number of True Positives (TP), False Positives (FP) and Predicted Score (PS).
     """
+
+    for true_bbox in true_bboxes:
+        # If negative height or width, convert to positive and adjust left and top
+        if true_bbox[0] < 0:
+            true_bbox[0] = abs(true_bbox[0])
+            true_bbox[3] = true_bbox[3] - true_bbox[0]
+        if true_bbox[1] < 0:
+            true_bbox[1] = abs(true_bbox[1])
+            true_bbox[2] = true_bbox[2] - true_bbox[1]
 
     num_true_bboxes = len(true_bboxes)
     num_pred_bboxes = len(predicted_bboxes)
@@ -273,11 +283,11 @@ def visualize_bounding_boxes(images, predicted_bboxes, true_bboxes):
             if label == 'True':
                 edgecolor = 'green'
                 linestyle = '-'
-                legend_label = 'True (label)'
+                legend_label = 'True'
             if label == 'Predicted':
                 edgecolor = 'red'
                 linestyle = '--'
-                legend_label = 'Predicted (label)'
+                legend_label = 'Predicted'
 
             rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2, linestyle=linestyle,
                                  edgecolor=edgecolor, facecolor="none", label=legend_label)
@@ -293,7 +303,7 @@ def visualize_bounding_boxes(images, predicted_bboxes, true_bboxes):
 
     return images_with_bb
 
-def visualize_bounding_boxes_detailed(images, all_bbs, true_bbs, pred_key, pred_regex, show=False):
+def visualize_bounding_boxes_detailed(images, all_bbs, true_bbs, pred_key, pred_regex, pred_hjemmel, show=False):
     """
     Visualize bounding boxes on images.
 
@@ -323,6 +333,8 @@ def visualize_bounding_boxes_detailed(images, all_bbs, true_bbs, pred_key, pred_
             combined_bbs += [(bb, 'Predicted keyword') for bb in pred_key[i]]
         if i < len(pred_regex):
             combined_bbs += [(bb, 'Predicted regex') for bb in pred_regex[i]]
+        if i < len(pred_hjemmel):
+            combined_bbs += [(bb, 'Predicted hjemmel') for bb in pred_hjemmel[i]]
 
         # Plot each bounding box with appropriate label and color
         for bb, label in combined_bbs:
@@ -336,12 +348,16 @@ def visualize_bounding_boxes_detailed(images, all_bbs, true_bbs, pred_key, pred_
                 legend_label = 'True (label)'
             if label == 'Predicted regex':
                 edgecolor = 'red'
-                linestyle = '--'
+                linestyle = ':'
                 legend_label = 'Predicted regex (label)'
             if label == 'Predicted keyword':
                 edgecolor = 'blue'
-                linestyle = '-'
+                linestyle = ':'
                 legend_label = 'Predicted keyword (label)'
+            if label == 'Predicted hjemmel':
+                edgecolor = 'purple'
+                linestyle = ':'
+                legend_label = 'Predicted hjemmel (label)'
 
             rect = plt.Rectangle((bb[2], bb[3]), bb[1], bb[0], linewidth=2, linestyle=linestyle,
                                  edgecolor=edgecolor, facecolor="none", label=legend_label)
@@ -388,7 +404,7 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
                             [total_fn, 0]])
 
     # Labels for each cell
-    group_names = ['True Positive', 'False Positive', 'False Negative','True Negative']
+    group_names = ['True Positive', 'False Positive', 'False Negative', 'True Negative']
     group_counts = ["{0:0.0f}".format(value) for value in conf_matrix.flatten()]
     group_percentages = ["{0:.2%}".format(value) for value in conf_matrix.flatten() / np.sum(conf_matrix)]
     labels = (np.asarray(["{}\n{}\n{}".format(name, count, pct) for name, count, pct in zip(group_names, group_counts, group_percentages)])).reshape(2,2)
@@ -420,7 +436,7 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
     plt.show()
 
 
-def get_predicted_boxes_on_doc(docid, base_url):
+def get_predicted_boxes_on_doc(docid, cache_path):
     """
     Get the predicted bounding boxes for a document.
     Need to be on kartverket VPN to download documents and therefore also to run this function.
@@ -434,23 +450,35 @@ def get_predicted_boxes_on_doc(docid, base_url):
     """
 
     # Download the PDF file
-    #pdf_bytes = model_utils.download_pdf(docid, base_url)
 
     # Load document bytes from dokument.pdf
-    with open(f'valideringssett/all_documents/{docid}.pdf', 'rb') as f:
-        pdf_bytes = f.read()
+    try:
+        with open(f'valideringssett/all_documents/{docid}.pdf', 'rb') as f:
+            pdf_bytes = f.read()
+    except FileNotFoundError:
+        pdf_bytes = model_utils.download_pdf(f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false')
 
     # Get the predicted bounding boxes
-    predicted_boxes, image_dimensions = model_main.model(pdf_bytes)
+    (images,
+     all_text,
+     model_bbs,
+     predicted_boxes,
+     predicted_keyword,
+     predicted_regex,
+     predicted_hjemmel,
+     image_dimensions) = model_main.extended_model(
+        pdf_bytes,
+        save_bbs_path=f'{cache_path}/bbs/{docid}',
+        save_text_path=f'{cache_path}/texts/{docid}',
+        debug_print=True,
+        only_first_page=True
+    )
 
     # Get the dimensions of the PDF file
     predicted_boxes_scaled = model_utils.scale_and_pad_all_bounding_boxes(predicted_boxes, ratio=1)
 
-    # Convert the PDF file to images
-    images, dimensions = convert_pdf_bytes_to_images(pdf_bytes)
-
     # Get the images with the bounding boxes painted on them
-    images_with_bb = visualize_bounding_boxes(images, predicted_boxes_scaled, [])
+    images_with_bb = visualize_bounding_boxes_detailed(images, model_bbs, [], predicted_keyword, predicted_regex, predicted_hjemmel, show=True)
 
     # Save the images with the bounding boxes
     for i, image in enumerate(images_with_bb):
@@ -460,10 +488,38 @@ def get_predicted_boxes_on_doc(docid, base_url):
 
 
 if __name__ == "__main__":
-    predicted_boxes = get_predicted_boxes_on_doc('1980_14847_101', "")
-    predicted_boxes = get_predicted_boxes_on_doc('1980_1349_50', "")
-    predicted_boxes = get_predicted_boxes_on_doc('1980_3856_18', "")
-    predicted_boxes = get_predicted_boxes_on_doc('2000_9000027_200', "")
-    predicted_boxes = get_predicted_boxes_on_doc('2012_52_200', "")
-    predicted_boxes = get_predicted_boxes_on_doc('2013_98_200', "")
-    predicted_boxes = get_predicted_boxes_on_doc('1980_2784_27', "")
+    cache_path = 'valideringssett/results/1'
+
+
+
+    ## HJG
+    #get_predicted_boxes_on_doc('2022_446714_200', cache_path)
+    #get_predicted_boxes_on_doc('1993_4626_86', cache_path)
+    #get_predicted_boxes_on_doc('1992_2274_65', cache_path)
+    #get_predicted_boxes_on_doc('1991_59180_105', cache_path)
+    #get_predicted_boxes_on_doc('2012_343635_200', cache_path)
+
+
+    get_predicted_boxes_on_doc('2023_11320_200', cache_path)
+
+#get_predicted_boxes_on_doc('1998_3150_83', cache_path)
+    #get_predicted_boxes_on_doc('1999_6065_29', cache_path)
+    #get_predicted_boxes_on_doc('1999_5623_20', cache_path)
+    #get_predicted_boxes_on_doc('1999_17454_8', cache_path)
+    #get_predicted_boxes_on_doc('1999_17092_101', cache_path)
+    #get_predicted_boxes_on_doc('2007_807050_200', cache_path)
+    #get_predicted_boxes_on_doc('2007_1021672_200', cache_path)
+    #get_predicted_boxes_on_doc('2008_27321_201', cache_path)
+    #get_predicted_boxes_on_doc('2001_27621_105', cache_path)
+    #get_predicted_boxes_on_doc('2002_6521_90', cache_path)
+    #get_predicted_boxes_on_doc('2003_377_79', cache_path)
+
+
+
+    #get_predicted_boxes_on_doc('1980_14847_101', cache_path)
+    #get_predicted_boxes_on_doc('1980_1349_50', cache_path)
+    #get_predicted_boxes_on_doc('1980_3856_18', cache_path)
+    #get_predicted_boxes_on_doc('2000_9000027_200', cache_path)
+    #get_predicted_boxes_on_doc('2012_52_200', cache_path)
+    #get_predicted_boxes_on_doc('2013_98_200', cache_path)
+    #get_predicted_boxes_on_doc('1980_2784_27', cache_path)
