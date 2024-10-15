@@ -490,36 +490,11 @@ def get_predicted_boxes_on_doc(docid, cache_path):
 if __name__ == "__main__":
     cache_path = 'valideringssett/results/1'
 
+    # Run get_predicted_boxes_on_doc to get the predicted bounding boxes for a document. This is a great debugging tool.
 
-
-    ## HJG
+    ### Examples to test hjemmel_search ###
     #get_predicted_boxes_on_doc('2022_446714_200', cache_path)
     #get_predicted_boxes_on_doc('1993_4626_86', cache_path)
     #get_predicted_boxes_on_doc('1992_2274_65', cache_path)
     #get_predicted_boxes_on_doc('1991_59180_105', cache_path)
     #get_predicted_boxes_on_doc('2012_343635_200', cache_path)
-
-
-    get_predicted_boxes_on_doc('2023_11320_200', cache_path)
-
-#get_predicted_boxes_on_doc('1998_3150_83', cache_path)
-    #get_predicted_boxes_on_doc('1999_6065_29', cache_path)
-    #get_predicted_boxes_on_doc('1999_5623_20', cache_path)
-    #get_predicted_boxes_on_doc('1999_17454_8', cache_path)
-    #get_predicted_boxes_on_doc('1999_17092_101', cache_path)
-    #get_predicted_boxes_on_doc('2007_807050_200', cache_path)
-    #get_predicted_boxes_on_doc('2007_1021672_200', cache_path)
-    #get_predicted_boxes_on_doc('2008_27321_201', cache_path)
-    #get_predicted_boxes_on_doc('2001_27621_105', cache_path)
-    #get_predicted_boxes_on_doc('2002_6521_90', cache_path)
-    #get_predicted_boxes_on_doc('2003_377_79', cache_path)
-
-
-
-    #get_predicted_boxes_on_doc('1980_14847_101', cache_path)
-    #get_predicted_boxes_on_doc('1980_1349_50', cache_path)
-    #get_predicted_boxes_on_doc('1980_3856_18', cache_path)
-    #get_predicted_boxes_on_doc('2000_9000027_200', cache_path)
-    #get_predicted_boxes_on_doc('2012_52_200', cache_path)
-    #get_predicted_boxes_on_doc('2013_98_200', cache_path)
-    #get_predicted_boxes_on_doc('1980_2784_27', cache_path)

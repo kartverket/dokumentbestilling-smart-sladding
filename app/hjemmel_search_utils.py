@@ -139,7 +139,7 @@ def apply_hjemmel_search(bounding_boxes, debug_print=False):
             concatted_string_of_potential_bbs = all_potential_bbs['text'].str.cat(sep='').strip()
 
             # This prints the bounding box of the current row for debugging purposes
-            if len(rows) == -1: # TODO: HERE
+            if len(rows) == -1: # Change -1 to the index of the row you want to print
                 bbs_hjemmel.append([max_bottom_edge - min_top_edge, max_right_edge - min_left_edge, min_left_edge, min_top_edge])
 
             if debug_print:
@@ -194,11 +194,7 @@ def apply_hjemmel_search(bounding_boxes, debug_print=False):
                 if should_break:
                     break
 
-            # print("Potential bbs:", all_potential_bbs[['height', 'width', 'left', 'top']].values.tolist())
-
             rows.append(all_potential_bbs[['height', 'width', 'left', 'top']].values.tolist())
-
-            # print("Rows:", rows)
 
         # Remove first row, as it is the subheader (fødselsnummer etc.)
         if len(rows) > 0:
@@ -222,18 +218,10 @@ def apply_hjemmel_search(bounding_boxes, debug_print=False):
         if len(row_bbs) == 0:
             continue
 
-        min_left = min([r[2] for r in row_bbs])
-        max_right = max([r[2] + r[1] for r in row_bbs])
+        min_left = min([row_bb[2] for row_bb in row_bbs])
+        max_right = max([row_bb[2] + row_bb[1] for row_bb in row_bbs])
         width = (max_right - min_left)
-        row_bbs_final = [[r[0], width * 0.45, min_left + width * 0.55, r[3]] for r in row_bbs]
+        row_bbs_final = [[row_bb[0], width * 0.45, min_left + width * 0.55, row_bb[3]] for row_bb in row_bbs]
         bbs_hjemmel.extend(row_bbs_final)
-
-        '''
-        index = 2
-        #rows = [item for sublist in rows for item in sublist if len(sublist) > 0]
-        row_to_add = rows[index] if len(rows) > index else []
-        if len(row_to_add) > 0:
-            bbs_hjemmel.extend(row_to_add)
-        '''
 
     return bbs_hjemmel

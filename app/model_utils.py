@@ -330,8 +330,6 @@ def find_matches(text):
 
     matches = pattern.findall(text)
 
-    # print("##\nMatches: \n", matches, "\n##")
-
     for match in matches:
         # Remove all non-digit characters to get continuous digits
         fnr = re.sub(r'\D', '', match)
@@ -382,8 +380,6 @@ def apply_regex_search(bounding_boxes, text):
 
     # Find matches in the text
     tagged_matches = find_matches(text)  # Should return a list of tuples: (match_text, tag, index)
-
-    # print("##\nBounding boxes: \n", bounding_boxes.to_string(), "\n##")
 
     # Initialize a list to collect all bounding boxes for the last 5 digits
     bounding_boxes_list = []
@@ -505,7 +501,6 @@ def apply_regex_search(bounding_boxes, text):
                             pass
 
                     # Continue searching for other occurrences; do not break
-    # print("##\nBounding boxes list: \n", bounding_boxes_list, "\n##")
     return bounding_boxes_list
 
 

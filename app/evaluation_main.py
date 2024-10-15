@@ -23,8 +23,8 @@ def get_f1(precision, recall):
     return round(2 * (precision * recall) / (precision + recall), 2)
 
 
-def flatten(xss):
-    return [x for xs in xss for x in xs]
+def flatten_matrix(matrix):
+    return [item for sublist in matrix for item in sublist]
 
 
 def get_accuracy(tp, fp, fn):
@@ -151,9 +151,9 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
             'TP': results['TP'],
             'FP': results['FP'],
             'FN': results['FN'],
-            'hasRegexBbs': len(flatten(predicted_regex)) > 0,
-            'hasKeywordBbs': len(flatten(predicted_keyword)) > 0,
-            'hasHjemmelBbs': len(flatten(predicted_hjemmel)) > 0
+            'hasRegexBbs': len(flatten_matrix(predicted_regex)) > 0,
+            'hasKeywordBbs': len(flatten_matrix(predicted_keyword)) > 0,
+            'hasHjemmelBbs': len(flatten_matrix(predicted_hjemmel)) > 0
         }, index=[0])], ignore_index=True)
         current_results.to_csv(results_path, index=False)
 
@@ -178,6 +178,8 @@ if __name__ == '__main__':
 
         #Output:
         "valideringssett/results",
+
+        # To only include specific documents in the evaluation, include this parameter with the path to the file containing the document IDs.
         #'valideringssett/filter_lists/only_docs_with_hjemmel.txt'
     )
 
