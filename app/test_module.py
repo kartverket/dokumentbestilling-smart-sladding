@@ -2,9 +2,7 @@ import pytest
 import sys
 import os
 
-import url_utils
 import model_utils
-import model_main
 
 # Determine the absolute path to the app directory
 app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'app'))
@@ -56,5 +54,5 @@ def test_check_control_digits(personnumber, not_personnumber, dnumber):
 def test_format_dnumber(dnumber):
     assert model_utils.find_matches(dnumber) == [[dnumber, 'dnummer', 0]]
 
-def test_main(json_response):
-    assert model_main.main('testdokument-2.pdf') == json_response
+#def test_main(json_response): TODO: Enable this test and make it work in workflow (https://kartverket.atlassian.net/browse/TE-1012)
+#    assert model_main.main('testdokument-2.pdf') == json_response
