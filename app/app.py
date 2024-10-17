@@ -1,6 +1,7 @@
 import requests
 import model_main
 from url_utils import database_base_url, api_base_url
+import uuid
 
 def hentDokumenterTilSladding():
     dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
@@ -24,11 +25,11 @@ def hentDokumenterTilSladding():
 
         transformed_sladdinger = [
             {
+                'id': str(uuid.uuid4()),
                 'dokumentaar': dokumentaar,
                 'dokumentnummer': dokumentnummer,
                 'embetenummer': embetenummer,
                 'sidetall': sladding.get('page'),
-                'index': i,
                 'type': 'PERSONNUMMER',
                 'height': sladding.get('height'),
                 'width': sladding.get('width'),
