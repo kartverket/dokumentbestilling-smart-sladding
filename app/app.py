@@ -18,8 +18,9 @@ def hentDokumenterTilSladding():
 
         docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
-        print(f'Kjører modell på: {docid}')
-        sladdinger = model_main.main(docid, f'{api_base_url()}intern/pantebok/gjenpart')
+        url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}'
+        print(f'Kjører modell på: {url}')
+        sladdinger = model_main.main(url)
 
         transformed_sladdinger = [
             {
