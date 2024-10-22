@@ -1,6 +1,7 @@
 import cv2
 import easyocr
 import matplotlib.pyplot as plt
+import logging
 
 from pdf2image import convert_from_path
 
@@ -62,7 +63,7 @@ for page_num, image in enumerate(images, start=1):
     plt.show()
 
     # Print the recognized text
-    print(f'--- Text from Page {page_num} ---')
+    logging.info(f'--- Text from Page {page_num} ---')
     for bbox, text, confidence in result:
-        print(f'Text: {text} | Confidence: {confidence:.2f}')
-    print('\n')
+        logging.info(f'Text: {text} | Confidence: {confidence:.2f}')
+    logging.info('\n')

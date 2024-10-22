@@ -5,6 +5,7 @@ import model_main
 import pandas as pd
 import model_utils
 import time
+import logging
 
 
 header_printing_interval = 20
@@ -66,11 +67,11 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
 
         for index, row in current_results.iterrows():
             if index % header_printing_interval == 0:
-                print(header_text)
+                logging.info(header_text)
 
             all_curr_results = current_results.head(index + 1)
             table_text = f'{index:<5} {row["Time(s)"]:<8} {row["Document"]:<20} {row["Page"]:<6} {row["TP"]:<3} {row["FP"]:<3} {row["FN"]:<3} {round(all_curr_results["Time(s)"].sum(), 1):<13} {round(all_curr_results["TP"].sum(), 2):<9} {round(all_curr_results["FP"].sum(), 2):<9} {round(all_curr_results["FN"].sum(), 2):<9} {get_precision(all_curr_results["TP"].sum(), all_curr_results["FP"].sum()):<10} {get_recall(all_curr_results["TP"].sum(), all_curr_results["FN"].sum()):<10} {get_f1(get_precision(all_curr_results["TP"].sum(), all_curr_results["FP"].sum()), get_recall(all_curr_results["TP"].sum(), all_curr_results["FN"].sum())):<10} {get_accuracy(all_curr_results["TP"].sum(), all_curr_results["FP"].sum(), all_curr_results["FN"].sum()):<10}'
-            print(table_text)
+            logging.info(table_text)
     except FileNotFoundError:
         pass
 
@@ -132,8 +133,8 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
 
                 matched_boxes, unmatched_preds, metrics = evaluation_utils.match_bboxes(true_boxes_page, predicted_boxes_page)
                 metrics_list.append(metrics)
-            except:
-                print(f"No boxes on page {i + 1}")
+            except IndexError:
+                logging.error(f"No boxes on page {i + 1}")
             true_boxes_doc.append(true_boxes_page)
 
         results = evaluation_utils.metrics_perdocument(metrics_list)
@@ -158,15 +159,23 @@ def evaluate_model(current_model_version_number, document_folder, labels_csv, do
         current_results.to_csv(results_path, index=False)
 
         if index % header_printing_interval == 0:
-            print(header_text)
+            logging.info(header_text)
 
         table_text = f'{index:<5} {round(time.time() - time0, 1):<8} {docid:<20} {page_count:<6} {results["TP"]:<3} {results["FP"]:<3} {results["FN"]:<3} {round(time.time() - total_time, 1):<13} {current_results["TP"].sum():<9} {current_results["FP"].sum():<9} {current_results["FN"].sum():<9} {get_precision(current_results["TP"].sum(), current_results["FP"].sum()):<10} {get_recall(current_results["TP"].sum(), current_results["FN"].sum()):<10} {get_f1(get_precision(current_results["TP"].sum(), current_results["FP"].sum()), get_recall(current_results["TP"].sum(), current_results["FN"].sum())):<10} {get_accuracy(current_results["TP"].sum(), current_results["FP"].sum(), current_results["FN"].sum()):<10}'
-        print(table_text)
+        logging.info(table_text)
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+
     current_model_version_number = "1.17"
 
     evaluate_model(

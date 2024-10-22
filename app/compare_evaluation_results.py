@@ -1,4 +1,5 @@
 import pandas as pd
+import logging
 
 def compare_results(path1, path2, version1='1.11', version2='1.12', filter_docids_file_ref=None):
     # Load results from both models
@@ -80,8 +81,8 @@ def compare_results(path1, path2, version1='1.11', version2='1.12', filter_docid
     summary_table.set_index(('', 'Document'), inplace=True)
 
     # Print the summary table
-    print("Summary of Model Comparisons:")
-    print(summary_table)
+    logging.info("Summary of Model Comparisons:")
+    logging.info(summary_table)
 
     # Use MultiIndex column names for calculations and selections
     # Calculations for overall insights
@@ -90,15 +91,15 @@ def compare_results(path1, path2, version1='1.11', version2='1.12', filter_docid
     better_v2 = (summary_table[('', 'Better_Model')] == version2).sum()
     equal = (summary_table[('', 'Better_Model')] == 'Equal').sum()
 
-    print(f"\nTotal Documents Compared: {total_docs}")
-    print(f"Documents where Model {version1} is better: {better_v1}")
-    print(f"Documents where Model {version2} is better: {better_v2}")
-    print(f"Documents where both models perform equally: {equal}")
+    logging.info(f"\nTotal Documents Compared: {total_docs}")
+    logging.info(f"Documents where Model {version1} is better: {better_v1}")
+    logging.info(f"Documents where Model {version2} is better: {better_v2}")
+    logging.info(f"Documents where both models perform equally: {equal}")
 
     avg_time_v1 = summary_table[(version1, 'Time(s)')].mean()
     avg_time_v2 = summary_table[(version2, 'Time(s)')].mean()
-    print(f"\nAverage Processing Time for Model {version1}: {avg_time_v1:.2f}s")
-    print(f"Average Processing Time for Model {version2}: {avg_time_v2:.2f}s")
+    logging.info(f"\nAverage Processing Time for Model {version1}: {avg_time_v1:.2f}s")
+    logging.info(f"Average Processing Time for Model {version2}: {avg_time_v2:.2f}s")
 
     # Identify documents with significant discrepancies
     discrepancies = summary_table[summary_table[('', 'Better_Model')] != 'Equal']
@@ -107,19 +108,27 @@ def compare_results(path1, path2, version1='1.11', version2='1.12', filter_docid
     better_v1_docs = discrepancies[discrepancies[('', 'Better_Model')] == version1]
     better_v2_docs = discrepancies[discrepancies[('', 'Better_Model')] == version2]
 
-    print(f"\nDocuments where Model {version1} is better:")
-    print(better_v1_docs[[
+    logging.info(f"\nDocuments where Model {version1} is better:")
+    logging.info(better_v1_docs[[
         (version1, 'TP'), (version1, 'FP'), (version1, 'FN'),
         (version2, 'TP'), (version2, 'FP'), (version2, 'FN'),
     ]])
 
-    print(f"\nDocuments where Model {version2} is better:")
-    print(better_v2_docs[[
+    logging.info(f"\nDocuments where Model {version2} is better:")
+    logging.info(better_v2_docs[[
         (version1, 'TP'), (version1, 'FP'), (version1, 'FN'),
         (version2, 'TP'), (version2, 'FP'), (version2, 'FN'),
     ]])
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+
     compare_results(
         "valideringssett/results/1/1.16",
         "valideringssett/results/1/1.17",

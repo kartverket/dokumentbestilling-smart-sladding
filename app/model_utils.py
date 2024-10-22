@@ -12,6 +12,7 @@ from torchvision.ops import box_iou
 import copy as cp
 import numpy as np
 import pandas as pd
+import logging
 
 MAX_DISTANCE_BETWEEN_MERGED_BOUNDING_BOXES = 50
 
@@ -54,9 +55,9 @@ def download_pdf(document_url):
     response = requests.get(document_url)
 
     if response.status_code == 200:
-        print("PDF downloaded successfully.")
+        logging.info("PDF downloaded successfully.")
     else:
-        print("Failed to download file. HTTP Status Code:", response.status_code)
+        logging.error("Failed to download file. HTTP Status Code:", response.status_code)
 
     return response.content
 
@@ -497,7 +498,7 @@ def apply_regex_search(bounding_boxes, text):
                                 processed_coords.add(coord_tuple)
                         else:
                             # Discard bounding boxes as they are too far apart
-                            print("Discarded bounding boxes due to large distance:", max_distance)
+                            logging.debug(f"Discarded bounding boxes due to large distance: {max_distance}")
                             pass
 
                     # Continue searching for other occurrences; do not break

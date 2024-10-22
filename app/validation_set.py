@@ -3,6 +3,7 @@ import pandas as pd
 import evaluation_utils
 import model_utils
 from url_utils import api_base_url
+import logging
 
 
 def download_and_save_pdf(document_url, filename):
@@ -19,9 +20,9 @@ def download_and_save_pdf(document_url, filename):
         response_content = model_utils.download_pdf(document_url)
         with open(filename, 'wb') as file:
             file.write(response_content)
-        print("PDF downloaded successfully.")
+        logging.info("PDF downloaded successfully.")
     except Exception as e:
-        print("Failed to download file.")
+        logging.error(f"Failed to download PDF: {e}")
 
     return filename
 
@@ -43,7 +44,7 @@ def download_all_documents(docids_csv_path, save_folder_path, base_url):
 
     # Create the save folder if it does not exist
     try:
-        print("Creating folder to save documents:", save_folder_path)
+        logging.info(f"Creating folder to save documents: {save_folder_path}")
         os.mkdir(save_folder_path)
         # Download and save each document
         for doc in df_doc_ids:
@@ -52,7 +53,7 @@ def download_all_documents(docids_csv_path, save_folder_path, base_url):
 
 
     except FileExistsError:
-        print("Folder already exists. Delete folder and try again.")
+        logging.error("Folder already exists. Please delete the folder and try again.")
         pass
 
 
@@ -110,8 +111,8 @@ def organize_bounding_boxes(path_to_labels, path_to_bestilling_tinglyst_dokument
             bbs_all.append(bbs_doc)
             docs_all.append(doc_id)
 
-        except:
-            print(f"Document {doc_id} not found.")
+        except FileNotFoundError:
+            logging.error(f"FileNotFoundError: Document {doc_id} not found.")
 
     # Make a new df from bbs_all and docs_all
     df = pd.DataFrame({
@@ -153,6 +154,14 @@ def get_validation_set_main(tinglyst_dokument_cvs_path, path_to_labels, save_doc
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+
     docids_csv_file_path = '../valideringssett/all_docids.csv'
 
     save_documents_path = '../valideringssett/all_documents'
