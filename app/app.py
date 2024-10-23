@@ -1,61 +1,45 @@
-import requests
+import logging
+from flask import Flask, jsonify, request
 import model_main
-from url_utils import database_base_url, api_base_url
-import uuid
+import zipped_timed_rotating_file_handler
+import os
+from dotenv import load_dotenv
 
-def hentDokumenterTilSladding():
-    dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
+app = Flask(__name__)
 
-    if dokumenter.status_code != 200:
-        print(f'Kunne ikke hente ubehandlede dokumenter. Statuskode: {dokumenter.status_code}')
-        raise Exception('Kunne ikke hente ubehandlede dokumenter')
+load_dotenv()
+base_url = os.getenv('DOKUMENT_URL', default='http://localhost:3000/pantebok')
 
-    print(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
 
-    for dokument in dokumenter.json():
-        dokumentaar = dokument.get('dokumentaar')
-        dokumentnummer = dokument.get('dokumentnummer')
-        embetenummer = dokument.get('embetenummer')
+@app.route('/health')
+def health():
+    return jsonify(health="healthy")
 
-        docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
-        url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
-        print(f'Kjører modell på: {url}')
-        sladdinger = model_main.main(url)
+@app.route('/model', methods=['POST'])
+def get_bounding_boxes():
 
-        transformed_sladdinger = [
-            {
-                'id': str(uuid.uuid4()),
-                'dokumentaar': dokumentaar,
-                'dokumentnummer': dokumentnummer,
-                'embetenummer': embetenummer,
-                'sidetall': sladding.get('page'),
-                'type': 'PERSONNUMMER',
-                'height': sladding.get('height'),
-                'width': sladding.get('width'),
-                'x': sladding.get('x'),
-                'y': sladding.get('y'),
-                'mlGenerated': True,
-                'mlStatus': ''
-            }
-            for i, sladding in enumerate(sladdinger)
-        ]
+    if not request.data:
+        return jsonify({'error': 'No data provided in the request body'}), 400
 
-        if (transformed_sladdinger != []):
-            response = requests.put(f'{database_base_url()}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}', json=transformed_sladdinger)
+    try:
+        pdf_file_stream = request.get_data()
+        bounding_boxes_result = model_main.run_model_on_pdf_bytes(pdf_file_stream)
 
-            if response.status_code == 200:
-                print(f'Sendt sladdinger for dokument: {docid} til databasen')
-            else:
-                print(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen. Statuskode: {response.status_code}')
+        return jsonify(bounding_boxes_result)
 
-        response = requests.patch(f'{database_base_url()}/dokument_behandlet', json=dokument)
-
-        if response.status_code == 200:
-            print(f'Merket dokument: {docid} som behandlet')
-        else:
-            print(f'Kunne ikke merke dokument: {docid} som behandlet. Statuskode: {response.status_code}')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
-    hentDokumenterTilSladding()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("logs/app.log", when="midnight", backupCount=30),
+            logging.StreamHandler()
+        ]
+    )
+
+    app.run(host='localhost', port=5070)

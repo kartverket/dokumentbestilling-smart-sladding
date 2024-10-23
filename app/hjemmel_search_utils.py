@@ -1,13 +1,14 @@
 import pandas as pd
 import regex
 import re
+import logging
 
 def matches_within_one_edit(pattern, string):
     fuzzy_pattern = r'(?e)(?:' + pattern + '){e<=1}'
     match = regex.search(fuzzy_pattern, string, regex.IGNORECASE)
     return match is not None
 
-def apply_hjemmel_search(bounding_boxes, debug_print=False):
+def apply_hjemmel_search(bounding_boxes):
     bbs_hjemmel = []
 
     table_header_map = {
@@ -62,8 +63,7 @@ def apply_hjemmel_search(bounding_boxes, debug_print=False):
         header_bb = [height, adjusted_width, adjusted_left, top]
         # bbs_hjemmel.append(header_bb) # This adds the header as a bounding box for debugging purposes
 
-        if debug_print:
-            print(f"\nProcessing table header '{table_header_key}' at index {index}")
+        logging.debug(f"\nProcessing table header '{table_header_key}' at index {index}")
 
 
         tolerance_percentage_left = 0.1
@@ -142,8 +142,7 @@ def apply_hjemmel_search(bounding_boxes, debug_print=False):
             if len(rows) == -1: # Change -1 to the index of the row you want to print
                 bbs_hjemmel.append([max_bottom_edge - min_top_edge, max_right_edge - min_left_edge, min_left_edge, min_top_edge])
 
-            if debug_print:
-                print("Concatted string of potential bbs:", concatted_string_of_potential_bbs, "extended:", extended_bbs_text_list)
+            logging.debug(f"Concatted string of potential bbs: {concatted_string_of_potential_bbs} | extended: {extended_bbs_text_list}")
 
             concatted_string_of_potential_bbs = all_potential_bbs['text'].str.cat(sep='').strip()
 

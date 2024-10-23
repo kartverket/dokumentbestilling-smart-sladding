@@ -11,3 +11,9 @@ def database_base_url():
         return 'http://localhost:8000/'
     else:
         return os.getenv('DATABASE_URL')
+
+def model_base_url():
+    if os.getenv('MODEL_URL') == None:
+        return 'http://localhost:5070/'
+    else:
+        return os.getenv('MODEL_URL')

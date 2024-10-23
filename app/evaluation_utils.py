@@ -7,6 +7,7 @@ from pdf2image import convert_from_path, convert_from_bytes
 import fitz
 import model_utils
 from url_utils import api_base_url
+import logging
 
 def match_bboxes(true_bboxes, predicted_bboxes, iou_threshold=0.2):
     """
@@ -393,11 +394,11 @@ def get_metrics_and_cm(total_tp, total_fp, total_fn):
     recall = total_tp / (total_tp + total_fn)
     f1 = 2 * (precision * recall) / (precision + recall)
 
-    print('Precision:', precision)
-    print('Recall:', recall)
-    print('F1:', f1)
-    print('Accuracy:', total_tp/(total_tp + total_fp + total_fn))
-    print('Percent of true positives:', total_tp/(total_tp + total_fn))
+    logging.info('Precision:', precision)
+    logging.info('Recall:', recall)
+    logging.info('F1:', f1)
+    logging.info('Accuracy:', total_tp/(total_tp + total_fp + total_fn))
+    logging.info('Percent of true positives:', total_tp/(total_tp + total_fn))
 
     # Define the confusion matrix
     conf_matrix = np.array([[total_tp, total_fp], 
@@ -470,7 +471,6 @@ def get_predicted_boxes_on_doc(docid, cache_path):
         pdf_bytes,
         save_bbs_path=f'{cache_path}/bbs/{docid}',
         save_text_path=f'{cache_path}/texts/{docid}',
-        debug_print=True,
         only_first_page=True
     )
 
@@ -488,6 +488,15 @@ def get_predicted_boxes_on_doc(docid, cache_path):
 
 
 if __name__ == "__main__":
+    logging.getLogger('matplotlib.font_manager').disabled = True
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+
     cache_path = 'valideringssett/results/1'
 
     # Run get_predicted_boxes_on_doc to get the predicted bounding boxes for a document. This is a great debugging tool.

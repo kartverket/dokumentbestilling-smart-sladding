@@ -12,3 +12,4 @@ valideringssett/all_documents/
 valideringssett/organized_labels_all.csv
 valideringssett/results/**
 tmp/
+logs/**
