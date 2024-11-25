@@ -30,7 +30,9 @@ def hentDokumenterTilSladding():
 
         try:
             response = requests.post(model_url, data=pdf_bytes)
+            logging.info(f'Response from model: {response}')
             sladdinger = response.json()
+            logging.info(f'Sladdinger: {sladdinger}')
         except Exception as e:
             logging.error(f'Kunne ikke kjøre modell på dokument: {document_url}. Feilmelding: {str(e)}')
             continue
