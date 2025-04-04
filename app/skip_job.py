@@ -56,20 +56,12 @@ def hentDokumenterTilSladding():
         ]
 
         if (transformed_sladdinger != []):
-            response = requests.put(f'{database_base_url()}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}', json=transformed_sladdinger)
+            response = requests.put(f'{database_base_url()}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}?mlFerdigBehandlet=true', json=transformed_sladdinger)
 
             if response.status_code == 200:
-                logging.info(f'Sendt sladdinger for dokument: {docid} til databasen')
+                logging.info(f'Sendt sladdinger for dokument: {docid} til databasen og markert som mlFerdigBehandlet')
             else:
                 logging.error(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen. Statuskode: {response.status_code}')
-
-        response = requests.patch(f'{database_base_url()}/dokument_behandlet', json=dokument)
-
-        if response.status_code == 200:
-            logging.info(f'Merket dokument: {docid} som behandlet')
-        else:
-            logging.error(f'Kunne ikke merke dokument: {docid} som behandlet. Statuskode: {response.status_code}')
-
 
 if __name__ == '__main__':
     # Logging basic config, save log as json
