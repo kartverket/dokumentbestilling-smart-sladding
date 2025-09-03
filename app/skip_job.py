@@ -25,7 +25,7 @@ def hentDokumenterTilSladding():
             logging.error(f'Kunne ikke hente status for dokument: {dokumentaar}_{dokumentnummer}_{embetenummer}. Statuskode: {dokumentStatus.status_code}')
             continue
 
-        if dokumentStatus.content != 'KLAR_FOR_BEHANDLING:':
+        if dokumentStatus.content != '"KLAR_FOR_BEHANDLING"':
             logging.info(f'Status form dokument: {dokumentaar}_{dokumentnummer}_{embetenummer} er endret. Hopper over.')
             continue
 
