@@ -19,6 +19,16 @@ def hentDokumenterTilSladding():
         dokumentnummer = dokument.get('dokumentnummer')
         embetenummer = dokument.get('embetenummer')
 
+        dokumentStatus = requests.get(f'{database_base_url()}/dokumentstatus/{dokumentaar}/{dokumentnummer}/{embetenummer}')
+
+        if dokumentStatus.status_code != 200:
+            logging.error(f'Kunne ikke hente status for dokument: {dokumentaar}_{dokumentnummer}_{embetenummer}. Statuskode: {dokumentStatus.status_code}')
+            continue
+
+        if dokumentStatus.content != 'KLAR_FOR_BEHANDLING:':
+            logging.info(f'Status form dokument: {dokumentaar}_{dokumentnummer}_{embetenummer} er endret. Hopper over.')
+            continue
+
         docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
         document_url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
