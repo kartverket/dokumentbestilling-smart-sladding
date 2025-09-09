@@ -1,13 +1,11 @@
 version: 2
-registries:
-  # Vedlikehold avhengigheter for GitHub Actions
+updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
 
-  # Vedlikehold avhengigheter for Docker
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
