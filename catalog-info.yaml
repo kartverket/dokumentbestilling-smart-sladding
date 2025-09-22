@@ -9,7 +9,7 @@ metadata:
 spec:
   type: "service"
   lifecycle: "production"
-  owner: "eiendom"
+  owner: "eiet"
   providesApis:
   - "smart_sladding_ml-api"
 ---
@@ -48,7 +48,7 @@ metadata:
 spec:
   type: "openapi"
   lifecycle: "production"
-  owner: "eiendom"
+  owner: "eiet"
   definition: |
     openapi: "3.0.0"
     info:
