@@ -39,7 +39,7 @@ def hentDokumenterTilSladding():
         logging.info(f'Kjører modell på dokument: {document_url}')
 
         try:
-            response = requests.post(model_url, data=pdf_bytes)
+            response = requests.post(model_url, data=pdf_bytes, headers={'Content-Type': 'application/pdf'})
             logging.info(f'Response from model: {response}')
             sladdinger = response.json()
             logging.info(f'Sladdinger: {sladdinger}')
