@@ -37,6 +37,7 @@ jobs:
 
       - name: 'Build and Push Python Image'
         run: |
+          cd job
           IMAGE_TAG=ghcr.io/${{ github.repository }}:${{ github.sha }}
           docker build -t $IMAGE_TAG .
           docker push $IMAGE_TAG
@@ -61,4 +62,3 @@ jobs:
       namespace_prefix: dokumentbestilling
       version_file: smart-sladding-version
       application: dokumentbestilling-smart-sladding
-

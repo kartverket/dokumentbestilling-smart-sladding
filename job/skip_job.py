@@ -1,5 +1,5 @@
 import requests
-import model_main
+import pdf_utils
 from url_utils import database_base_url, api_base_url, model_base_url
 import uuid
 import logging
@@ -32,7 +32,7 @@ def hentDokumenterTilSladding():
         docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
         document_url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
-        pdf_bytes = model_main.get_pdf_bytes(document_url)
+        pdf_bytes = pdf_utils.get_pdf_bytes(document_url)
 
         model_url = f'{model_base_url()}/model'
 
