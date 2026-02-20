@@ -32,14 +32,16 @@ def get_bounding_boxes():
         return jsonify({'error': str(e)}), 500
 
 
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("logs/app.log", when="midnight", backupCount=30),
-            logging.StreamHandler()
-        ]
-    )
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("logs/app.log", when="midnight", backupCount=30),
+        logging.StreamHandler()
+    ]
+)
 
-    app.run(host='localhost', port=5070)
+if __name__ == '__main__':
+    # For development only - use gunicorn for production
+    app.run(host='localhost', port=5070, debug=True)

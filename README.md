@@ -52,6 +52,12 @@ unzip latin_g2.zip
 unzip craft_mlt_25k.zip
 ```
 
+6. For production / test så kjører vi appen med gunicorn:
+```sh
+cd app
+chmod +x start_production.sh 
+```
+
 NB: Hvis du får SSL-problematikk på Mac, så kan du sjekke ut denne Stack Overflow-responsen https://stackoverflow.com/a/57795811
 
 ## How to test
