@@ -40,6 +40,15 @@ def hentDokumenterTilSladding():
         try:
             pdf_bytes = pdf_utils.get_pdf_bytes(document_url)
             logging.info(f'✓ Successfully retrieved PDF: {len(pdf_bytes)} bytes')
+        except ValueError as e:
+            # Check if document is protected/restricted (skjermet)
+            if "SKJERMET_DOCUMENT" in str(e):
+                logging.info(f'ℹ Document {docid} is protected (skjermet), skipping')
+                continue
+            # Other errors
+            logging.error(f'✗ Failed to retrieve PDF for dokument: {docid}')
+            logging.error(f'Error: {str(e)}')
+            continue
         except Exception as e:
             logging.error(f'✗ Failed to retrieve PDF for dokument: {docid}')
             logging.error(f'Error: {str(e)}')

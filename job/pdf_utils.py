@@ -26,6 +26,16 @@ def download_pdf(document_url: str) -> bytes:
                     f"content-length={len(response.content)} bytes")
 
         if response.status_code != 200:
+            # Check if document is protected/restricted (skjermet)
+            if response.status_code == 401:
+                try:
+                    error_json = response.json()
+                    if error_json.get('error') == 'Dokumentet er skjermet':
+                        logging.info(f"Document is protected (skjermet), skipping: {document_url}")
+                        raise ValueError("SKJERMET_DOCUMENT")  # Special marker for skipping
+                except (requests.exceptions.JSONDecodeError, KeyError):
+                    pass  # Not JSON or different error, continue with normal error handling
+
             logging.error(f"Failed to download PDF. HTTP Status Code: {response.status_code}")
             logging.error(f"Response headers: {dict(response.headers)}")
             logging.error(f"Response body (first 500 chars): {response.text[:500]}")
