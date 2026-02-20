@@ -8,8 +8,8 @@ Hvordan sette opp prosjektet og kjøre lokalt:
 
 1. Klon repository
 ```sh
-git clone https://github.com/kartverket/smart_sladding_ml.git
-cd smart_sladding_ml
+git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
+cd dokumentbestilling-smart-sladding
 ```
 
 2. Installer nødvendige pakker
@@ -17,8 +17,40 @@ cd smart_sladding_ml
 pip install -r requirements.txt
 ```
 
-Last ned Poppler `brew install poppler`
-Last ned Tesseract `brew install tesseract`
+For de som bruker mac: 
+* Last ned Poppler `brew install poppler`
+* Last ned Tesseract `brew install tesseract`
+
+For onprem maskin, finn de nødvendige installasjonspakkene for Tesseract og Poppler, og installer disse.
+* poppler versjon kan sjekkes med `pdftoppm -v` 
+* tesseract versjon kan sjekkes med `tesseract -v` 
+
+
+3. Kjør opp appen
+```sh
+cd app
+pytohn3 app.py
+```
+
+4. test appen via Curl i ny terminal:
+```sh
+cd app
+mkdir logs
+touch logg/app.log
+curl -X POST http://localhost:5070/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
+```
+
+5. Manuelt laste ned easyOCR modeller bak brannmuren (kun nødvendig for onprem maskin):
+```sh
+curl -L -x http://<proxyip>:<proxyport> -o "latin_g2.zip" https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
+curl -L -x http://<proxyip>:<proxyport> -o "craft_mlt_25k.zip" https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
+
+mv latin_g2.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
+mv craft_mlt_25k.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
+
+unzip latin_g2.zip
+unzip craft_mlt_25k.zip
+```
 
 NB: Hvis du får SSL-problematikk på Mac, så kan du sjekke ut denne Stack Overflow-responsen https://stackoverflow.com/a/57795811
 
