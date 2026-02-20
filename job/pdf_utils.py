@@ -16,8 +16,6 @@ def download_pdf(document_url: str) -> bytes:
     Returns:
     bytes: The content of the PDF file.
     """
-    logging.info(f"Attempting to download PDF from: {document_url}")
-
     try:
         response = requests.get(document_url, timeout=300)  # 5 minute timeout
 

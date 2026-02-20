@@ -37,7 +37,6 @@ def hentDokumenterTilSladding():
 
         try:
             pdf_bytes = pdf_utils.get_pdf_bytes(document_url)
-            logging.info(f'Successfully retrieved PDF: {len(pdf_bytes)} bytes')
         except ValueError as e:
             # Check if document is protected/restricted (skjermet)
             if "SKJERMET_DOCUMENT" in str(e):
@@ -52,8 +51,6 @@ def hentDokumenterTilSladding():
             logging.error(f'Error: {str(e)}')
             continue
 
-        logging.info(f'PDF validated: {len(pdf_bytes)} bytes')
-
         model_url = f'{model_base_url()}/model'
 
         try:
@@ -66,7 +63,6 @@ def hentDokumenterTilSladding():
                 },
                 timeout=600  # 10 minute timeout for large PDFs
             )
-            logging.info(f'Model API response: status={response.status_code}')
 
             if response.status_code != 200:
                 logging.error(f'Model returned error status {response.status_code}')
