@@ -33,39 +33,28 @@ def hentDokumenterTilSladding():
 
         document_url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
 
-        logging.info(f'=== Starting processing for document: {docid} ===')
-        logging.info(f'Document URL: {document_url}')
-        logging.info(f'API Base URL configured as: {api_base_url()}')
+        logging.info(f'Kjører modell på dokument: {document_url}')
 
         try:
             pdf_bytes = pdf_utils.get_pdf_bytes(document_url)
-            logging.info(f'✓ Successfully retrieved PDF: {len(pdf_bytes)} bytes')
+            logging.info(f'Successfully retrieved PDF: {len(pdf_bytes)} bytes')
         except ValueError as e:
             # Check if document is protected/restricted (skjermet)
             if "SKJERMET_DOCUMENT" in str(e):
-                logging.info(f'ℹ Document {docid} is protected (skjermet), skipping')
+                logging.info(f'Document {docid} is protected (skjermet), skipping')
                 continue
             # Other errors
-            logging.error(f'✗ Failed to retrieve PDF for dokument: {docid}')
+            logging.error(f'Failed to retrieve PDF for dokument: {docid}')
             logging.error(f'Error: {str(e)}')
             continue
         except Exception as e:
-            logging.error(f'✗ Failed to retrieve PDF for dokument: {docid}')
+            logging.error(f'Failed to retrieve PDF for dokument: {docid}')
             logging.error(f'Error: {str(e)}')
             continue
 
-        if not pdf_bytes or len(pdf_bytes) < 100:
-            logging.error(f'✗ PDF for dokument {docid} is invalid: {len(pdf_bytes) if pdf_bytes else 0} bytes')
-            if pdf_bytes:
-                logging.error(f'PDF content (first 100 bytes): {pdf_bytes[:100]}')
-            continue
-
-        logging.info(f'✓ PDF validated: {len(pdf_bytes)} bytes')
+        logging.info(f'PDF validated: {len(pdf_bytes)} bytes')
 
         model_url = f'{model_base_url()}/model'
-        logging.info(f'Model URL: {model_url}')
-        logging.info(f'Model Base URL configured as: {model_base_url()}')
-        logging.info(f'Sending {len(pdf_bytes)} bytes to model API...')
 
         try:
             response = requests.post(
@@ -77,22 +66,20 @@ def hentDokumenterTilSladding():
                 },
                 timeout=600  # 10 minute timeout for large PDFs
             )
-            logging.info(f'✓ Model API response: status={response.status_code}')
-            logging.info(f'Response headers: {dict(response.headers)}')
-            logging.info(f'Response size: {len(response.content)} bytes')
+            logging.info(f'Model API response: status={response.status_code}')
 
             if response.status_code != 200:
-                logging.error(f'✗ Model returned error status {response.status_code}')
+                logging.error(f'Model returned error status {response.status_code}')
                 logging.error(f'Response body: {response.text[:500]}')
                 continue
 
             sladdinger = response.json()
-            logging.info(f'✓ Model processing complete: {len(sladdinger)} redactions found')
+            logging.info(f'Model processing complete: {len(sladdinger)} redactions found')
         except requests.exceptions.Timeout:
-            logging.error(f'✗ Timeout calling model API (>600s)')
+            logging.error(f'Timeout calling model API (>600s)')
             continue
         except Exception as e:
-            logging.error(f'✗ Error calling model API: {str(e)}')
+            logging.error(f'Error calling model API: {str(e)}')
             import traceback
             logging.error(f'Traceback: {traceback.format_exc()}')
             continue
