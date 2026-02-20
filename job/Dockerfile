@@ -2,8 +2,8 @@
 # This job only calls APIs, no ML/OCR processing needed
 FROM python:3.13-slim
 
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /job
 
@@ -13,10 +13,7 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements-skip-job.txt
 
 # Copy only the files needed for skip_job
-COPY job/skip_job.py \
-     job/url_utils.py \
-     job/pdf_utils.py \
-     /job/
+COPY skip_job.py url_utils.py pdf_utils.py /job/
 
 # Create non-root user
 RUN useradd -r -u 1000 appuser
