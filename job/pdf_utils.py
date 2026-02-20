@@ -16,14 +16,42 @@ def download_pdf(document_url: str) -> bytes:
     Returns:
     bytes: The content of the PDF file.
     """
-    response = requests.get(document_url)
+    logging.info(f"Attempting to download PDF from: {document_url}")
 
-    if response.status_code == 200:
-        logging.info("PDF downloaded successfully.")
-    else:
-        logging.error(f"Failed to download file. HTTP Status Code: {response.status_code}")
+    try:
+        response = requests.get(document_url, timeout=300)  # 5 minute timeout
 
-    return response.content
+        logging.info(f"Download response: status={response.status_code}, "
+                    f"content-type={response.headers.get('Content-Type')}, "
+                    f"content-length={len(response.content)} bytes")
+
+        if response.status_code != 200:
+            logging.error(f"Failed to download PDF. HTTP Status Code: {response.status_code}")
+            logging.error(f"Response headers: {dict(response.headers)}")
+            logging.error(f"Response body (first 500 chars): {response.text[:500]}")
+            raise ValueError(f"HTTP {response.status_code}: {response.text[:200]}")
+
+        # Validate it's actually a PDF
+        content_type = response.headers.get('Content-Type', '')
+        if 'pdf' not in content_type.lower() and not response.content.startswith(b'%PDF'):
+            logging.error(f"Downloaded content is not a PDF! Content-Type: {content_type}")
+            logging.error(f"Content (first 100 bytes): {response.content[:100]}")
+            raise ValueError(f"Response is not a PDF. Content-Type: {content_type}, Size: {len(response.content)} bytes")
+
+        if len(response.content) < 100:
+            logging.error(f"PDF file too small: {len(response.content)} bytes")
+            logging.error(f"Content: {response.content}")
+            raise ValueError(f"PDF file too small: {len(response.content)} bytes")
+
+        logging.info(f"PDF downloaded successfully: {len(response.content)} bytes")
+        return response.content
+
+    except requests.exceptions.Timeout:
+        logging.error(f"Timeout downloading PDF from {document_url}")
+        raise ValueError(f"Timeout downloading PDF from {document_url}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request error downloading PDF: {str(e)}")
+        raise ValueError(f"Request error: {str(e)}")
 
 
 def get_pdf_bytes(document_url: str) -> bytes:
