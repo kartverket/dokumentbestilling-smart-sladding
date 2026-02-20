@@ -1,6 +1,6 @@
 pytesseract
 pillow
-opencv-python
+opencv-python-headless
 pdf2image
 PyPDF2
 numpy
@@ -13,11 +13,8 @@ requests
 datasets
 pytest
 flask
-requests
-pymupdf
 python-dotenv
 python-Levenshtein
 python-bidi
 easyocr
-opencv-python
 regex
