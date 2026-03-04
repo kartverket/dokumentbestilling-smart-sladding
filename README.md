@@ -6,6 +6,9 @@ Prosjektet er utviklet for å generere automatiske sladdinger av personnummer og
 ## Installasjon
 Hvordan sette opp prosjektet og kjøre lokalt:
 
+Onprem maskin må ha installert git
+sudo yum install git
+
 1. Klon repository
 ```sh
 git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
@@ -22,6 +25,9 @@ For de som bruker mac:
 * Last ned Tesseract `brew install tesseract`
 
 For onprem maskin, finn de nødvendige installasjonspakkene for Tesseract og Poppler, og installer disse.
+*sudo yum search poppler-utils
+*sudo yum install tesseract
+
 * poppler versjon kan sjekkes med `pdftoppm -v` 
 * tesseract versjon kan sjekkes med `tesseract -v` 
 
@@ -39,6 +45,9 @@ mkdir logs
 touch logg/app.log
 curl -X POST http://localhost:5070/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
 ```
+Eksempel på applikasjons respons
+[{"height":11.19903206291591,"page":1,"width":27.486842105263158,"x":112.01467029643072,"y":605.5983061101028},{"height":17.918451300665456,"page":1,"width":28.429038112522683,"x":108.67295825771325,"y":513.3305505142165},{"height":11.19903206291591,"page":2,"width":29.556563823351482,"x":217.57047791893524,"y":57.392014519056254}]
+
 
 5. Manuelt laste ned easyOCR modeller bak brannmuren (kun nødvendig for onprem maskin):
 ```sh
