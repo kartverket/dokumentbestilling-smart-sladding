@@ -6,7 +6,7 @@ Har du oppdaget en sårbarhet i dette prosjektet, vennligst ikke publiser det so
 
 Bruk GitHubs private varslingskanal for å rapportere sårbarheten:
 
-**[Rapporter sårbarhet](https://github.com/kartverket/dokumentbestilling-smart-sladding/security/advisories)**
+**[Rapporter sårbarhet](https://github.com/kartverket/dokumentbestilling-smart-sladding/security/advisories/new)**
 
 Inkluder følgende:
 
