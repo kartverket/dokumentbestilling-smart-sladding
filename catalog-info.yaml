@@ -8,6 +8,7 @@ spec:
   type: "service"
   lifecycle: "production"
   owner: "eiet"
+  system: "dokumentbestilling"
   providesApis:
   - "dokumentbestilling-smart-sladding-api"
 ---
