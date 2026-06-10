@@ -1,0 +1,33 @@
+services:
+  app-prod:
+    build: .
+    container_name: smsl-server-prod 
+    image: smart_sladding_app
+    restart: unless-stopped
+    environment:
+      - HTTP_PROXY=http://159.162.48.7:3128
+      - HTTPS_PROXY=http://159.162.48.7:3128
+      - MODE=prod  
+    ports:
+      - "5071:8080"
+    volumes:
+      - /data/docker/gunicorn_logs:/data/gunicorn_logs
+      - /data/docker/ml_logs:/data/ml_logs
+
+  app-dev:
+    build: .
+    container_name: smsl-server-dev
+    image: smart_sladding_app
+    restart: unless-stopped
+    environment:
+      - HTTP_PROXY=http://159.162.48.7:3128
+      - HTTPS_PROXY=http://159.162.48.7:3128
+      - MODE=dev
+    ports:
+      - "5072:8080"
+    volumes:
+      - /data/docker/gunicorn_logs:/data/gunicorn_logs
+      - /data/docker/ml_logs:/data/ml_logs
+
+volumes:
+  data:

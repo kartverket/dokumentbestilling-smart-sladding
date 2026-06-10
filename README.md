@@ -14,26 +14,62 @@ brew install poppler tesseract
 ```
 
 ## Installasjon
-1. Klon repository
+1. Hvordan sette opp prosjektet til å kjøre via docker
+Det forutsettes at docker er installert og konfigurert på forhånd.
+
+1.1 Hent python manuelt
+#Fikk feil "ERROR [internal] load metadata for docker.io/library/python:3.9.25-slim" ved forsøk via requirements.txt
+docker pull python:3.9.25-slim
+
+1.2 Docker build image
+docker build  \
+  --build-arg http_proxy=http://<proxyip>:<proxyport> \
+  --build-arg https_proxy=http://<proxyip>:<proxyport> \
+  --build-arg no_proxy=localhost,<localhost_ip>\
+  --tag smart_sladding_app:latest .
+  
+1.3 Start containers manuelt
+docker run -it -v data:/data/ml_logs -p <containerport>:<exposeport> -m 32g -e http_proxy=http://<proxyip>:<proxyport> -e https_proxy=http://<proxyip>:<proxyport> --name smsl-server-prod smart_sladding_app
+docker run -it -v data:/data/ml_logs -p <containerport>:<exposeport> -m 32g -e http_proxy=http://<proxyip>:<proxyport> -e https_proxy=http://<proxyip>:<proxyport> --name smsl-server-dev smart_sladding_app
+
+1.4 Start containere med compose
+docker compose up -d
+
+1.5 Test med curl
+curl -X POST http://localhost:<containerport>/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
+curl -X POST http://localhost:<containerport>/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
+
+2. Hvordan sette opp prosjektet og kjøre lokalt:
+
+2.1. Klon repository
 ```sh
 git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
 cd dokumentbestilling-smart-sladding
 ```
 
-2. Opprett virtuelt miljø og installer avhengigheter
+2.2. Opprett virtuelt miljø og installer avhengigheter
 ```sh
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Kjør lokalt
+For de som bruker mac: 
+* Last ned Poppler `brew install poppler`
+* Last ned Tesseract `brew install tesseract`
+
+For onprem maskin, finn de nødvendige installasjonspakkene for Tesseract og Poppler, og installer disse.
+* poppler versjon kan sjekkes med `pdftoppm -v` 
+* tesseract versjon kan sjekkes med `tesseract -v` 
+
+
+2.3. Kjør opp appen
 ```sh
 cd app
 python3 app.py
 ```
 
-Test endepunktet i ny terminal:
+2.4. test appen via Curl i ny terminal:
 ```sh
 mkdir -p app/logs
 curl -X POST http://localhost:5070/model \
@@ -41,8 +77,19 @@ curl -X POST http://localhost:5070/model \
   --data-binary "@app/testdokument-2.pdf"
 ```
 
-## Produksjon
-Appen kjøres med Gunicorn i produksjon:
+2.5. Manuelt laste ned easyOCR modeller bak brannmuren (kun nødvendig for onprem maskin):
+```sh
+curl -L -x http://<proxyip>:<proxyport> -o "latin_g2.zip" https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
+curl -L -x http://<proxyip>:<proxyport> -o "craft_mlt_25k.zip" https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
+
+mv latin_g2.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
+mv craft_mlt_25k.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
+
+unzip latin_g2.zip
+unzip craft_mlt_25k.zip
+```
+
+2.6. For production / test så kjører vi appen med gunicorn:
 ```sh
 cd app
 chmod +x start_production.sh
