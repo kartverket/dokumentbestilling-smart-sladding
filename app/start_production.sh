@@ -8,4 +8,4 @@ export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 # Add the current directory to Python path for module imports
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
-gunicorn --bind 0.0.0.0:5070 --config gunicorn_config.py app:app
+/home/smartsladding/.local/bin/gunicorn --bind 0.0.0.0:5070 --config gunicorn_config.py app:app
