@@ -1,5 +1,5 @@
 # Use an official, lightweight Python runtime as a parent image
-FROM python:3.9.25-slim
+FROM python:3.14-slim
 
 # Set environment variables to optimize Python performance inside the container
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -20,10 +20,13 @@ RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/li
 # Install Tesseract OCR
 RUN apt-get update && apt-get install -y tesseract-ocr libtesseract-dev && rm -rf /var/lib/apt/lists/*
 
-# Copy the rest of your local application code to the container
+# Copy application code to the container
+COPY app .
+
+# Copy root files to the container
 COPY . .
 
-# Configure the Flask application to listen on port 8080
+# Configure application to listen on port 8080
 EXPOSE 8080
 
 # Start Gunicorn with 4 worker processes

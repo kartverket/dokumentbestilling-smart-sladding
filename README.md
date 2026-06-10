@@ -18,8 +18,8 @@ brew install poppler tesseract
 Det forutsettes at docker er installert og konfigurert på forhånd.
 
 1.1 Hent python manuelt
-#Fikk feil "ERROR [internal] load metadata for docker.io/library/python:3.9.25-slim" ved forsøk via requirements.txt
-docker pull python:3.9.25-slim
+#Fikk feil "ERROR [internal] load metadata for docker.io/library/python:3.14-slim" ved forsøk via requirements.txt
+docker pull python:3.14-slim
 
 1.2 Docker build image
 docker build  \
