@@ -22,11 +22,19 @@ Det forutsettes at docker er installert og konfigurert på forhånd.
 docker pull python:3.14-slim
 
 1.2 Docker build image
-docker build  \
-  --build-arg http_proxy=http://<proxyip>:<proxyport> \
-  --build-arg https_proxy=http://<proxyip>:<proxyport> \
-  --build-arg no_proxy=localhost,<localhost_ip>\
-  --tag smart_sladding_app:latest .
+#Docker build dev image
+sudo docker build  \
+  --build-arg http_proxy=http://159.162.48.7:3128 \
+  --build-arg https_proxy=http://159.162.48.7:3128 \
+  --build-arg no_proxy=localhost,127.0.0.1 \
+  --tag smart_sladding_app_dev:latest .
+  
+#Docker build prod image
+sudo docker build  \
+  --build-arg http_proxy=http://159.162.48.7:3128 \
+  --build-arg https_proxy=http://159.162.48.7:3128 \
+  --build-arg no_proxy=localhost,127.0.0.1 \
+  --tag smart_sladding_app_prod:latest .
   
 1.3 Start containers manuelt
 docker run -it -v data:/data/ml_logs -p <containerport>:<exposeport> -m 32g -e http_proxy=http://<proxyip>:<proxyport> -e https_proxy=http://<proxyip>:<proxyport> --name smsl-server-prod smart_sladding_app

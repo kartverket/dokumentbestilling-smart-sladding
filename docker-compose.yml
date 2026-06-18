@@ -2,7 +2,7 @@ services:
   app-prod:
     build: .
     container_name: smsl-server-prod 
-    image: smart_sladding_app
+    image: smart_sladding_app_prod
     restart: unless-stopped
     environment:
       - HTTP_PROXY=http://159.162.48.7:3128
@@ -17,7 +17,7 @@ services:
   app-dev:
     build: .
     container_name: smsl-server-dev
-    image: smart_sladding_app
+    image: smart_sladding_app_dev
     restart: unless-stopped
     environment:
       - HTTP_PROXY=http://159.162.48.7:3128
