@@ -1,5 +1,8 @@
 # dokumentbestilling-smart-sladding
 
+## VIKTIG: For bruk i Kartverket
+Dersom du utvikler på dette repoet i forbindelse med dokumentbestilling i Kartverket, så **må** du lese deg opp på de relevante rutinene du finner [på confluence
+](https://kartverket.atlassian.net/wiki/x/F4Dwn).
 ## Beskrivelse
 Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger. Løsningen benytter Tesseract OCR for å gjenkjenne tekst i dokumenter, og klassifiserer områder med sensitive opplysninger gjennom regex- og nøkkelordssøk.
 
