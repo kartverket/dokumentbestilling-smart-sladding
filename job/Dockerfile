@@ -1,6 +1,6 @@
 # Lightweight Dockerfile for skip_job.py
 # This job only calls APIs, no ML/OCR processing needed
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
