@@ -49,7 +49,7 @@ pip uninstall torch torchvision
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-## Kjøre
+## Kjøre gjøres ifra egen undermappe testing av sladding sommer 2026
 
 ```bash
 python kjor.py                       # 20 første filer i standardmappa
@@ -63,6 +63,7 @@ Input-mappe, output-mappe og fasit-CSV styres med `--mappe`, `--ut-mappe` og
 `--csv` (har standardverdier i `kjor.py`). Output (PNG-er, `bokser.csv`,
 `ocr_linjer.txt`) havner i ut-mappa. standar mapper er gitignoret 
 
+Det som må gjøres er å laste opp dokumentene i testing av sladding sommer2026 i en egen panteboksdokumenter mapper (lurt å se på oppsettet lokalt før man gjør noe på server)
 ## Filene
 
 | Fil             | Ansvar                                            |
