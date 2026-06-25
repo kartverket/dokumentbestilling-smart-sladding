@@ -16,3 +16,5 @@ valideringssett/organized_labels_all.csv
 valideringssett/results/**
 tmp/
 logs/**
+*.pdf
+*.png
