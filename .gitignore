@@ -20,3 +20,5 @@ logs/**
 *.png
 bokser.csv
 ocr_linjer.txt
+smartsladding_uttrekk_1_22_06_26.csv
+smartsladding_uttrekk_labels_1_22_06_26.csv
