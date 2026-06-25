@@ -18,3 +18,5 @@ tmp/
 logs/**
 *.pdf
 *.png
+bokser.csv
+ocr_linjer.txt
