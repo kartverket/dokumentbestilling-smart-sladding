@@ -24,6 +24,8 @@ def _hent_reader():
     global reader
     if reader is None:
         gpu = torch.cuda.is_available()
+        print(f"GPU tilgjengelig: {gpu}")
+
         reader = easyocr.Reader(["no", "en"], gpu=gpu, verbose=False)
     return reader
 
@@ -86,7 +88,7 @@ analyzer.registry.add_recognizer(FnrRecognizer())
 
 
 def _les_tokens(bilde):
-    ocr_treff = _hent_reader().readtext(np.array(bilde), allowlist="0123456789 .-")
+    ocr_treff = _hent_reader().readtext(np.array(bilde), allowlist="0123456789 .-", batch_size=16)
     tokens = []
     for poly, tekst, _ in ocr_treff:
         xs = [p[0] for p in poly]

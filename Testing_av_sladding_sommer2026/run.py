@@ -8,6 +8,8 @@ from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 
+import time
+
 
 def main():
     p = argparse.ArgumentParser(
@@ -29,6 +31,9 @@ def main():
     args = p.parse_args()
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
+
+    total_tid = 0
+
     if not filer:
         print("Ingen filer å behandle — sjekk --mappe / --velg / --antall.")
         return
@@ -37,6 +42,8 @@ def main():
 
     sladd_bokser, feilet = {}, []
     for fil in filer:
+        start = time.perf_counter()
+
         navn = os.path.basename(fil)
         try:
             with open(fil, "rb") as f:
@@ -45,15 +52,23 @@ def main():
             feilet.append((navn, repr(e)))
             continue
 
+        tid_brukt = time.perf_counter() - start
+        total_tid += tid_brukt
+
+
         if not vil_ha_artefakt:
             n = sum(len(s["bokser"]) for s in resultat["sider"])
             print(f"{navn}: {n} boks(er) over {len(resultat['sider'])} side(r)")
+            print(f"    Tid brukt: {tid_brukt:.6f} sekunder")
+
             continue
 
         for side in resultat["sider"]:
             bokser = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
             sladd_bokser[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], bokser)
+
+    print(f"\nTotal tid brukt: {total_tid:.6f} sekunder")
 
     if feilet:
         print("Feilet:", feilet[:5])
