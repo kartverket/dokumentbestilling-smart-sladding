@@ -1,18 +1,30 @@
+import time
+
 from load_pdf import les_sider_fra_bytes, PDF_DPI
 from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens
 
-from collections import defaultdict
 
+def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False):
+    t = {}
 
-def run_model_on_pdf_bytes(pdf_bytes):
+    tstart = time.perf_counter()
     bilder = list(les_sider_fra_bytes(pdf_bytes))
-    tokens_per_side = les_tokens_batched(bilder)
+    t["render"] = time.perf_counter() - tstart
+
+    tstart = time.perf_counter()
+    tokens_per_side = les_tokens_batched(bilder)        
+    t["ocr"] = time.perf_counter() - tstart
 
     sider = []
+
+    tstart = time.perf_counter()
+
     for si, (bilde, tokens) in enumerate(zip(bilder, tokens_per_side), start=1):
+        treff = finn_bokser_fra_tokens(tokens)          
+
         bokser = [
             {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
-            for (x0, y0, x1, y1), _mod11 in finn_bokser_fra_tokens(tokens)
+            for (x0, y0, x1, y1), _mod11 in treff
         ]
         sider.append({
             "side": si,
@@ -20,4 +32,21 @@ def run_model_on_pdf_bytes(pdf_bytes):
             "bilde_hoyde": bilde.size[1],
             "bokser": bokser,
         })
+
+    if skriv_tid:
+        _skriv_tid(t)
+
     return {"dpi": PDF_DPI, "sider": sider}
+
+
+def _skriv_tid(t):
+    total = t["render"] + t["ocr"]
+
+    def linje(navn, sek):
+        pct = (sek / total * 100) if total else 0.0
+        return f"  {navn:<16}{sek:9.3f} s{pct:7.1f}%"
+
+    print("Timing:")
+    print(linje("render",        t["render"]))
+    print(linje("ocr (batched)", t["ocr"]))
+    print(f"  {'Total':<16}{total:9.3f} s")
