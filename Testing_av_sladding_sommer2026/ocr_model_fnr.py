@@ -159,15 +159,43 @@ def finn_bokser_fra_tokens(tokens):
     return bokser
 
 def les_tokens_batched(bilder, sider_per_batch=8):
+    import cv2
     reader = _hent_reader()
 
+    # Find the target size (max dimensions across all pages)
+    maks_h = max(img.shape[0] for img in bilder)
+    maks_w = max(img.shape[1] for img in bilder)
+
+    # Build resized images and a ratio dict keyed by page index
+    skalering = {}  # {side_idx: (skala_x, skala_y)}
+    norm_bilder = []
+    for idx, img in enumerate(bilder):
+        h, w = img.shape[:2]
+        skala_x = w / maks_w
+        skala_y = h / maks_h
+        skalering[idx] = (skala_x, skala_y)
+        if w == maks_w and h == maks_h:
+            norm_bilder.append(img)
+        else:
+            norm_bilder.append(cv2.resize(img, (maks_w, maks_h), interpolation=cv2.INTER_LINEAR))
+
+    # Run OCR in batches on the uniformly-sized images
     tokens_per_side = []
-    for start in range(0, len(bilder), sider_per_batch):
-        batch = bilder[start:start + sider_per_batch]
+    for start in range(0, len(norm_bilder), sider_per_batch):
+        batch = norm_bilder[start:start + sider_per_batch]
         resultater = reader.readtext_batched(
             batch,
             allowlist="0123456789 .-",
             batch_size=16,
         )
-        tokens_per_side.extend(_les_tokens(t) for t in resultater)
+        # Scale coordinates back to original page dimensions
+        for side_i, treff in enumerate(resultater, start=start):
+            sx, sy = skalering[side_i]
+            tokens = []
+            for poly, tekst, _ in treff:
+                xs = [p[0] * sx for p in poly]
+                ys = [p[1] * sy for p in poly]
+                tokens.append(Token(tekst, min(xs), min(ys), max(xs), max(ys)))
+            tokens_per_side.append(tokens)
     return tokens_per_side
+    
