@@ -5,7 +5,6 @@ from collections import namedtuple
 import numpy as np
 import paddle
 from paddleocr import PaddleOCR
-import torch #not needed
 from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerResult
 
 
@@ -28,7 +27,14 @@ def _hent_reader():
         gpu_availability = paddle.device.is_compiled_with_cuda()
         device_available = "gpu" if(gpu_availability) else "cpu"
         print(f"GPU tilgjengelig: {gpu_availability}")
-        ocr = PaddleOCR(lang = "en", use_angle_cls=True, device = device_available)
+        ocr = PaddleOCR(
+            lang="en",
+            use_angle_cls=True,
+            # Keep coordinates in the same geometry as the input image.
+            use_doc_orientation_classify=True,
+            use_doc_unwarping=True,
+            device=device_available,
+        )
     return ocr
 
 
@@ -89,23 +95,46 @@ analyzer = AnalyzerEngine()
 analyzer.registry.add_recognizer(FnrRecognizer())
 
 
-def _les_tokens(bilde):
-    fnr_pattern = re.compile(r'\d{6}[\s\-./]*\d{5}')
+def _boks_til_token(tekst, boks):
+    if isinstance(tekst, tuple):
+        tekst = tekst[0]
 
+    if not isinstance(tekst, str) or not tekst.strip():
+        return None
+
+    # Ignore text with no digits; FNR matching only uses digit positions.
+    if not any(ch.isdigit() for ch in tekst):
+        return None
+
+    # Paddle may return either [x0, y0, x1, y1] or polygon points.
+    if len(boks) == 4 and not isinstance(boks[0], (list, tuple, np.ndarray)):
+        x0, y0, x1, y1 = boks
+        return Token(tekst, float(x0), float(y0), float(x1), float(y1))
+
+    xs = [p[0] for p in boks]
+    ys = [p[1] for p in boks]
+    return Token(tekst, float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
+
+
+def _les_tokens(bilde):
     ocr_treff = _hent_reader().ocr(np.array(bilde))
     tokens = []
 
     for result in ocr_treff:
-        polys = result['rec_polys']
-        texts = result['rec_texts']
+        tekst_liste = result.get("rec_texts")
+        if tekst_liste is None:
+            tekst_liste = []
 
-        for poly, tekst in zip(polys, texts):
-            if not fnr_pattern.search(tekst):
-                continue
+        boks_liste = result.get("rec_boxes")
+        if boks_liste is None:
+            boks_liste = result.get("rec_polys")
+        if boks_liste is None:
+            boks_liste = []
 
-            xs = [p[0] for p in poly]
-            ys = [p[1] for p in poly]
-            tokens.append(Token(tekst, min(xs), min(ys), max(xs), max(ys)))
+        for tekst, boks in zip(tekst_liste, boks_liste):
+            token = _boks_til_token(tekst, boks)
+            if token is not None:
+                tokens.append(token)
 
     return tokens
 
