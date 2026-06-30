@@ -1,4 +1,4 @@
-FROM nvidia/cuda:13.0.0-runtime-ubuntu24.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu24.04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
@@ -20,7 +20,7 @@ RUN python3.14 -m ensurepip && \
 
 WORKDIR /app
 
-RUN python3.14 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu130
+RUN python3.14 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
 
 COPY requirements.txt .
 RUN python3.14 -m pip install --no-cache-dir -r requirements.txt
