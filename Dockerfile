@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
@@ -14,7 +14,7 @@ RUN python3 -m pip install --upgrade pip
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
