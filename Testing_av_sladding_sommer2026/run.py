@@ -29,26 +29,28 @@ def main():
     p.add_argument("--sladd-mappe", default="sladdet", help="hvor sladdede PDF-er lagres")
     p.add_argument("--terskel", type=float, default=0.40, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default="topp", help="CSV y-origo")
+    p.add_argument("--tid", action="store_true", help="viser tiden de ulike stegene i pipelinen tar")
     args = p.parse_args()
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
-
-    total_tid = 0
 
     if not filer:
         print("Ingen filer å behandle — sjekk --mappe / --velg / --antall.")
         return
 
     vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd
+    total_tid = 0
 
     sladd_bokser, feilet = {}, []
     for fil in filer:
         start = time.perf_counter()
 
         navn = os.path.basename(fil)
+        print(f"\nBehandler: {navn}")
+
         try:
             with open(fil, "rb") as f:
-                resultat = run_model_on_pdf_bytes(f.read())     # akkurat som POST-endepunktet
+                resultat = run_model_on_pdf_bytes(f.read(), args.tid)     # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc() 
@@ -57,20 +59,16 @@ def main():
         tid_brukt = time.perf_counter() - start
         total_tid += tid_brukt
 
-
-        if not vil_ha_artefakt:
+        if vil_ha_artefakt:
             n = sum(len(s["bokser"]) for s in resultat["sider"])
-            print(f"{navn}: {n} boks(er) over {len(resultat['sider'])} side(r)")
-            print(f"    Tid brukt: {tid_brukt:.6f} sekunder")
-
-            continue
+            print(f"Fant {n} boks(er) over {len(resultat['sider'])} side(r)")
 
         for side in resultat["sider"]:
             bokser = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
             sladd_bokser[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], bokser)
 
-    print(f"\nTotal tid brukt: {total_tid:.6f} sekunder")
+    print(f"\nTotal tid brukt for alle dokumenter: {total_tid:.6f} sekunder")
 
     if feilet:
         print("Feilet:", feilet[:5])

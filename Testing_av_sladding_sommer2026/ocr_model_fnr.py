@@ -87,8 +87,7 @@ analyzer = AnalyzerEngine()
 analyzer.registry.add_recognizer(FnrRecognizer())
 
 
-def _les_tokens(bilde):
-    ocr_treff = _hent_reader().readtext(np.array(bilde), allowlist="0123456789 .-", batch_size=16)
+def _les_tokens(ocr_treff):
     tokens = []
     for poly, tekst, _ in ocr_treff:
         xs = [p[0] for p in poly]
@@ -143,9 +142,7 @@ def _sladdeboks(sifferbokser):
     bunn = max(boks.bunn for boks in siste)
     return (round(venstre), round(topp), round(hoyre), round(bunn))
 
-
-def finn_bokser(bilde):
-    tokens = _les_tokens(bilde)
+def finn_bokser_fra_tokens(tokens):
     linjer = _grupper_til_linjer(tokens)
     bokser = []
     for linje in linjer:
@@ -158,3 +155,17 @@ def finn_bokser(bilde):
             cifre = re.sub(r"\D", "", tekst[treff.start:treff.end])
             bokser.append((boks, gyldig_mod11(cifre)))
     return bokser
+
+def les_tokens_batched(bilder, sider_per_batch=8):
+    reader = _hent_reader()
+
+    tokens_per_side = []
+    for start in range(0, len(bilder), sider_per_batch):
+        np_bilder = [np.array(b) for b in bilder[start:start + sider_per_batch]]
+        resultater = reader.readtext_batched(
+            np_bilder,
+            allowlist="0123456789 .-",
+            batch_size=16,
+        )
+        tokens_per_side.extend(_les_tokens(t) for t in resultater)
+    return tokens_per_side
