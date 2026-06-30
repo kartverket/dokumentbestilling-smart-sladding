@@ -869,4 +869,3 @@ def ocr(image, run_tesseract, run_easyocr, languages, tess_config, elektronisk_t
     bounding_boxes = pd.concat(bounding_boxes_parts, ignore_index=True) if bounding_boxes_parts else pd.DataFrame()
 
     return bounding_boxes, text
-

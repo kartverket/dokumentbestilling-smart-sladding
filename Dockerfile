@@ -1,33 +1,35 @@
-# Use an official, lightweight Python runtime as a parent image
-FROM python:3.14-slim
+FROM nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
 
-# Set environment variables to optimize Python performance inside the container
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.14 python3.14-venv \
+    poppler-utils tesseract-ocr \
+    libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && apt-get remove -y python3-blinker \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory inside the container
+RUN python3.14 -m ensurepip && \
+    ln -sf /usr/bin/python3.14 /usr/bin/python && \
+    ln -sf /usr/bin/python3.14 /usr/bin/python3 && \
+    python3.14 -m pip install --upgrade pip
+
 WORKDIR /app
 
-# Copy the requirements file first to utilize Docker build caching
+RUN python3.14 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu132
+
 COPY requirements.txt .
+RUN python3.14 -m pip install --no-cache-dir -r requirements.txt
 
-# Install the specified Python packages
-RUN pip install --no-cache-dir -r requirements.txt
+COPY app/ .
+COPY config/ config/
 
-#Install poppler
-RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/lists/*
+#RUN useradd -r -s /bin/false appuser && chown -R appuser:appuser /app
+#USER appuser
 
-# Install Tesseract OCR
-RUN apt-get update && apt-get install -y tesseract-ocr libtesseract-dev && rm -rf /var/lib/apt/lists/*
-
-# Copy application code to the container
-COPY app .
-
-# Copy root files to the container
-COPY . .
-
-# Configure application to listen on port 8080
 EXPOSE 8080
-
-# Start Gunicorn with 4 worker processes
-CMD ["sh", "-c", "gunicorn --config config/gunicorn_config_${MODE}.py -w 4 -b 0.0.0.0:8080 app:app"]
+CMD gunicorn --config config/gunicorn_config_${MODE}.py -b 0.0.0.0:8080 app:app
