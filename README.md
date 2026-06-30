@@ -4,7 +4,15 @@
 Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger. Løsningen benytter Tesseract OCR for å gjenkjenne tekst i dokumenter, og klassifiserer områder med sensitive opplysninger gjennom regex- og nøkkelordssøk.
 
 ## Forutsetninger
-- Python 3.11+
+
+
+### Docker (anbefalt)
+- Docker
+- NVIDIA GPU med CUDA 13.2-støtte
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+
+### Lokal utvikling
+- Python 3.14+
 - [Poppler](https://poppler.freedesktop.org/) (`pdftoppm -v` for å verifisere)
 - [Tesseract](https://tesseract-ocr.github.io/) (`tesseract -v` for å verifisere)
 
@@ -14,70 +22,82 @@ brew install poppler tesseract
 ```
 
 ## Installasjon
-1. Hvordan sette opp prosjektet til å kjøre via docker
-Det forutsettes at docker er installert og konfigurert på forhånd.
 
-1.1 Hent python manuelt
-#Fikk feil "ERROR [internal] load metadata for docker.io/library/python:3.14-slim" ved forsøk via requirements.txt
-docker pull python:3.14-slim
+### 1. Docker-oppsett (anbefalt)
 
-1.2 Docker build image
-#Docker build dev image
-sudo docker build  \
+Prosjektet bruker `nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04` som base-image med Python 3.14 via deadsnakes PPA. Docker og NVIDIA Container Toolkit må være installert og konfigurert på forhånd.
+
+#### 1.1 Docker build
+
+```sh
+# Bygg image
+docker build --tag smart_sladding_app:latest .
+
+# Bak proxy:
+docker build \
   --build-arg http_proxy=http://159.162.48.7:3128 \
   --build-arg https_proxy=http://159.162.48.7:3128 \
   --build-arg no_proxy=localhost,127.0.0.1 \
-  --tag smart_sladding_app_dev:latest .
-  
-#Docker build prod image
-sudo docker build  \
-  --build-arg http_proxy=http://159.162.48.7:3128 \
-  --build-arg https_proxy=http://159.162.48.7:3128 \
-  --build-arg no_proxy=localhost,127.0.0.1 \
-  --tag smart_sladding_app_prod:latest .
-  
-1.3 Start containers manuelt
-docker run -it -v data:/data/ml_logs -p <containerport>:<exposeport> -m 32g -e http_proxy=http://<proxyip>:<proxyport> -e https_proxy=http://<proxyip>:<proxyport> --name smsl-server-prod smart_sladding_app
-docker run -it -v data:/data/ml_logs -p <containerport>:<exposeport> -m 32g -e http_proxy=http://<proxyip>:<proxyport> -e https_proxy=http://<proxyip>:<proxyport> --name smsl-server-dev smart_sladding_app
+  --tag smart_sladding_app:latest .
+```
 
-1.4 Start containere med compose
+#### 1.2 Start containere med compose
+
+```sh
 docker compose up -d
+```
 
-1.5 Test med curl
-curl -X POST http://localhost:<containerport>/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
-curl -X POST http://localhost:<containerport>/model -H "Content-Type: application/pdf" --data-binary "@testdokument-2.pdf"
+Dette starter to tjenester:
+- **prod** på port 5071 (`MODE=prod`)
+- **dev** på port 5072 (`MODE=dev`)
 
-2. Hvordan sette opp prosjektet og kjøre lokalt:
+#### 1.3 Start container manuelt
 
-2.1. Klon repository
+```sh
+docker run -it --gpus all \
+  -v /data/docker/ml_logs:/data/ml_logs \
+  -p 5071:8080 \
+  -e MODE=prod \
+  -e HTTP_PROXY=http://159.162.48.7:3128 \
+  -e HTTPS_PROXY=http://159.162.48.7:3128 \
+  --name smsl-server-prod \
+  smart_sladding_app:latest
+```
+
+#### 1.4 Test med curl
+
+```sh
+curl -X POST http://localhost:5071/model \
+  -H "Content-Type: application/pdf" \
+  --data-binary "@app/testdokument-2.pdf"
+```
+
+### 2. Lokalt oppsett (uten Docker)
+
+#### 2.1. Klon repository
 ```sh
 git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
 cd dokumentbestilling-smart-sladding
 ```
 
-2.2. Opprett virtuelt miljø og installer avhengigheter
+#### 2.2. Opprett virtuelt miljø og installer avhengigheter
 ```sh
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-For de som bruker mac: 
-* Last ned Poppler `brew install poppler`
-* Last ned Tesseract `brew install tesseract`
-
 For onprem maskin, finn de nødvendige installasjonspakkene for Tesseract og Poppler, og installer disse.
-* poppler versjon kan sjekkes med `pdftoppm -v` 
-* tesseract versjon kan sjekkes med `tesseract -v` 
+* poppler versjon kan sjekkes med `pdftoppm -v`
+* tesseract versjon kan sjekkes med `tesseract -v`
 
-
-2.3. Kjør opp appen
+#### 2.3. Kjør opp appen
 ```sh
 cd app
 python3 app.py
 ```
 
-2.4. test appen via Curl i ny terminal:
+#### 2.4. Test appen via curl i ny terminal
 ```sh
 mkdir -p app/logs
 curl -X POST http://localhost:5070/model \
@@ -85,19 +105,7 @@ curl -X POST http://localhost:5070/model \
   --data-binary "@app/testdokument-2.pdf"
 ```
 
-2.5. Manuelt laste ned easyOCR modeller bak brannmuren (kun nødvendig for onprem maskin):
-```sh
-curl -L -x http://<proxyip>:<proxyport> -o "latin_g2.zip" https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
-curl -L -x http://<proxyip>:<proxyport> -o "craft_mlt_25k.zip" https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
-
-mv latin_g2.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
-mv craft_mlt_25k.zip dokumentbestilling-smart-sladding/tmp/.EasyOCR/model
-
-unzip latin_g2.zip
-unzip craft_mlt_25k.zip
-```
-
-2.6. For production / test så kjører vi appen med gunicorn:
+#### 2.5. For production/test kjører vi appen med gunicorn
 ```sh
 cd app
 chmod +x start_production.sh
@@ -105,11 +113,12 @@ chmod +x start_production.sh
 ```
 
 ## EasyOCR-modeller bak brannmur
-Dersom utviklingsmaskinen ikke har direkte internettilgang, last ned modellene manuelt og plasser dem i `tmp/.EasyOCR/model`:
+
+Dersom maskinen ikke har direkte internettilgang, last ned modellene manuelt og plasser dem i `tmp/.EasyOCR/model`:
 
 ```sh
-curl -L -o latin_g2.zip https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
-curl -L -o craft_mlt_25k.zip https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
+curl -L -x http://<proxyip>:<proxyport> -o "latin_g2.zip" https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
+curl -L -x http://<proxyip>:<proxyport> -o "craft_mlt_25k.zip" https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
 
 mkdir -p tmp/.EasyOCR/model
 mv latin_g2.zip craft_mlt_25k.zip tmp/.EasyOCR/model/
