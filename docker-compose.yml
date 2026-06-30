@@ -24,7 +24,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-              
+
   app-dev:
     build:
       context: .
