@@ -30,9 +30,10 @@ def _hent_reader():
         ocr = PaddleOCR(
             lang="en",
             use_angle_cls=True,
-            # Keep coordinates in the same geometry as the input image.
-            use_doc_orientation_classify=True,
-            use_doc_unwarping=True,
+            # Keep coordinates in the same geometry as the input image
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            # Use GPU if available, otherwise CPU
             device=device_available,
         )
     return ocr
