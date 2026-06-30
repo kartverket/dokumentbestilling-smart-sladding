@@ -27,19 +27,7 @@ brew install poppler tesseract
 
 Prosjektet bruker `nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04` som base-image med Python 3.14 via deadsnakes PPA. Docker og NVIDIA Container Toolkit må være installert og konfigurert på forhånd.
 
-#### 1.1 Docker login
-
-For å hente base-image fra Docker Hub må du logge inn:
-
-```sh
-# Interaktivt:
-docker login
-
-# Via stdin (f.eks. i CI/CD):
-echo "$DOCKER_TOKEN" | docker login -u <brukernavn> --password-stdin
-```
-
-#### 1.2 Docker build
+#### 1.1 Docker build
 
 ```sh
 # Bygg image
@@ -53,7 +41,7 @@ docker build \
   --tag smart_sladding_app:latest .
 ```
 
-#### 1.3 Start containere med compose
+#### 1.2 Start containere med compose
 
 ```sh
 docker compose up -d
@@ -63,7 +51,7 @@ Dette starter to tjenester:
 - **prod** på port 5071 (`MODE=prod`)
 - **dev** på port 5072 (`MODE=dev`)
 
-#### 1.4 Start container manuelt
+#### 1.3 Start container manuelt
 
 ```sh
 docker run -it --gpus all \
@@ -76,7 +64,7 @@ docker run -it --gpus all \
   smart_sladding_app:latest
 ```
 
-#### 1.5 Test med curl
+#### 1.4 Test med curl
 
 ```sh
 curl -X POST http://localhost:5071/model \

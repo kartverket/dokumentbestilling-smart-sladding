@@ -17,7 +17,14 @@ services:
     volumes:
       - /data/docker/gunicorn_logs:/data/gunicorn_logs
       - /data/docker/ml_logs:/data/ml_logs
-
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+              
   app-dev:
     build:
       context: .
@@ -36,6 +43,13 @@ services:
     volumes:
       - /data/docker/gunicorn_logs:/data/gunicorn_logs
       - /data/docker/ml_logs:/data/ml_logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
 
 volumes:
   data:
