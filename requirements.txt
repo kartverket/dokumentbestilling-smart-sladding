@@ -6,7 +6,7 @@ PyPDF2
 numpy
 matplotlib
 pandas
-torch
+torch==2.4.0
 torchvision
 pymupdf
 requests
