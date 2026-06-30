@@ -8,11 +8,11 @@ Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokume
 
 ### Docker (anbefalt)
 - Docker
-- NVIDIA GPU med CUDA 13.2-støtte
+- NVIDIA GPU med CUDA 12.1-støtte
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 
 ### Lokal utvikling
-- Python 3.14+
+- Python 3.10+
 - [Poppler](https://poppler.freedesktop.org/) (`pdftoppm -v` for å verifisere)
 - [Tesseract](https://tesseract-ocr.github.io/) (`tesseract -v` for å verifisere)
 
@@ -25,7 +25,7 @@ brew install poppler tesseract
 
 ### 1. Docker-oppsett (anbefalt)
 
-Prosjektet bruker `nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04` som base-image med Python 3.14 via deadsnakes PPA. Docker og NVIDIA Container Toolkit må være installert og konfigurert på forhånd.
+Prosjektet bruker `nvidia/cuda:12.1.1-runtime-ubuntu22.04` som base-image med Python 3.10. Docker og NVIDIA Container Toolkit må være installert og konfigurert på forhånd.
 
 #### 1.1 Docker build
 
