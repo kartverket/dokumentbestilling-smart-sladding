@@ -160,20 +160,23 @@ def les_tokens_batched(bilder, sider_per_batch=8):
     import cv2
     reader = _hent_reader()
 
+    # Convert PIL Images to numpy arrays if needed
+    np_bilder = [np.array(img) if not isinstance(img, np.ndarray) else img for img in bilder]
+
     # Resize all pages to the largest dimensions so readtext_batched
     # can stack them into a single np.array.
-    maks_h = max(img.shape[0] for img in bilder)
-    maks_w = max(img.shape[1] for img in bilder)
+    maks_h = max(img.shape[0] for img in np_bilder)
+    maks_w = max(img.shape[1] for img in np_bilder)
 
     skalering = {}  # {side_idx: (skala_x, skala_y)}
     norm_bilder = []
-    for idx, img in enumerate(bilder):
+    for idx, img in enumerate(np_bilder):
         h, w = img.shape[:2]
         skalering[idx] = (w / maks_w, h / maks_h)
         if w == maks_w and h == maks_h:
-            norm_bilder.append(np.asarray(img))
+            norm_bilder.append(img)
         else:
-            norm_bilder.append(cv2.resize(np.asarray(img), (maks_w, maks_h), interpolation=cv2.INTER_LINEAR))
+            norm_bilder.append(cv2.resize(img, (maks_w, maks_h), interpolation=cv2.INTER_LINEAR))
 
     tokens_per_side = []
     for start in range(0, len(norm_bilder), sider_per_batch):
