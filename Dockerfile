@@ -14,7 +14,7 @@ RUN python3 -m pip install --upgrade pip
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
