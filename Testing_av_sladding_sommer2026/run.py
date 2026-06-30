@@ -7,6 +7,7 @@ from csv_export import skriv_csv
 from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
+import traceback
 
 import time
 
@@ -50,6 +51,7 @@ def main():
                 resultat = run_model_on_pdf_bytes(f.read())     # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
+            traceback.print_exc() 
             continue
 
         tid_brukt = time.perf_counter() - start

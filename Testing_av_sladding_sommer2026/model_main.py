@@ -1,5 +1,5 @@
 from load_pdf import les_sider_fra_bytes, PDF_DPI
-from ocr_model_fnr import finn_bokser
+from paddleocr_model_fnr import finn_bokser
 
 
 def run_model_on_pdf_bytes(pdf_bytes):
