@@ -142,6 +142,8 @@ def _sladdeboks(sifferbokser):
     bunn = max(boks.bunn for boks in siste)
     return (round(venstre), round(topp), round(hoyre), round(bunn))
 
+
+#Remove presidio and call fnr.analyze directly on the text and then map back to the tokens to get the bounding boxes.
 def finn_bokser_fra_tokens(tokens):
     linjer = _grupper_til_linjer(tokens)
     bokser = []
@@ -161,9 +163,9 @@ def les_tokens_batched(bilder, sider_per_batch=8):
 
     tokens_per_side = []
     for start in range(0, len(bilder), sider_per_batch):
-        np_bilder = [np.array(b) for b in bilder[start:start + sider_per_batch]]
+        batch = bilder[start:start + sider_per_batch]
         resultater = reader.readtext_batched(
-            np_bilder,
+            batch,
             allowlist="0123456789 .-",
             batch_size=16,
         )

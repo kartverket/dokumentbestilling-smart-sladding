@@ -1,7 +1,5 @@
-import io
-
 import fitz
-from PIL import Image
+import numpy as np
 
 PDF_DPI = 300
 
@@ -9,8 +7,11 @@ PDF_DPI = 300
 def _render(dokument):
     sider = []
     for side in dokument:
-        png = side.get_pixmap(dpi=PDF_DPI).tobytes("png")
-        sider.append(Image.open(io.BytesIO(png)).convert("RGB"))
+        pix = side.get_pixmap(dpi=PDF_DPI)
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+        if pix.n == 4:  # RGBA → RGB
+            img = img[:, :, :3]
+        sider.append(img.copy())  # copy: pixmap buffer is reused
     dokument.close()
     return sider
 
