@@ -157,15 +157,38 @@ def finn_bokser_fra_tokens(tokens):
     return bokser
 
 def les_tokens_batched(bilder, sider_per_batch=8):
+    import cv2
     reader = _hent_reader()
 
+    # Resize all pages to the largest dimensions so readtext_batched
+    # can stack them into a single np.array.
+    maks_h = max(img.shape[0] for img in bilder)
+    maks_w = max(img.shape[1] for img in bilder)
+
+    skalering = {}  # {side_idx: (skala_x, skala_y)}
+    norm_bilder = []
+    for idx, img in enumerate(bilder):
+        h, w = img.shape[:2]
+        skalering[idx] = (w / maks_w, h / maks_h)
+        if w == maks_w and h == maks_h:
+            norm_bilder.append(np.asarray(img))
+        else:
+            norm_bilder.append(cv2.resize(np.asarray(img), (maks_w, maks_h), interpolation=cv2.INTER_LINEAR))
+
     tokens_per_side = []
-    for start in range(0, len(bilder), sider_per_batch):
-        np_bilder = [np.array(b) for b in bilder[start:start + sider_per_batch]]
+    for start in range(0, len(norm_bilder), sider_per_batch):
+        batch = norm_bilder[start:start + sider_per_batch]
         resultater = reader.readtext_batched(
-            np_bilder,
+            batch,
             allowlist="0123456789 .-",
             batch_size=16,
         )
-        tokens_per_side.extend(_les_tokens(t) for t in resultater)
+        for side_i, treff in enumerate(resultater, start=start):
+            sx, sy = skalering[side_i]
+            tokens = []
+            for poly, tekst, _ in treff:
+                xs = [p[0] * sx for p in poly]
+                ys = [p[1] * sy for p in poly]
+                tokens.append(Token(tekst, min(xs), min(ys), max(xs), max(ys)))
+            tokens_per_side.append(tokens)
     return tokens_per_side
