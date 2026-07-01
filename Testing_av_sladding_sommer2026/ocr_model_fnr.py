@@ -24,8 +24,8 @@ REC_BATCH = 16                # tekstlinjer per gjenkjennings-batch (fart)
 
 
 #   DET_MODELL, REC_MODELL = "PP-OCRv5_server_det", "PP-OCRv5_server_rec"
-DET_MODELL = "PP-OCRv5_server_det"
-REC_MODELL = "PP-OCRv5_server_rec"
+DET_MODELL = None
+REC_MODELL = None
 
 
 reader = None
