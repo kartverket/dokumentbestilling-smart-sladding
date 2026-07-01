@@ -1,32 +1,70 @@
+import math
 import re
 import statistics
 from collections import namedtuple
 
 import numpy as np
-import easyocr
-import torch
-from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerResult
+from paddleocr import PaddleOCR
 
 
 SLADDE_SIFFER = 5
-EXTRAMARGIN = 0.0            # ekstra bredde i median sifferbredder
+LUFT_X = 0.20               # horisontal margin, andel av median sifferbredde
+LUFT_Y = 0.12               # vertikal margin, andel av sifferhoyden
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
 
 Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1"])
 SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn"])
+Treff = namedtuple("Treff", ["start", "end"])
+
+
+DET_SIDE_LEN = 2048
+REC_BATCH = 16                # tekstlinjer per gjenkjennings-batch (fart)
+
+
+#   DET_MODELL, REC_MODELL = "PP-OCRv5_server_det", "PP-OCRv5_server_rec"
+DET_MODELL = "PP-OCRv5_server_det"
+REC_MODELL = "PP-OCRv5_server_rec"
 
 
 reader = None
 
+
+def _har_gpu():
+    try:
+        import paddle
+        return paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
+    except Exception:
+        return False
+
+
 def _hent_reader():
     global reader
     if reader is None:
-        gpu = torch.cuda.is_available()
+        gpu = _har_gpu()
         print(f"GPU tilgjengelig: {gpu}")
 
-        reader = easyocr.Reader(["no", "en"], gpu=gpu, verbose=False)
+        kwargs = dict(
+            lang="en",
+            device="gpu" if gpu else "cpu",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            text_det_limit_type="max",
+            text_det_limit_side_len=DET_SIDE_LEN,
+            text_recognition_batch_size=REC_BATCH,
+        )
+        if DET_MODELL:
+            kwargs["text_detection_model_name"] = DET_MODELL
+        if REC_MODELL:
+            kwargs["text_recognition_model_name"] = REC_MODELL
+        if gpu:
+            kwargs["precision"] = "fp16"   # raskere paa GPU, ubetydelig for siffer
+        else:
+            kwargs["enable_mkldnn"] = True  # CPU-akselerasjon
+
+        reader = PaddleOCR(**kwargs)
     return reader
 
 
@@ -52,47 +90,56 @@ def er_fnr_form(nummer):
     return 1 <= dag <= 31 and 1 <= maaned <= 12
 
 
-class FnrRecognizer(EntityRecognizer):
-    def __init__(self):
-        super().__init__(supported_entities=["NO_FNR"], supported_language="en")
-    def load(self):
-        pass
-
-    def analyze(self, text, entities, nlp_artifacts=None):
-        if "NO_FNR" not in entities:
-            return []
-        pos = [i for i, ch in enumerate(text) if ch.isdigit()]   # indeks til hvert siffer
-        treff, i = [], 0
-        while i + 11 <= len(pos):
-            start, slutt = pos[i], pos[i + 10] + 1
-            mellom = text[start:slutt]
-            cifre = re.sub(r"\D", "", mellom)
-            luker = re.findall(r"\D+", mellom)                   # sammenhengende ikke-siffer
-            ok = (
-                len(luker) <= 3                                  # OCR kan ha splittet fnr-et i biter
-                and all(set(g) <= set(" .-") for g in luker)
-                and all(len(g) <= 2 for g in luker)              # korte luker, ikke ny kolonne
-                and er_fnr_form(cifre)
-                and gyldig_mod11(cifre)
-            )
-            if ok:
-                treff.append(RecognizerResult("NO_FNR", start, slutt, score=1.0))
-                i += 11                                          # hopp forbi hele fnr-et
-            else:
-                i += 1                                           # gli ett siffer videre
-        return treff
+def finn_fnr(tekst):
+    pos = [i for i, ch in enumerate(tekst) if ch.isdigit()]   # indeks til hvert siffer
+    treff, i = [], 0
+    while i + 11 <= len(pos):
+        start, slutt = pos[i], pos[i + 10] + 1
+        mellom = tekst[start:slutt]
+        cifre = re.sub(r"\D", "", mellom)
+        luker = re.findall(r"\D+", mellom)                    # sammenhengende ikke-siffer
+        ok = (
+            len(luker) <= 3                                   # OCR kan ha splittet fnr-et i biter
+            and all(set(g) <= set(" .-") for g in luker)
+            and all(len(g) <= 2 for g in luker)               # korte luker, ikke ny kolonne
+            and er_fnr_form(cifre)
+            and gyldig_mod11(cifre)
+        )
+        if ok:
+            treff.append(Treff(start, slutt))
+            i += 11                                           # hopp forbi hele fnr-et
+        else:
+            i += 1                                            # gli ett siffer videre
+    return treff
 
 
-analyzer = AnalyzerEngine()
-analyzer.registry.add_recognizer(FnrRecognizer())
-
-
-def _les_tokens(ocr_treff):
+def _les_tokens(res):
     tokens = []
-    for poly, tekst, _ in ocr_treff:
-        xs = [p[0] for p in poly]
-        ys = [p[1] for p in poly]
-        tokens.append(Token(tekst, min(xs), min(ys), max(xs), max(ys)))
+    if not res:
+        return tokens
+
+    ord_per_linje = res.get("text_word")
+    boks_per_linje = res.get("text_word_boxes")
+    if ord_per_linje and boks_per_linje:
+        for ord_liste, boks_liste in zip(ord_per_linje, boks_per_linje):
+            for tekst, boks in zip(ord_liste, boks_liste):
+                if not tekst.strip():                 # hopp over rene mellomrom
+                    continue
+                x0, y0, x1, y1 = (float(v) for v in np.asarray(boks).reshape(-1)[:4])
+                tokens.append(Token(tekst, min(x0, x1), min(y0, y1),
+                                    max(x0, x1), max(y0, y1)))
+        if tokens:
+            return tokens
+
+    # Fallback: linjenivaa (fire hjornepunkter per boks).
+    tekster = res.get("rec_texts") or []
+    polys = res.get("rec_polys")
+    if polys is None:
+        polys = res.get("dt_polys") or []
+    for tekst, poly in zip(tekster, polys):
+        pts = np.asarray(poly, dtype=float)
+        tokens.append(Token(tekst, float(pts[:, 0].min()), float(pts[:, 1].min()),
+                            float(pts[:, 0].max()), float(pts[:, 1].max())))
     return tokens
 
 
@@ -133,23 +180,30 @@ def _bygg_linjetekst(linje):
 def _sladdeboks(sifferbokser):
     if len(sifferbokser) <= SLADDE_SIFFER:
         return None
-    siste = sifferbokser[-SLADDE_SIFFER:]
-    anker = sifferbokser[-SLADDE_SIFFER - 1]
-    median_bredde = statistics.median(boks.hoyre - boks.venstre for boks in siste)
-    venstre = anker.hoyre
-    hoyre = max(boks.hoyre for boks in siste) + EXTRAMARGIN * median_bredde
-    topp = min(boks.topp for boks in siste)
-    bunn = max(boks.bunn for boks in siste)
-    return (round(venstre), round(topp), round(hoyre), round(bunn))
+    siste = sifferbokser[-SLADDE_SIFFER:]            # de 5 som skal dekkes
+    anker = sifferbokser[-SLADDE_SIFFER - 1]         # sifferet rett foer (skal IKKE dekkes)
+
+    median_bredde = statistics.median(b.hoyre - b.venstre for b in siste)
+    hoyde = max(b.bunn for b in siste) - min(b.topp for b in siste)
+    mx = LUFT_X * median_bredde
+    my = LUFT_Y * hoyde
+
+    grense = (anker.hoyre + siste[0].venstre) / 2
+    venstre = max(grense - mx, (anker.venstre + anker.hoyre) / 2)
+
+    hoyre = max(b.hoyre for b in siste) + mx
+    topp = min(b.topp for b in siste) - my
+    bunn = max(b.bunn for b in siste) + my
+
+    return (math.floor(venstre), math.floor(topp), math.ceil(hoyre), math.ceil(bunn))
 
 
-#Remove presidio and call fnr.analyze directly on the text and then map back to the tokens to get the bounding boxes.
 def finn_bokser_fra_tokens(tokens):
     linjer = _grupper_til_linjer(tokens)
     bokser = []
     for linje in linjer:
         tekst, kart = _bygg_linjetekst(linje)
-        for treff in analyzer.analyze(tekst, entities=["NO_FNR"], language="en"):
+        for treff in finn_fnr(tekst):
             sifferbokser = [kart[i] for i in range(treff.start, treff.end) if kart[i] is not None]
             boks = _sladdeboks(sifferbokser)
             if boks is None:
@@ -158,44 +212,31 @@ def finn_bokser_fra_tokens(tokens):
             bokser.append((boks, gyldig_mod11(cifre)))
     return bokser
 
-def les_tokens_batched(bilder, sider_per_batch=8):
-    import cv2
+
+def ocr_linjer_fra_tokens(tokens):
+    linjer_ut = []
+    linjer = _grupper_til_linjer(tokens)
+    for linje in sorted(linjer, key=lambda l: min(t.y0 for t in l)):
+        tekst, _kart = _bygg_linjetekst(linje)
+        tekst = tekst.strip()
+        if not tekst:
+            continue
+        merker = []
+        for tr in finn_fnr(tekst):
+            cifre = re.sub(r"\D", "", tekst[tr.start:tr.end])
+            merker.append((cifre, gyldig_mod11(cifre)))
+        linjer_ut.append((tekst, merker))
+    return linjer_ut
+
+
+def les_tokens_batched(bilder):
     reader = _hent_reader()
 
-    # Find the target size (max dimensions across all pages)
-    maks_h = max(img.shape[0] for img in bilder)
-    maks_w = max(img.shape[1] for img in bilder)
-
-    # Build resized images and a ratio dict keyed by page index
-    skalering = {}  # {side_idx: (skala_x, skala_y)}
-    norm_bilder = []
-    for idx, img in enumerate(bilder):
-        h, w = img.shape[:2]
-        skala_x = w / maks_w
-        skala_y = h / maks_h
-        skalering[idx] = (skala_x, skala_y)
-        if w == maks_w and h == maks_h:
-            norm_bilder.append(img)
-        else:
-            norm_bilder.append(cv2.resize(img, (maks_w, maks_h), interpolation=cv2.INTER_LINEAR))
-
-    # Run OCR in batches on the uniformly-sized images
     tokens_per_side = []
-    for start in range(0, len(norm_bilder), sider_per_batch):
-        batch = norm_bilder[start:start + sider_per_batch]
-        resultater = reader.readtext_batched(
-            batch,
-            allowlist="0123456789 .-",
-            batch_size=16,
-        )
-        # Scale coordinates back to original page dimensions
-        for side_i, treff in enumerate(resultater, start=start):
-            sx, sy = skalering[side_i]
-            tokens = []
-            for poly, tekst, _ in treff:
-                xs = [p[0] * sx for p in poly]
-                ys = [p[1] * sy for p in poly]
-                tokens.append(Token(tekst, min(xs), min(ys), max(xs), max(ys)))
-            tokens_per_side.append(tokens)
+    for bilde in bilder:
+        bgr = np.ascontiguousarray(bilde[:, :, ::-1])
+        resultater = reader.predict(bgr, return_word_box=True)
+        res = resultater[0] if resultater else None
+        tokens_per_side.append(_les_tokens(res))
+
     return tokens_per_side
-    

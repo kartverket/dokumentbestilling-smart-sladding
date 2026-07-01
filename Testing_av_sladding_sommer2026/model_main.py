@@ -1,10 +1,10 @@
 import time
 
 from load_pdf import les_sider_fra_bytes, PDF_DPI
-from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens
+from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 
 
-def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False):
+def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
     t = {}
 
     tstart = time.perf_counter()
@@ -27,12 +27,15 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False):
             for (x0, y0, x1, y1), _mod11 in treff
         ]
         h, w = bilde.shape[:2]
-        sider.append({
+        side_data = {
             "side": si,
             "bilde_bredde": w,
             "bilde_hoyde": h,
             "bokser": bokser,
-        })
+        }
+        if med_linjer:
+            side_data["linjer"] = ocr_linjer_fra_tokens(tokens)
+        sider.append(side_data)
 
     if skriv_tid:
         _skriv_tid(t)

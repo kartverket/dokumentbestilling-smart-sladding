@@ -18,36 +18,42 @@ python --version          # skal si Python 3.12.x
 pip install --upgrade pip
 ```
 
-### 1) torch + torchvision — egen installasjon, FØR resten
+OCR-en er PaddleOCR (PP-OCRv6). Modellvektene lastes ned automatisk første gang
+modellen kjører (til `~/.paddlex/official_models`).
 
-torch installeres for seg fordi GPU-bygget ikke ligger på vanlig PyPI. Gjør det
-*før* `requirements.txt`, ellers drar easyocr inn CPU-versjonen av torch som
-transitiv avhengighet. Installer begge i samme kommando så pip matcher
-kompatible versjoner.
+### 1) paddlepaddle — egen installasjon, FØR resten
+
+`paddlepaddle` (rammeverket PaddleOCR kjører på) installeres for seg fordi
+GPU-bygget ikke ligger på vanlig PyPI. Gjør det *før* `requirements.txt`, ellers
+drar paddleocr inn CPU-versjonen som transitiv avhengighet.
 
 ```bash
 # Linux-server med GPU — CUDA-bygg.
-# Bytt cu121 til å matche "CUDA Version" øverst i nvidia-smi (cu118 / cu121 / cu124).
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Bytt cu126 til å matche "CUDA Version" øverst i nvidia-smi (se paddle sine docs).
+pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 
 # Mac / maskin uten GPU — vanlig CPU-bygg.
-pip install torch torchvision
+pip install paddlepaddle
 ```
 
 Sjekk at GPU-en faktisk brukes:
 
 ```bash
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python -c "import paddle; print(paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0)"
 ```
 
-- `True NVIDIA ...` → GPU brukes. Klar.
-- `False CPU` → kjører på CPU. Da matcher som regel ikke `cuXXX`-tallet driveren,
-  eller CPU-torch ligger der fra før:
+- `True` → GPU brukes. Klar. (`ocr_model_fnr.py` velger da automatisk
+  høyoppløst deteksjon + fp16 for best treff.)
+- `False` → kjører på CPU. Da matcher som regel ikke `cuXXX`-tallet driveren,
+  eller CPU-paddle ligger der fra før:
 
 ```bash
-pip uninstall torch torchvision
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip uninstall paddlepaddle paddlepaddle-gpu
+pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 ```
+
+Treff/fart-knapper (deteksjons-oppløsning og modellvalg) ligger som konstanter
+øverst i `ocr_model_fnr.py`.
 
 ### 2) Resten av avhengighetene
 
