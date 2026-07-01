@@ -9,7 +9,7 @@ os.makedirs(log_dir, exist_ok=True)
 
 # Worker configuration
 worker_class = 'sync'
-workers = 4
+workers = 1
 timeout = 600
 
 # Logging configuration
