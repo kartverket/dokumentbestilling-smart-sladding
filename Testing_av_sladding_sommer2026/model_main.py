@@ -4,7 +4,7 @@ from load_pdf import les_sider_fra_bytes, PDF_DPI
 from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 
 
-def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
+def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None):
     t = {}
 
     tstart = time.perf_counter()
@@ -38,19 +38,20 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
     t["etterbehandling"] = time.perf_counter() - tstart
 
     if skriv_tid:
-        _skriv_tid(t, len(sider))
+        _skriv_tid(t, len(sider), navn)
 
     return {"dpi": PDF_DPI, "sider": sider}
 
 
-def _skriv_tid(t, n_sider):
+def _skriv_tid(t, n_sider, navn=None):
     total = t["render"] + t["ocr"] + t.get("etterbehandling", 0.0)
 
     def linje(navn, sek):
         pct = (sek / total * 100) if total else 0.0
         return f"  {navn:<18}{sek:9.3f} s{pct:7.1f}%"
 
-    print("Timing:")
+    tittel = f"Timing [{navn}]:" if navn else "Timing:"
+    print(tittel)
     print(linje("render",          t["render"]))
     print(linje("ocr (batched)",   t["ocr"]))
     print(linje("etterbehandling", t.get("etterbehandling", 0.0)))

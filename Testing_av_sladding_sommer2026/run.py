@@ -69,7 +69,7 @@ def main():
         navn = os.path.basename(fil)
         try:
             with open(fil, "rb") as f:
-                resultat = run_model_on_pdf_bytes(f.read(), skriv_tid=args.tid, med_linjer=args.ocr_logg)  # akkurat som POST-endepunktet
+                resultat = run_model_on_pdf_bytes(f.read(), skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn)  # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
             continue
