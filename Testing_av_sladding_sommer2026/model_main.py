@@ -12,15 +12,14 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
     t["render"] = time.perf_counter() - tstart
 
     tstart = time.perf_counter()
-    tokens_per_side = les_tokens_batched(bilder)        
+    tokens_per_side = les_tokens_batched(bilder)
     t["ocr"] = time.perf_counter() - tstart
 
     sider = []
 
     tstart = time.perf_counter()
-
     for si, (bilde, tokens) in enumerate(zip(bilder, tokens_per_side), start=1):
-        treff = finn_bokser_fra_tokens(tokens)          
+        treff = finn_bokser_fra_tokens(tokens)
 
         bokser = [
             {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
@@ -36,6 +35,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
         if med_linjer:
             side_data["linjer"] = ocr_linjer_fra_tokens(tokens)
         sider.append(side_data)
+    t["etterbehandling"] = time.perf_counter() - tstart
 
     if skriv_tid:
         _skriv_tid(t)
@@ -44,13 +44,14 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
 
 
 def _skriv_tid(t):
-    total = t["render"] + t["ocr"]
+    total = t["render"] + t["ocr"] + t.get("etterbehandling", 0.0)
 
     def linje(navn, sek):
         pct = (sek / total * 100) if total else 0.0
-        return f"  {navn:<16}{sek:9.3f} s{pct:7.1f}%"
+        return f"  {navn:<18}{sek:9.3f} s{pct:7.1f}%"
 
     print("Timing:")
-    print(linje("render",        t["render"]))
-    print(linje("ocr (batched)", t["ocr"]))
-    print(f"  {'Total':<16}{total:9.3f} s")
+    print(linje("render",          t["render"]))
+    print(linje("ocr (batched)",   t["ocr"]))
+    print(linje("etterbehandling", t.get("etterbehandling", 0.0)))
+    print(f"  {'Total':<18}{total:9.3f} s")

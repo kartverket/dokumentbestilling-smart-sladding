@@ -48,6 +48,7 @@ def main():
     p.add_argument("--sladd-mappe", default="sladdet", help="hvor sladdede PDF-er lagres")
     p.add_argument("--terskel", type=float, default=0.40, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default="topp", help="CSV y-origo")
+    p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
     args = p.parse_args()
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
@@ -68,7 +69,7 @@ def main():
         navn = os.path.basename(fil)
         try:
             with open(fil, "rb") as f:
-                resultat = run_model_on_pdf_bytes(f.read(), med_linjer=args.ocr_logg)  # akkurat som POST-endepunktet
+                resultat = run_model_on_pdf_bytes(f.read(), skriv_tid=args.tid, med_linjer=args.ocr_logg)  # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
             continue
