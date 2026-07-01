@@ -20,7 +20,7 @@ Treff = namedtuple("Treff", ["start", "end"])
 
 
 DET_SIDE_LEN = 2048
-REC_BATCH = 16                # tekstlinjer per gjenkjennings-batch (fart)
+REC_BATCH = 64                # tekstlinjer per gjenkjennings-batch (fart)
 SIDER_PER_OCR_BATCH = 8       # sider matet inn i ETT predict-kall (GPU-utnyttelse)
 
 DET_MODELL = "PP-OCRv5_server_det"

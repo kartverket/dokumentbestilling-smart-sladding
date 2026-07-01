@@ -88,6 +88,22 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
                   f"-> {'TRUFFET' if truffet else 'MANGLER'}")
         sum_overflod += len(pred) - len(truffet_pred)
 
+
+    nr_til_navn = {}
+    for (navn, _si) in sladd_bokser:
+        nr_til_navn.setdefault(_dok_nr(navn), navn)
+    for (nr, side), fb in fasit.items():
+        navn = nr_til_navn.get(nr)
+        if navn is None or (navn, side) in sladd_bokser:
+            continue                       # dok ikke prosessert, eller side alt talt
+        print(f"\n{navn}  (dok_nr={nr}, side {side})  -- ingen prediksjon paa sida")
+        for (_x, _y, _w, _h, t) in fb:
+            sum_fasit += 1
+            pr_type[t][1] += 1
+            bom_filer[(navn, side)][1] += 1
+            bom_filer[(navn, side)][0] += 1
+            print(f"   fasit {t:<22} dekning=  0%  IoU=  0%  -> MANGLER")
+
     print("\n" + "=" * 64)
     rec = sum_truffet / sum_fasit if sum_fasit else 0.0
     print(f"Recall (truffet / fasit):         {sum_truffet}/{sum_fasit} = {rec:.0%}")
