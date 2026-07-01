@@ -9,7 +9,7 @@ from paddleocr import PaddleOCR
 
 SLADDE_SIFFER = 5
 LUFT_X = 0.20               # horisontal margin, andel av median sifferbredde
-LUFT_Y = 0.12               # vertikal margin, andel av sifferhoyden
+LUFT_Y = 0.12               # vertikal margin, andel av sifferhoyde
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
@@ -21,11 +21,12 @@ Treff = namedtuple("Treff", ["start", "end"])
 
 DET_SIDE_LEN = 2048
 REC_BATCH = 16                # tekstlinjer per gjenkjennings-batch (fart)
+SIDER_PER_OCR_BATCH = 8       # sider matet inn i ETT predict-kall (GPU-utnyttelse)
 
-
-#   DET_MODELL, REC_MODELL = "PP-OCRv5_server_det", "PP-OCRv5_server_rec"
-DET_MODELL = None
-REC_MODELL = None
+DET_MODELL = "PP-OCRv5_server_det"
+REC_MODELL = "PP-OCRv5_server_rec"
+DET_MODELL_DIR = "PP-OCRv5_server_det_infer"
+REC_MODELL_DIR = "PP-OCRv5_server_rec_infer"
 
 
 reader = None
@@ -53,16 +54,17 @@ def _hent_reader():
             use_textline_orientation=False,
             text_det_limit_type="max",
             text_det_limit_side_len=DET_SIDE_LEN,
-            text_recognition_batch_size=REC_BATCH,
+            # paa GPU taaler vi stoerre rec-batch -> bedre gjennomstroemning
+            text_recognition_batch_size=REC_BATCH * 2 if gpu else REC_BATCH,
         )
-        if DET_MODELL:
-            kwargs["text_detection_model_name"] = DET_MODELL
-        if REC_MODELL:
-            kwargs["text_recognition_model_name"] = REC_MODELL
+        kwargs["text_detection_model_name"] = DET_MODELL
+        kwargs["text_recognition_model_name"] = REC_MODELL
+        kwargs["text_detection_model_dir"] = DET_MODELL_DIR
+        kwargs["text_recognition_model_dir"] = REC_MODELL_DIR
         if gpu:
-            kwargs["precision"] = "fp16"   # raskere paa GPU, ubetydelig for siffer
+            kwargs["precision"] = "fp16"   
         else:
-            kwargs["enable_mkldnn"] = True  # CPU-akselerasjon
+            kwargs["enable_mkldnn"] = True 
 
         reader = PaddleOCR(**kwargs)
     return reader
@@ -233,10 +235,13 @@ def les_tokens_batched(bilder):
     reader = _hent_reader()
 
     tokens_per_side = []
-    for bilde in bilder:
-        bgr = np.ascontiguousarray(bilde[:, :, ::-1])
-        resultater = reader.predict(bgr, return_word_box=True)
-        res = resultater[0] if resultater else None
-        tokens_per_side.append(_les_tokens(res))
+    for start in range(0, len(bilder), SIDER_PER_OCR_BATCH):
+        chunk = bilder[start:start + SIDER_PER_OCR_BATCH]
+        bgr_chunk = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
+        resultater = reader.predict(bgr_chunk, return_word_box=True) or []
+        for res in resultater:
+            tokens_per_side.append(_les_tokens(res))
+        while len(tokens_per_side) < start + len(chunk):
+            tokens_per_side.append([])
 
     return tokens_per_side
