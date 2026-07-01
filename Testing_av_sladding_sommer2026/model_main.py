@@ -38,12 +38,12 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False):
     t["etterbehandling"] = time.perf_counter() - tstart
 
     if skriv_tid:
-        _skriv_tid(t)
+        _skriv_tid(t, len(sider))
 
     return {"dpi": PDF_DPI, "sider": sider}
 
 
-def _skriv_tid(t):
+def _skriv_tid(t, n_sider):
     total = t["render"] + t["ocr"] + t.get("etterbehandling", 0.0)
 
     def linje(navn, sek):
@@ -55,3 +55,6 @@ def _skriv_tid(t):
     print(linje("ocr (batched)",   t["ocr"]))
     print(linje("etterbehandling", t.get("etterbehandling", 0.0)))
     print(f"  {'Total':<18}{total:9.3f} s")
+    print(f"  {'Sider totalt':<18}{n_sider:9d}")
+    if n_sider:
+        print(f"  {'Per side':<18}{total / n_sider:9.3f} s")
