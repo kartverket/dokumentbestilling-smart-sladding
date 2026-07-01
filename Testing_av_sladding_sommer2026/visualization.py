@@ -1,7 +1,7 @@
 import glob
 import os
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from load_pdf import les_sider, PDF_DPI
 
@@ -48,7 +48,7 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
             print(f"   {navn}: kunne ikke rendres ({e!r})")
             continue
         for si in sorted(per_fil[navn]):
-            bilde = bilder[si - 1].copy()
+            bilde = Image.fromarray(bilder[si - 1])
             tegner = ImageDraw.Draw(bilde)
             _bw, _bh, funnet = sladd_bokser[(navn, si)]
             for (x0, y0, x1, y1) in funnet:

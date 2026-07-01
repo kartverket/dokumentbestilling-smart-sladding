@@ -27,10 +27,11 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False):
             {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
             for (x0, y0, x1, y1), _mod11 in treff
         ]
+        h, w = bilde.shape[:2]
         sider.append({
             "side": si,
-            "bilde_bredde": bilde.size[0],
-            "bilde_hoyde": bilde.size[1],
+            "bilde_bredde": w,
+            "bilde_hoyde": h,
             "bokser": bokser,
         })
 
