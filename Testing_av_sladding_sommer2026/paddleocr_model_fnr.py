@@ -35,6 +35,7 @@ def _hent_reader():
             use_doc_unwarping=False,
             # Use GPU if available, otherwise CPU
             device=device_available,
+            rec_batch_num=32
         )
     return ocr
 
@@ -186,8 +187,7 @@ def _sladdeboks(sifferbokser):
     return (round(venstre), round(topp), round(hoyre), round(bunn))
 
 
-def finn_bokser(bilde):
-    tokens = _les_tokens(bilde)
+def finn_bokser_fra_tokens(tokens):
     linjer = _grupper_til_linjer(tokens)
     bokser = []
     for linje in linjer:
@@ -200,3 +200,12 @@ def finn_bokser(bilde):
             cifre = re.sub(r"\D", "", tekst[treff.start:treff.end])
             bokser.append((boks, gyldig_mod11(cifre)))
     return bokser
+
+
+def les_tokens_batched(bilder):
+    """Process all page images through PaddleOCR and return tokens per side.
+    PaddleOCR handles detection per-image but batches recognition internally."""
+    tokens_per_side = []
+    for img in bilder:
+        tokens_per_side.append(_les_tokens(img))
+    return tokens_per_side

@@ -1,7 +1,7 @@
 import time
 
 from load_pdf import les_sider_fra_bytes, PDF_DPI
-from paddleocr_model_fnr import finn_bokser
+from paddleocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens
 from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens
 
 
