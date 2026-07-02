@@ -4,9 +4,6 @@ from collections import defaultdict
 
 import fitz
 
-from save_result import lagre_resultat
-
-
 def _dok_nr(navn):
     m = re.match(r"0*(\d+)", os.path.basename(navn))
     return int(m.group(1)) if m else None

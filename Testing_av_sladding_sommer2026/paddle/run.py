@@ -10,7 +10,6 @@ from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 import traceback
-from save_result import lagre_resultat
 
 import time
 
