@@ -1,7 +1,10 @@
 import argparse
 import io
 import os
+import sys
 from contextlib import redirect_stdout
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "utils"))
 
 from file_selection import velg_filer
 from model_main import run_model_on_pdf_bytes
@@ -10,6 +13,7 @@ from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 import traceback
+from save_result import lagre_resultat
 
 import time
 
@@ -51,8 +55,8 @@ def main():
     p.add_argument("--sladd-mappe", default="sladdet", help="hvor sladdede PDF-er lagres")
     p.add_argument("--terskel", type=float, default=0.40, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default="topp", help="CSV y-origo")
-
     p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
+    p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
     args = p.parse_args()
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
@@ -122,7 +126,8 @@ def main():
             eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
-        lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=logg)
+        header = f"Mappe:     {os.path.abspath(args.mappe)}\nFasit-CSV: {os.path.abspath(args.fasit_csv)}\n\n"
+        lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=header + logg)
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
 

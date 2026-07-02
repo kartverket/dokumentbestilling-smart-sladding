@@ -60,7 +60,8 @@ def lagre_resultat(resultat, mappe=".", beskrivelse=None, logg=None):
     with open(detaljer_fil, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[
             "fil", "side", "fasit_nr", "type",
-            "dekning_pst", "iou_pst", "resultat",
+            "dekning_pst", "resultat",
+            "fasit_x0", "fasit_y0", "fasit_x1", "fasit_y1",
         ])
         w.writeheader()
         w.writerows(resultat.get("detaljer", []))

@@ -1,9 +1,11 @@
 import os
 import re
+import sys
 from collections import defaultdict
 
 import fitz
 
+sys.path.insert(0, os.path.dirname(__file__))
 from save_result import lagre_resultat
 
 
@@ -83,8 +85,11 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
             detaljer.append({
                 "fil": navn, "side": si, "fasit_nr": fi + 1, "type": t,
                 "dekning_pst": round(best_dek * 100, 1),
-                "iou_pst": round(best_iou * 100, 1),
                 "resultat": "TRUFFET" if truffet else "MANGLER",
+                "fasit_x0": round(fb[0], 6),
+                "fasit_y0": round(fb[1], 6),
+                "fasit_x1": round(fb[2], 6),
+                "fasit_y1": round(fb[3], 6),
             })
             if truffet:
                 sum_truffet += 1
@@ -111,6 +116,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
     print("\n" + "=" * 64)
     if feil:
         print(f"Filer med bom ({len(feil)} side(r) med minst én MANGLER):")
+       
         for (navn, si) in feil:
             bom, tot = bom_filer[(navn, si)]
             print(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")

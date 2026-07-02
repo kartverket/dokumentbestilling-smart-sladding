@@ -1,7 +1,10 @@
 import argparse
 import io
 import os
+import sys
 from contextlib import redirect_stdout
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "utils"))
 
 from file_selection import velg_filer
 from model_main import run_model_on_pdf_bytes
@@ -91,7 +94,8 @@ def main():
             eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
-        lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=logg)
+        header = f"Mappe:     {os.path.abspath(args.mappe)}\nFasit-CSV: {os.path.abspath(args.fasit_csv)}\n\n"
+        lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=header + logg)
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
 
