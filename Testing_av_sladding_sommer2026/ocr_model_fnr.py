@@ -21,8 +21,8 @@ Treff = namedtuple("Treff", ["start", "end"])
 
 
 DET_SIDE_LEN = 2048
-REC_BATCH = 64                # tekstlinjer per gjenkjennings-batch (fart)
-SIDER_PER_OCR_BATCH_GPU = 24  # V100 32GB: ~6-8 GB VRAM per 16 sider, 24 er trygt
+REC_BATCH = 16               
+SIDER_PER_OCR_BATCH_GPU = 32
 SIDER_PER_OCR_BATCH_CPU = 4
 
 DET_MODELL = "PP-OCRv5_server_det"
@@ -62,7 +62,7 @@ def _hent_side_batch_size(gpu):
 
 
 def _hent_rec_batch_size(gpu):
-    standard = REC_BATCH * 3 if gpu else REC_BATCH
+    standard = REC_BATCH * 4 if gpu else REC_BATCH
     verdi = os.getenv("OCR_RECOGNITION_BATCH_SIZE")
     if verdi is None:
         return standard
@@ -80,23 +80,27 @@ def _hent_reader():
 
         kwargs = dict(
             lang="en",
-            device="gpu" if gpu else "cpu",
+            device="gpu:0" if gpu else "cpu",  
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
             text_det_limit_type="max",
             text_det_limit_side_len=DET_SIDE_LEN,
-            text_recognition_batch_size=_hent_rec_batch_size(gpu),
+            text_recognition_batch_size=_hent_rec_batch_size(gpu),  
+            text_detection_model_name=DET_MODELL,
+            text_recognition_model_name=REC_MODELL,
+            text_detection_model_dir=DET_MODELL_DIR,
+            text_recognition_model_dir=REC_MODELL_DIR,
         )
         kwargs["text_detection_model_name"] = DET_MODELL
         kwargs["text_recognition_model_name"] = REC_MODELL
         kwargs["text_detection_model_dir"] = DET_MODELL_DIR
         kwargs["text_recognition_model_dir"] = REC_MODELL_DIR
         if gpu:
-            kwargs["precision"] = "fp16"
-            kwargs["enable_tensorrt_engine"] = True   # JIT-kompilerer til TensorRT ved foerste kjoering
+            kwargs["enable_hpi"] = True
         else:
             kwargs["enable_mkldnn"] = True
+            kwargs["cpu_threads"] = max(1, os.cpu_count() - 1)
 
         reader = PaddleOCR(**kwargs)
     return reader

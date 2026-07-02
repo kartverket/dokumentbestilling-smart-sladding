@@ -1,3 +1,4 @@
+from save_result import lagre_resultat
 import os
 import re
 from collections import defaultdict
@@ -124,6 +125,11 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
             print(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")
     else:
         print("Ingen bom — alle fasit-bokser ble truffet. 🎉")
+
+
+    resultat = mal_overlapp(sladd_bokser, fasit, mappe)
+    lagre_resultat(resultat)                       # saves to current directory
+    lagre_resultat(resultat, mappe="resultater/")  # or a specific folder
 
     return {
         "recall": rec, "truffet": sum_truffet, "fasit": sum_fasit,
