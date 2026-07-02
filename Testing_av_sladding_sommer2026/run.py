@@ -1,5 +1,7 @@
 import argparse
+import io
 import os
+from contextlib import redirect_stdout
 
 from file_selection import velg_filer
 from model_main import run_model_on_pdf_bytes
@@ -8,6 +10,7 @@ from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 import traceback
+from save_result import lagre_resultat
 
 import time
 
@@ -30,6 +33,7 @@ def main():
     p.add_argument("--terskel", type=float, default=0.40, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default="topp", help="CSV y-origo")
     p.add_argument("--tid", action="store_true", help="viser tiden de ulike stegene i pipelinen tar")
+    p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
     args = p.parse_args()
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
@@ -82,7 +86,12 @@ def main():
     if args.png:
         tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe, y_origin=args.y_origin)
     if args.fasit:
-        mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
+        logg = buf.getvalue()
+        print(logg, end="")  # vis fortsatt i terminalen
+        lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=logg)
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
 

@@ -4,6 +4,8 @@ from collections import defaultdict
 
 import fitz
 
+from save_result import lagre_resultat
+
 
 def _dok_nr(navn):
     m = re.match(r"0*(\d+)", os.path.basename(navn))
@@ -38,7 +40,6 @@ def _sidestr(navn, si, mappe, sladd_bokser):
     iw, ih, _ = sladd_bokser[(navn, si)]
     return iw, ih
 
-
 def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
     if fasit is None:
         print("Ingen fasit — hopper over måling.")
@@ -48,6 +49,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
     sum_ov_areal = sum_fa_areal = 0.0
     pr_type = defaultdict(lambda: [0, 0])
     bom_filer = defaultdict(lambda: [0, 0])
+    detaljer = []
 
     for (navn, si) in sorted(sladd_bokser):
         nr = _dok_nr(navn)
@@ -78,6 +80,12 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
             sum_fa_areal += fa
             sum_ov_areal += best_ov
             bom_filer[(navn, si)][1] += 1
+            detaljer.append({
+                "fil": navn, "side": si, "fasit_nr": fi + 1, "type": t,
+                "dekning_pst": round(best_dek * 100, 1),
+                "iou_pst": round(best_iou * 100, 1),
+                "resultat": "TRUFFET" if truffet else "MANGLER",
+            })
             if truffet:
                 sum_truffet += 1
                 pr_type[t][0] += 1
@@ -108,11 +116,19 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
             print(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")
     else:
         print("Ingen bom — alle fasit-bokser ble truffet. 🎉")
+                   
 
     return {
         "recall": rec, "truffet": sum_truffet, "fasit": sum_fasit,
         "pred": sum_pred, "overflod": sum_overflod,
+        "samlet_overlapp": sum_ov_areal / sum_fa_areal if sum_fa_areal else 0.0,
+        "terskel": terskel,
         "pr_type": {t: tuple(v) for t, v in pr_type.items()},
+        "detaljer": detaljer,
+        "bom_filer": [
+            {"fil": navn, "side": si, "bom": b, "fasit_totalt": tot}
+            for (navn, si), (b, tot) in sorted(bom_filer.items()) if b > 0
+        ],
     }
 
 import csv
