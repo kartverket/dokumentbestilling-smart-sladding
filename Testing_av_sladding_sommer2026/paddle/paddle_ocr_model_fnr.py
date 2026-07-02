@@ -8,11 +8,19 @@ from paddleocr import PaddleOCR
 
 
 SLADDE_SIFFER = 5
-LUFT_X = 0.20               # horisontal margin, andel av median sifferbredde
-LUFT_Y = 0.12               # vertikal margin, andel av sifferhoyde
+LUFT_X = 0.35              
+LUFT_Y = 0.0             
+MIN_MARG_PX = 4
+MAKS_HOYDE_FAKTOR = 3.0     # sladdehoyde maks N x median sifferbredde             
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+
+_OCR_SIFFER_MAP = str.maketrans("oOsSlI", "005511")
+
+
+def _normaliser_ocr(tekst):
+    return tekst.translate(_OCR_SIFFER_MAP)
 
 Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1"])
 SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn"])
@@ -93,11 +101,12 @@ def er_fnr_form(nummer):
 
 
 def finn_fnr(tekst):
-    pos = [i for i, ch in enumerate(tekst) if ch.isdigit()]   # indeks til hvert siffer
+    norm = _normaliser_ocr(tekst)
+    pos = [i for i, ch in enumerate(norm) if ch.isdigit()]   # indeks til hvert siffer
     treff, i = [], 0
     while i + 11 <= len(pos):
         start, slutt = pos[i], pos[i + 10] + 1
-        mellom = tekst[start:slutt]
+        mellom = norm[start:slutt]
         cifre = re.sub(r"\D", "", mellom)
         luker = re.findall(r"\D+", mellom)                    # sammenhengende ikke-siffer
         ok = (
@@ -170,7 +179,7 @@ def _bygg_linjetekst(linje):
         antall = len(token.tekst)
         for posisjon, ch in enumerate(token.tekst):
             tegn.append(ch)
-            if ch.isdigit():
+            if _normaliser_ocr(ch).isdigit():
                 venstre = token.x0 + bredde * posisjon / antall
                 hoyre = token.x0 + bredde * (posisjon + 1) / antall
                 kart.append(SifferBoks(venstre, hoyre, token.y0, token.y1))
@@ -186,16 +195,24 @@ def _sladdeboks(sifferbokser):
     anker = sifferbokser[-SLADDE_SIFFER - 1]         # sifferet rett foer (skal IKKE dekkes)
 
     median_bredde = statistics.median(b.hoyre - b.venstre for b in siste)
-    hoyde = max(b.bunn for b in siste) - min(b.topp for b in siste)
+
+    topp = statistics.median(b.topp for b in sifferbokser)
+    bunn = statistics.median(b.bunn for b in sifferbokser)
+
     mx = LUFT_X * median_bredde
-    my = LUFT_Y * hoyde
+    my = LUFT_Y * (bunn - topp)
 
     grense = (anker.hoyre + siste[0].venstre) / 2
     venstre = max(grense - mx, (anker.venstre + anker.hoyre) / 2)
 
     hoyre = max(b.hoyre for b in siste) + mx
-    topp = min(b.topp for b in siste) - my
-    bunn = max(b.bunn for b in siste) + my
+    topp -= my
+    bunn += my
+
+    tak = MAKS_HOYDE_FAKTOR * median_bredde
+    if (bunn - topp) > tak:
+        senter = (topp + bunn) / 2
+        topp, bunn = senter - tak / 2, senter + tak / 2
 
     return (math.floor(venstre), math.floor(topp), math.ceil(hoyre), math.ceil(bunn))
 
@@ -210,7 +227,7 @@ def finn_bokser_fra_tokens(tokens):
             boks = _sladdeboks(sifferbokser)
             if boks is None:
                 continue
-            cifre = re.sub(r"\D", "", tekst[treff.start:treff.end])
+            cifre = re.sub(r"\D", "", _normaliser_ocr(tekst[treff.start:treff.end]))
             bokser.append((boks, gyldig_mod11(cifre)))
     return bokser
 
@@ -225,7 +242,7 @@ def ocr_linjer_fra_tokens(tokens):
             continue
         merker = []
         for tr in finn_fnr(tekst):
-            cifre = re.sub(r"\D", "", tekst[tr.start:tr.end])
+            cifre = re.sub(r"\D", "", _normaliser_ocr(tekst[tr.start:tr.end]))
             merker.append((cifre, gyldig_mod11(cifre)))
         linjer_ut.append((tekst, merker))
     return linjer_ut

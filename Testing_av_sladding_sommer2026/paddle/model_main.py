@@ -1,7 +1,10 @@
 import time
 
+import numpy as np
+
 from load_pdf import les_sider_fra_bytes, PDF_DPI
-from ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
+from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
+from orientering import finn_rotasjon, boks_tilbake
 
 
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None):
@@ -12,20 +15,23 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     t["render"] = time.perf_counter() - tstart
 
     tstart = time.perf_counter()
-    tokens_per_side = les_tokens_batched(bilder)
+    rotasjoner = [finn_rotasjon(b) for b in bilder]
+    bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+    tokens_per_side = les_tokens_batched(bilder_ocr)
     t["ocr"] = time.perf_counter() - tstart
 
     sider = []
 
     tstart = time.perf_counter()
-    for si, (bilde, tokens) in enumerate(zip(bilder, tokens_per_side), start=1):
+    for si, (bilde, tokens, k) in enumerate(
+            zip(bilder, tokens_per_side, rotasjoner), start=1):
         treff = finn_bokser_fra_tokens(tokens)
 
-        bokser = [
-            {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
-            for (x0, y0, x1, y1), _mod11 in treff
-        ]
-        h, w = bilde.shape[:2]
+        h, w = bilde.shape[:2]        # ORIGINALENS dimensjoner
+        bokser = []
+        for (boks, _mod11) in treff:
+            x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
+            bokser.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1})
         side_data = {
             "side": si,
             "bilde_bredde": w,
