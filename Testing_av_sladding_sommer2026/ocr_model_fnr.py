@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import statistics
 from collections import namedtuple
@@ -21,7 +22,8 @@ Treff = namedtuple("Treff", ["start", "end"])
 
 DET_SIDE_LEN = 2048
 REC_BATCH = 64                # tekstlinjer per gjenkjennings-batch (fart)
-SIDER_PER_OCR_BATCH = 8       # sider matet inn i ETT predict-kall (GPU-utnyttelse)
+SIDER_PER_OCR_BATCH_GPU = 24  # V100 32GB: ~6-8 GB VRAM per 16 sider, 24 er trygt
+SIDER_PER_OCR_BATCH_CPU = 4
 
 DET_MODELL = "PP-OCRv5_server_det"
 REC_MODELL = "PP-OCRv5_server_rec"
@@ -30,14 +32,44 @@ REC_MODELL_DIR = "PP-OCRv5_server_rec_infer"
 
 
 reader = None
+gpu_tilgjengelig = None
+
+IKKE_SIFFER = re.compile(r"\D")
+IKKE_SIFFER_GRUPPER = re.compile(r"\D+")
 
 
 def _har_gpu():
+    global gpu_tilgjengelig
+    if gpu_tilgjengelig is not None:
+        return gpu_tilgjengelig
     try:
         import paddle
-        return paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
+        gpu_tilgjengelig = paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
     except Exception:
-        return False
+        gpu_tilgjengelig = False
+    return gpu_tilgjengelig
+
+
+def _hent_side_batch_size(gpu):
+    standard = SIDER_PER_OCR_BATCH_GPU if gpu else SIDER_PER_OCR_BATCH_CPU
+    verdi = os.getenv("OCR_PAGES_PER_BATCH")
+    if verdi is None:
+        return standard
+    try:
+        return max(1, int(verdi))
+    except ValueError:
+        return standard
+
+
+def _hent_rec_batch_size(gpu):
+    standard = REC_BATCH * 3 if gpu else REC_BATCH
+    verdi = os.getenv("OCR_RECOGNITION_BATCH_SIZE")
+    if verdi is None:
+        return standard
+    try:
+        return max(1, int(verdi))
+    except ValueError:
+        return standard
 
 
 def _hent_reader():
@@ -54,17 +86,17 @@ def _hent_reader():
             use_textline_orientation=False,
             text_det_limit_type="max",
             text_det_limit_side_len=DET_SIDE_LEN,
-            # paa GPU taaler vi stoerre rec-batch -> bedre gjennomstroemning
-            text_recognition_batch_size=REC_BATCH * 2 if gpu else REC_BATCH,
+            text_recognition_batch_size=_hent_rec_batch_size(gpu),
         )
         kwargs["text_detection_model_name"] = DET_MODELL
         kwargs["text_recognition_model_name"] = REC_MODELL
         kwargs["text_detection_model_dir"] = DET_MODELL_DIR
         kwargs["text_recognition_model_dir"] = REC_MODELL_DIR
         if gpu:
-            kwargs["precision"] = "fp16"   
+            kwargs["precision"] = "fp16"
+            kwargs["enable_tensorrt_engine"] = True   # JIT-kompilerer til TensorRT ved foerste kjoering
         else:
-            kwargs["enable_mkldnn"] = True 
+            kwargs["enable_mkldnn"] = True
 
         reader = PaddleOCR(**kwargs)
     return reader
@@ -98,8 +130,8 @@ def finn_fnr(tekst):
     while i + 11 <= len(pos):
         start, slutt = pos[i], pos[i + 10] + 1
         mellom = tekst[start:slutt]
-        cifre = re.sub(r"\D", "", mellom)
-        luker = re.findall(r"\D+", mellom)                    # sammenhengende ikke-siffer
+        cifre = IKKE_SIFFER.sub("", mellom)
+        luker = IKKE_SIFFER_GRUPPER.findall(mellom)            # sammenhengende ikke-siffer
         ok = (
             len(luker) <= 3                                   # OCR kan ha splittet fnr-et i biter
             and all(set(g) <= set(" .-") for g in luker)
@@ -151,13 +183,17 @@ def _grupper_til_linjer(tokens):
         senter_y = (token.y0 + token.y1) / 2
         plassert = False
         for linje in linjer:
-            if min(t.y0 for t in linje) <= senter_y <= max(t.y1 for t in linje):
-                linje.append(token)
+            if linje[0] <= senter_y <= linje[1]:
+                if token.y0 < linje[0]:
+                    linje[0] = token.y0
+                if token.y1 > linje[1]:
+                    linje[1] = token.y1
+                linje[2].append(token)
                 plassert = True
                 break
         if not plassert:
-            linjer.append([token])
-    return linjer
+            linjer.append([token.y0, token.y1, [token]])
+    return [linje[2] for linje in linjer]
 
 
 def _bygg_linjetekst(linje):
@@ -210,7 +246,7 @@ def finn_bokser_fra_tokens(tokens):
             boks = _sladdeboks(sifferbokser)
             if boks is None:
                 continue
-            cifre = re.sub(r"\D", "", tekst[treff.start:treff.end])
+            cifre = IKKE_SIFFER.sub("", tekst[treff.start:treff.end])
             bokser.append((boks, gyldig_mod11(cifre)))
     return bokser
 
@@ -225,7 +261,7 @@ def ocr_linjer_fra_tokens(tokens):
             continue
         merker = []
         for tr in finn_fnr(tekst):
-            cifre = re.sub(r"\D", "", tekst[tr.start:tr.end])
+            cifre = IKKE_SIFFER.sub("", tekst[tr.start:tr.end])
             merker.append((cifre, gyldig_mod11(cifre)))
         linjer_ut.append((tekst, merker))
     return linjer_ut
@@ -233,10 +269,11 @@ def ocr_linjer_fra_tokens(tokens):
 
 def les_tokens_batched(bilder):
     reader = _hent_reader()
+    side_batch_size = _hent_side_batch_size(_har_gpu())
 
     tokens_per_side = []
-    for start in range(0, len(bilder), SIDER_PER_OCR_BATCH):
-        chunk = bilder[start:start + SIDER_PER_OCR_BATCH]
+    for start in range(0, len(bilder), side_batch_size):
+        chunk = bilder[start:start + side_batch_size]
         bgr_chunk = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
         resultater = reader.predict(bgr_chunk, return_word_box=True) or []
         for res in resultater:
