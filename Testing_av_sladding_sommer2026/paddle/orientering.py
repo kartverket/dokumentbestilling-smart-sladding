@@ -1,8 +1,10 @@
+import os
 import numpy as np
 from paddleocr import DocImgOrientationClassification
 
 ORI_MODELL = "PP-LCNet_x1_0_doc_ori"
-ORI_MODELL_DIR = "PP-LCNet_x1_0_doc_ori_infer"
+_MODELL_MAPPE = os.path.dirname(os.path.abspath(__file__))
+ORI_MODELL_DIR = os.path.join(_MODELL_MAPPE, "PP-LCNet_x1_0_doc_ori_infer")
 
 NEDSKALERING = 4        # klassifiser paa hver 4. piksel - holder fint og er raskt
 MIN_KONFIDENS = 0.7     # under dette: stol ikke paa gjetningen, ikke roter

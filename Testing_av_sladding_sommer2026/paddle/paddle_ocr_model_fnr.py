@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import statistics
 from collections import namedtuple
@@ -11,12 +12,13 @@ SLADDE_SIFFER = 5
 LUFT_X = 0.35              
 LUFT_Y = 0.0             
 MIN_MARG_PX = 4
-MAKS_HOYDE_FAKTOR = 3.0     # sladdehoyde maks N x median sifferbredde             
+MAKS_HOYDE_FAKTOR = 3.0     # sladdehoyde maks N x median sifferbredde
+MAKS_BREDDE_FAKTOR = 10     # 5 siffer + luker skal ikke spenne mer enn ~10 sifferbredder             
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
 
-_OCR_SIFFER_MAP = str.maketrans("oOsSlI", "005511")
+_OCR_SIFFER_MAP = str.maketrans("oOsSlIbB", "00551166")
 
 
 def _normaliser_ocr(tekst):
@@ -33,8 +35,9 @@ SIDER_PER_OCR_BATCH = 8       # sider matet inn i ETT predict-kall (GPU-utnyttel
 
 DET_MODELL = "PP-OCRv5_server_det"
 REC_MODELL = "PP-OCRv5_server_rec"
-DET_MODELL_DIR = "PP-OCRv5_server_det_infer"
-REC_MODELL_DIR = "PP-OCRv5_server_rec_infer"
+_MODELL_MAPPE = os.path.dirname(os.path.abspath(__file__))
+DET_MODELL_DIR = os.path.join(_MODELL_MAPPE, "PP-OCRv5_server_det_infer")
+REC_MODELL_DIR = os.path.join(_MODELL_MAPPE, "PP-OCRv5_server_rec_infer")
 
 
 reader = None
@@ -93,10 +96,13 @@ def gyldig_mod11(nummer):
 
 
 def er_fnr_form(nummer):
+    "Godtar baade fnr (dag 01-31) og d-nummer (dag 41-71)."
     if len(nummer) != 11 or not nummer.isdigit():
         return False
     dag = int(nummer[0:2])
     maaned = int(nummer[2:4])
+    if 41 <= dag <= 71:          # d-nummer: 40 lagt til dagen
+        dag -= 40
     return 1 <= dag <= 31 and 1 <= maaned <= 12
 
 
@@ -111,7 +117,7 @@ def finn_fnr(tekst):
         luker = re.findall(r"\D+", mellom)                    # sammenhengende ikke-siffer
         ok = (
             len(luker) <= 3                                   # OCR kan ha splittet fnr-et i biter
-            and all(set(g) <= set(" .-") for g in luker)
+            and all(set(g) <= set(" .-,") for g in luker)
             and all(len(g) <= 2 for g in luker)               # korte luker, ikke ny kolonne
             and er_fnr_form(cifre)
             and gyldig_mod11(cifre)
@@ -195,6 +201,10 @@ def _sladdeboks(sifferbokser):
     anker = sifferbokser[-SLADDE_SIFFER - 1]         # sifferet rett foer (skal IKKE dekkes)
 
     median_bredde = statistics.median(b.hoyre - b.venstre for b in siste)
+
+    spenn = max(b.hoyre for b in siste) - min(b.venstre for b in siste)
+    if spenn > MAKS_BREDDE_FAKTOR * median_bredde:
+        return None           
 
     topp = statistics.median(b.topp for b in sifferbokser)
     bunn = statistics.median(b.bunn for b in sifferbokser)
