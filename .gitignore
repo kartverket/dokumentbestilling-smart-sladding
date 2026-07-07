@@ -22,3 +22,7 @@ bokser.csv
 ocr_linjer.txt
 smartsladding_uttrekk_1_22_06_26.csv
 smartsladding_uttrekk_labels_1_22_06_26.csv
+*.pt
+Testing_av_sladding_sommer2026/yolo/runs/
+Testing_av_sladding_sommer2026/yolo/predictions/
+Testing_av_sladding_sommer2026/yolo/datasets/
