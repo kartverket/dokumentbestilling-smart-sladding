@@ -81,6 +81,7 @@ def _hent_reader():
             kwargs["precision"] = "fp16"   
         else:
             kwargs["enable_mkldnn"] = True 
+        kwargs["enable_hpi"] = True
 
         reader = PaddleOCR(**kwargs)
     return reader
