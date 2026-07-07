@@ -117,7 +117,7 @@ def finn_fnr(tekst):
         luker = re.findall(r"\D+", mellom)                    # sammenhengende ikke-siffer
         ok = (
             len(luker) <= 3                                   # OCR kan ha splittet fnr-et i biter
-            and all(set(g) <= set(" .-,") for g in luker)
+            and all(set(g) <= set(" .-,_") for g in luker)
             and all(len(g) <= 2 for g in luker)               # korte luker, ikke ny kolonne
             and er_fnr_form(cifre)
             and gyldig_mod11(cifre)
