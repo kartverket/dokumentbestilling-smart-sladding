@@ -93,6 +93,29 @@ Flask-ruten kaller `model_main.run_model_on_pdf_bytes(pdf_bytes)` og får
 koordinatene tilbake som JSON. I produksjon trengs bare `model_main.py`,
 `loading.py` og `recognition.py` — resten er testverktøy.
 
+## Modellversjon og HPI
+
+Modellversjonen styres med `MODELL_SETT` øverst i `paddle_ocr_model_fnr.py`:
+
+```python
+MODELL_SETT = "v6"   # "v5" eller "v6"
+```
+
+**`enable_hpi = True`** (high-performance inference) krever pakken `ultra-infer`
+og fungerer **kun med v5**, ikke v6. For å aktivere det:
+
+```bash
+pip install ultra-infer   # kun tilgjengelig på Linux/GPU-maskiner
+```
+
+```python
+MODELL_SETT = "v5"
+# ... og legg til i _hent_reader():
+kwargs["enable_hpi"] = True
+```
+
+På Mac og uten `ultra-infer` installert: bruk v6 uten `enable_hpi`.
+
 ## Filene
 
 | Fil                 | Ansvar                                            |
