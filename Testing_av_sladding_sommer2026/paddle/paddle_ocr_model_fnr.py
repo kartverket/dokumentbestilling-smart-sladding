@@ -33,11 +33,16 @@ DET_SIDE_LEN = 2048
 REC_BATCH = 64                # tekstlinjer per gjenkjennings-batch (fart)
 SIDER_PER_OCR_BATCH = 8       # sider matet inn i ETT predict-kall (GPU-utnyttelse)
 
-DET_MODELL = "PP-OCRv5_server_det"
-REC_MODELL = "PP-OCRv5_server_rec"
+MODELL_SETT = "v6"   # "v5" eller "v6"
+
+_NAVN = {
+    "v5": ("PP-OCRv5_server_det", "PP-OCRv5_server_rec"),
+    "v6": ("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec"),
+}
+DET_MODELL, REC_MODELL = _NAVN[MODELL_SETT]
 _MODELL_MAPPE = os.path.dirname(os.path.abspath(__file__))
-DET_MODELL_DIR = os.path.join(_MODELL_MAPPE, "PP-OCRv5_server_det_infer")
-REC_MODELL_DIR = os.path.join(_MODELL_MAPPE, "PP-OCRv5_server_rec_infer")
+DET_MODELL_DIR = os.path.join(_MODELL_MAPPE, DET_MODELL + "_infer")
+REC_MODELL_DIR = os.path.join(_MODELL_MAPPE, REC_MODELL + "_infer")
 
 
 reader = None
