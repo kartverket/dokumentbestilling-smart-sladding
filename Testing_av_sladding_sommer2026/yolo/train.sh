@@ -1,8 +1,16 @@
 #!/bin/bash
 set -e
 
+# Usage:
+#   bash train.sh <csv_path> <pdfs_path>              # Steps 1-3 (generate + verify)
+#   bash train.sh <csv_path> <pdfs_path> --continue   # Steps 1-5 (full pipeline)
+
+CSV_PATH="${1:?Usage: bash train.sh <csv_path> <pdfs_path> [--continue]}"
+PDFS_PATH="${2:?Usage: bash train.sh <csv_path> <pdfs_path> [--continue]}"
+CONTINUE="$3"
+
 echo "=== Step 1: Convert CSV to YOLO format ==="
-python scripts/convert_csv_to_yolo.py --csv coordinates.csv --pdfs pdfs --output dataset
+python scripts/convert_csv_to_yolo.py --csv "$CSV_PATH" --pdfs "$PDFS_PATH" --output dataset
 
 echo ""
 echo "=== Step 2: Verify boxes on sample images ==="
@@ -14,18 +22,18 @@ python scripts/check_coverage.py --images dataset/images_all --labels dataset/la
 
 echo ""
 echo ">>> STOP HERE. Open verification/ and check that red boxes land on FNRs."
-echo ">>> If boxes are correct, run: bash train.sh --continue"
+echo ">>> If boxes are correct, run: bash train.sh $CSV_PATH $PDFS_PATH --continue"
 echo ""
 
-if [ "$1" = "--continue" ]; then
-    echo "=== Step 4: Split train/val ==="
-    python scripts/split_train_val.py --dataset dataset --ratio 0.8
+if [ "$CONTINUE" = "--continue" ]; then
+    echo "=== Step 4: Split train/val/test ==="
+    python scripts/split_train_val.py --dataset dataset --train-ratio 0.7 --val-ratio 0.15
 
     echo ""
     echo "=== Step 5: Smoke test (3 epochs) ==="
-    yolo detect train data=data.yaml model=yolo11n.pt epochs=3 imgsz=640 batch=2 device=mps
+    yolo detect train data=data.yaml model=yolo11n.pt epochs=3 imgsz=640 batch=2 device=cuda
 
     echo ""
     echo "=== Smoke test passed. For full training run: ==="
-    echo "yolo detect train data=data.yaml model=yolo11n.pt epochs=100 imgsz=1280 batch=4 device=mps"
+    echo "yolo detect train data=data.yaml model=yolo11n.pt epochs=100 imgsz=1280 batch=4 device=cuda"
 fi

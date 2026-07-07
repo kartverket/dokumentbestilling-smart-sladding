@@ -1,5 +1,5 @@
 """
-Split images_all/labels_all into train/val sets (80/20 by default).
+Split images_all/labels_all into train/val/test sets (70/15/15 by default).
 """
 
 import argparse
@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 
-def split(dataset_dir: str, ratio: float, seed: int):
+def split(dataset_dir: str, train_ratio: float, val_ratio: float, seed: int):
     dataset = Path(dataset_dir)
     images_all = dataset / "images_all"
     labels_all = dataset / "labels_all"
@@ -17,8 +17,15 @@ def split(dataset_dir: str, ratio: float, seed: int):
     random.seed(seed)
     random.shuffle(imgs)
 
-    cut = int(len(imgs) * ratio)
-    splits = [("train", imgs[:cut]), ("val", imgs[cut:])]
+    n = len(imgs)
+    train_end = int(n * train_ratio)
+    val_end = int(n * (train_ratio + val_ratio))
+
+    splits = [
+        ("train", imgs[:train_end]),
+        ("val", imgs[train_end:val_end]),
+        ("test", imgs[val_end:]),
+    ]
 
     for subset, group in splits:
         img_dst = dataset / "images" / subset
@@ -34,13 +41,14 @@ def split(dataset_dir: str, ratio: float, seed: int):
 
         print(f"  {subset}: {len(group)} images")
 
-    print(f"\nSplit complete: {len(imgs)} total -> {dataset}/images/{{train,val}}")
+    print(f"\nSplit complete: {n} total -> {dataset}/images/{{train,val,test}}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Split dataset into train/val")
+    parser = argparse.ArgumentParser(description="Split dataset into train/val/test")
     parser.add_argument("--dataset", default="dataset", help="Dataset directory")
-    parser.add_argument("--ratio", type=float, default=0.8, help="Train ratio (default 0.8)")
+    parser.add_argument("--train-ratio", type=float, default=0.7, help="Train ratio (default 0.7)")
+    parser.add_argument("--val-ratio", type=float, default=0.15, help="Val ratio (default 0.15)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
-    split(args.dataset, args.ratio, args.seed)
+    split(args.dataset, args.train_ratio, args.val_ratio, args.seed)
