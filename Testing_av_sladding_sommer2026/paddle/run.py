@@ -70,6 +70,7 @@ def main():
     vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd
 
     sladd_bokser, feilet = {}, []
+    tider = {}                               
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
     for fil in filer:
         start = time.perf_counter()
@@ -85,6 +86,7 @@ def main():
 
         tid_brukt = time.perf_counter() - start
         total_tid += tid_brukt
+        tider[navn] = tid_brukt
 
         if args.ocr_logg:
             for side in resultat["sider"]:
@@ -126,7 +128,13 @@ def main():
             eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
-        header = f"Mappe:     {os.path.abspath(args.mappe)}\nFasit-CSV: {os.path.abspath(args.fasit_csv)}\n\n"
+        tid_linjer = "".join(f"  {n}: {t:.2f}s\n" for n, t in sorted(tider.items()))
+        header = (
+            f"Mappe:     {os.path.abspath(args.mappe)}\n"
+            f"Fasit-CSV: {os.path.abspath(args.fasit_csv)}\n"
+            f"Total tid: {total_tid:.2f}s\n"
+            f"Tid per dokument:\n{tid_linjer}\n"
+        )
         lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=header + logg)
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
