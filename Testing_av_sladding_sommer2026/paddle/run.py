@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "utils"))
 
 from file_selection import velg_filer
 from model_main import run_model_on_pdf_bytes
-from csv_export import skriv_csv
+from csv_export import initialiser_csv, append_csv
 from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
@@ -69,6 +69,10 @@ def main():
 
     vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd
 
+    if args.csv:
+        initialiser_csv(args.csv_ut)
+        print(f"Starter kontinuerlig skriving til {args.csv_ut}")
+
     sladd_bokser, feilet = {}, []
     tider = {}                               
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
@@ -104,6 +108,10 @@ def main():
             sladd_bokser[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], bokser)
 
+        if args.csv:
+            dok_bokser = {k: v for k, v in sladd_bokser.items() if k[0] == navn}
+            append_csv(dok_bokser, args.csv_ut)
+
     print(f"\nTotal tid brukt: {total_tid:.6f} sekunder")
 
     if feilet:
@@ -117,9 +125,6 @@ def main():
         return
 
     fasit = les_fasit(args.fasit_csv) if (args.png or args.fasit) else None
-    if args.csv:
-        n = skriv_csv(sladd_bokser, args.csv_ut)
-        print(f"Skrev {n} boks(er) til {args.csv_ut}")
     if args.png:
         tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe, y_origin=args.y_origin)
     if args.fasit:
