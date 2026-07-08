@@ -16,6 +16,23 @@ def skriv_csv(sladd_bokser, sti):
     return n
 
 
+def initialiser_csv(sti):
+    with open(sti, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(FELT)
+
+
+def append_csv(sladd_bokser_dok, sti):
+    n = 0
+    with open(sti, "a", newline="", encoding="utf-8") as f:
+        skriv = csv.writer(f)
+        for (navn, si) in sorted(sladd_bokser_dok):
+            bw, bh, bokser = sladd_bokser_dok[(navn, si)]
+            for (x0, y0, x1, y1) in bokser:
+                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1])
+                n += 1
+    return n
+
+
 def les_csv(sti):
     sladd_bokser = {}
     with open(sti, newline="", encoding="utf-8") as f:
