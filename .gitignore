@@ -22,3 +22,14 @@ bokser.csv
 ocr_linjer.txt
 smartsladding_uttrekk_1_22_06_26.csv
 smartsladding_uttrekk_labels_1_22_06_26.csv
+PP-OCRv5_server_det_infer/
+PP-OCRv5_server_rec_infer/
+PP-OCRv5_server_det_infer.tar
+PP-OCRv5_server_rec_infer.tar
+PP-OCRv6_medium_det_infer/
+PP-OCRv6_medium_rec_infer/
+PP-OCRv6_medium_det_infer.tar
+PP-OCRv6_medium_rec_infer.tar
+PP-LCNet_x1_0_doc_ori_infer/
+PP-LCNet_x1_0_doc_ori_infer.tar
+*.csv
