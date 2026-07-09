@@ -12,8 +12,7 @@ SLADDE_SIFFER = 5
 LUFT_X = 0.35              
 LUFT_Y = 0.0             
 MIN_MARG_PX = 4
-MAKS_HOYDE_FAKTOR = 3.0     # sladdehoyde maks N x median sifferbredde
-MAKS_BREDDE_FAKTOR = 10     # 5 siffer + luker skal ikke spenne mer enn ~10 sifferbredder             
+MAKS_HOYDE_FAKTOR = 3.0     # sladdehoyde maks N x median sifferbredde             
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
@@ -81,7 +80,7 @@ def _hent_reader():
             kwargs["precision"] = "fp16"   
         else:
             kwargs["enable_mkldnn"] = True 
-        kwargs["enable_hpi"] = True
+        #kwargs["enable_hpi"] = True
 
         reader = PaddleOCR(**kwargs)
     return reader
@@ -207,10 +206,6 @@ def _sladdeboks(sifferbokser):
     anker = sifferbokser[-SLADDE_SIFFER - 1]         # sifferet rett foer (skal IKKE dekkes)
 
     median_bredde = statistics.median(b.hoyre - b.venstre for b in siste)
-
-    spenn = max(b.hoyre for b in siste) - min(b.venstre for b in siste)
-    if spenn > MAKS_BREDDE_FAKTOR * median_bredde:
-        return None           
 
     topp = statistics.median(b.topp for b in sifferbokser)
     bunn = statistics.median(b.bunn for b in sifferbokser)

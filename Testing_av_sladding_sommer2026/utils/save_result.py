@@ -4,13 +4,6 @@ from pathlib import Path
 
 
 def lagre_resultat(resultat, mappe=".", beskrivelse=None, logg=None):
-    """Lagrer resultatet fra mal_overlapp til en egen mappe per kjøring:
-
-    result-<ts>/               (eller result-<ts>-<beskrivelse>/)
-        sammendrag.csv         — recall, overlapp, per-type-recall, bom-filer
-        detaljer.csv           — én rad per fasit-boks med dekning, IoU og TRUFFET/MANGLER
-        logg.txt               — terminalutskriften fra mal_overlapp (hvis logg er gitt)
-    """
     if resultat is None:
         return None
 
@@ -60,7 +53,7 @@ def lagre_resultat(resultat, mappe=".", beskrivelse=None, logg=None):
     with open(detaljer_fil, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[
             "fil", "side", "fasit_nr", "type",
-            "dekning_pst", "resultat",
+            "dekning_pst", "resultat", "kilde",
             "fasit_x0", "fasit_y0", "fasit_x1", "fasit_y1",
         ])
         w.writeheader()

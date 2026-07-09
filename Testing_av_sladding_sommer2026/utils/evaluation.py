@@ -42,7 +42,7 @@ def _sidestr(navn, si, mappe, sladd_bokser):
     iw, ih, _ = sladd_bokser[(navn, si)]
     return iw, ih
 
-def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
+def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kilder=None, yolo_bokser=None):
     if fasit is None:
         print("Ingen fasit — hopper over måling.")
         return None
@@ -56,6 +56,15 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
     for (navn, si) in sorted(sladd_bokser):
         nr = _dok_nr(navn)
         iw, ih, raw = sladd_bokser[(navn, si)]
+        # YOLO-bokser for denne siden (som koordinat-sett for oppslag)
+        yolo_coords = set()
+        if yolo_bokser and (navn, si) in yolo_bokser:
+            _, _, yolo_raw = yolo_bokser[(navn, si)]
+            yolo_coords = set(yolo_raw)
+        kilde_liste = []
+        if kilder and (navn, si) in kilder:
+            _, _, med_kilde = kilder[(navn, si)]
+            kilde_liste = [b[4] if len(b) > 4 else "paddle" for b in med_kilde]
         pw, ph = _sidestr(navn, si, mappe, sladd_bokser)
         pred = [(x0 / iw, (y0 - 2) / ih, x1 / iw, (y1 + 2) / ih) for (x0, y0, x1, y1) in raw]
         fbokser = [(_norm_csv(x, y, w, h, pw, ph, y_origin), t)
@@ -78,6 +87,10 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
                     best_iou = ov / (fa + _areal(pb) - ov)
                     best_pi = pi
             truffet = best_dek >= terskel
+            if kilde_liste:
+                kilde = kilde_liste[best_pi] if (0 <= best_pi < len(kilde_liste)) else ""
+            else:
+                kilde = "yolo" if (best_pi >= 0 and raw[best_pi] in yolo_coords) else "paddle"
             pr_type[t][1] += 1
             sum_fa_areal += fa
             sum_ov_areal += best_ov
@@ -86,6 +99,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.40, y_origin="topp"):
                 "fil": navn, "side": si, "fasit_nr": fi + 1, "type": t,
                 "dekning_pst": round(best_dek * 100, 1),
                 "resultat": "TRUFFET" if truffet else "MANGLER",
+                "kilde": kilde if truffet else "",
                 "fasit_x0": round(fb[0], 6),
                 "fasit_y0": round(fb[1], 6),
                 "fasit_x1": round(fb[2], 6),
