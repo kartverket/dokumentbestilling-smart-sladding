@@ -1,19 +1,6 @@
 import csv
 
-FELT = ["navn", "side", "bilde_bredde", "bilde_hoyde", "x0", "y0", "x1", "y1"]
-
-
-def skriv_csv(sladd_bokser, sti):
-    n = 0
-    with open(sti, "w", newline="", encoding="utf-8") as f:
-        skriv = csv.writer(f)
-        skriv.writerow(FELT)
-        for (navn, si) in sorted(sladd_bokser):
-            bw, bh, bokser = sladd_bokser[(navn, si)]
-            for (x0, y0, x1, y1) in bokser:
-                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1])
-                n += 1
-    return n
+FELT = ["navn", "side", "bilde_bredde", "bilde_hoyde", "x0", "y0", "x1", "y1", "kilde"]
 
 
 def initialiser_csv(sti):
@@ -21,14 +8,16 @@ def initialiser_csv(sti):
         csv.writer(f).writerow(FELT)
 
 
-def append_csv(sladd_bokser_dok, sti):
+def append_csv(grupper, sti):
     n = 0
     with open(sti, "a", newline="", encoding="utf-8") as f:
         skriv = csv.writer(f)
-        for (navn, si) in sorted(sladd_bokser_dok):
-            bw, bh, bokser = sladd_bokser_dok[(navn, si)]
-            for (x0, y0, x1, y1) in bokser:
-                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1])
+        for (navn, si) in sorted(grupper):
+            bw, bh, bokser = grupper[(navn, si)]
+            for boks in bokser:
+                x0, y0, x1, y1 = boks[:4]
+                kilde = boks[4] if len(boks) > 4 else "paddle"
+                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1, kilde])
                 n += 1
     return n
 

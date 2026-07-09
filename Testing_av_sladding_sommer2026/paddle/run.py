@@ -73,8 +73,8 @@ def main():
         initialiser_csv(args.csv_ut)
         print(f"Starter kontinuerlig skriving til {args.csv_ut}")
 
-    sladd_bokser, feilet = {}, []
-    tider = {}                               
+    sladd_bokser, yolo_bokser, csv_bokser, feilet = {}, {}, {}, []
+    tider = {}
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
     for fil in filer:
         start = time.perf_counter()
@@ -85,7 +85,7 @@ def main():
                 resultat = run_model_on_pdf_bytes(f.read(), skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn)  # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
-            traceback.print_exc() 
+            traceback.print_exc()
             continue
 
         tid_brukt = time.perf_counter() - start
@@ -104,12 +104,21 @@ def main():
             continue
 
         for side in resultat["sider"]:
-            bokser = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
+            bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
+            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"))
+                          for b in side["bokser"]]
+            yolo_bare  = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]
+                          if b.get("kilde") in ("yolo", "begge")]
             sladd_bokser[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], bokser)
+            csv_bokser[(navn, side["side"])] = (
+                side["bilde_bredde"], side["bilde_hoyde"], med_kilde)
+            if yolo_bare:
+                yolo_bokser[(navn, side["side"])] = (
+                    side["bilde_bredde"], side["bilde_hoyde"], yolo_bare)
 
         if args.csv:
-            dok_bokser = {k: v for k, v in sladd_bokser.items() if k[0] == navn}
+            dok_bokser = {k: v for k, v in csv_bokser.items() if k[0] == navn}
             append_csv(dok_bokser, args.csv_ut)
 
     print(f"\nTotal tid brukt: {total_tid:.6f} sekunder")
@@ -126,11 +135,13 @@ def main():
 
     fasit = les_fasit(args.fasit_csv) if (args.png or args.fasit) else None
     if args.png:
-        tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe, y_origin=args.y_origin)
+        tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe, y_origin=args.y_origin,
+                      kilder=csv_bokser)
     if args.fasit:
         buf = io.StringIO()
         with redirect_stdout(buf):
-            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel, y_origin=args.y_origin)
+            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
+                                         y_origin=args.y_origin, kilder=csv_bokser)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
         tid_linjer = "".join(f"  {n}: {t:.2f}s\n" for n, t in sorted(tider.items()))

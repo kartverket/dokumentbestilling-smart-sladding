@@ -3,13 +3,15 @@ import os
 import re
 
 import fitz
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI
 
-FUNNET_FARGE = (0, 0, 0)        # svart fyll = faktisk sladding
-FASIT_FARGE = (30, 160, 30)     # groent = ground_truth
-SKALA = PDF_DPI / 72.0          # PDF-punkt -> piksel
+FUNNET_FARGE  = (0, 0, 0)        # svart fyll = faktisk sladding
+PADDLE_FARGE  = (30, 80, 200)    # blaa outline = Paddle-treff
+YOLO_FARGE    = (200, 0, 0)      # roed outline = YOLO-treff
+FASIT_FARGE   = (30, 160, 30)    # groent = ground_truth
+SKALA = PDF_DPI / 72.0           # PDF-punkt -> piksel
 
 
 def _dok_nr(navn):
@@ -52,7 +54,13 @@ def _sider_aa_tegne(sladd_bokser, ground_truth, mappe):
 
 
 def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
-                  skriv_logg=True, rydd=True):
+                  skriv_logg=True, rydd=True, yolo_bokser=None, kilder=None):
+    """Tegner sladd (svart fyll), kilde-rammer (blaa=paddle, roed=yolo, begge farger=begge)
+    og fasit (groenn ramme).
+
+    kilder: samme struktur som sladd_bokser men med 5-tupler (x0, y0, x1, y1, kilde).
+            Er den satt, brukes den for fargelegging og yolo_bokser trengs ikke.
+    """
     os.makedirs(ut_mappe, exist_ok=True)
     if rydd:
         for png in glob.glob(os.path.join(ut_mappe, "*.png")):
@@ -71,14 +79,43 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
             if not 1 <= si <= len(d):
                 print(f"   {navn} side {si}: finnes ikke i PDF-en ({len(d)} sider)")
                 continue
-            bilde = _render_side(d[si - 1])   # rendrer KUN denne sida
+            bilde = _render_side(d[si - 1])
             tegner = ImageDraw.Draw(bilde)
 
             bw, bh, funnet = sladd_bokser.get((navn, si), (bilde.width, bilde.height, []))
-            sx, sy = bilde.width / bw, bilde.height / bh   # CSV-koordinater -> denne renderingen
+            sx, sy = bilde.width / bw, bilde.height / bh
+
+            # 1) svart fyll for all sladding
             for (x0, y0, x1, y1) in funnet:
                 tegner.rectangle([x0 * sx, y0 * sy, x1 * sx, y1 * sy], fill=FUNNET_FARGE)
 
+            # 2) kilde-rammer oppaa sladden
+            if kilder and (navn, si) in kilder:
+                _, _, med_kilde = kilder[(navn, si)]
+                for boks in med_kilde:
+                    x0, y0, x1, y1 = boks[:4]
+                    kilde = boks[4] if len(boks) > 4 else "paddle"
+                    r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+                    if kilde in ("paddle", "begge"):
+                        tegner.rectangle(r, outline=PADDLE_FARGE, width=3)
+                    if kilde in ("yolo", "begge"):
+                        # "begge": roed indre ramme innenfor den blaa
+                        indre = [r[0] + 4, r[1] + 4, r[2] - 4, r[3] - 4] if kilde == "begge" else r
+                        tegner.rectangle(indre, outline=YOLO_FARGE, width=3)
+            elif yolo_bokser and (navn, si) in yolo_bokser:
+                # bakoverkompatibel modus: kun yolo-rammer, som foer
+                _, _, yolo_f = yolo_bokser[(navn, si)]
+                for boks in yolo_f:
+                    x0, y0, x1, y1 = boks[:4]
+                    conf = boks[4] if len(boks) > 4 else None
+                    r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+                    tegner.rectangle(r, outline=YOLO_FARGE, width=3)
+                    if conf is not None:
+                        font = ImageFont.load_default(size=28)
+                        tegner.text((r[0] + 2, r[1] - 32), f"{conf:.2f}",
+                                    fill=YOLO_FARGE, font=font)
+
+            # 3) fasit oeverst
             if ground_truth:
                 for (x, y, w, h, _t) in ground_truth.get((nr, si), []):
                     tegner.rectangle(_fasit_piksler((x, y, w, h), bilde.height, y_origin),
