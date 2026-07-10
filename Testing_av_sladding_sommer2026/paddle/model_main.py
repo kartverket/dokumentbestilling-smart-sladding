@@ -21,18 +21,19 @@ def _ta_tid(t, post):
 
 
 def _finn_bokser_med_kilde(tokens, bilde_ocr):
-    bokser = [[boks, "paddle"] for (boks, _mod11) in finn_bokser_fra_tokens(tokens)]
+    bokser = [[boks, "paddle", None] for (boks, _mod11) in finn_bokser_fra_tokens(tokens)]
 
     for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
         yb = (x0, y0, x1, y1)
         dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
         if dekket:
             for par in dekket:
-                par[1] = "begge"                  # Paddle fant den, YOLO bekrefter
+                par[1] = "begge"
+                par[2] = round(conf, 3)           # conf fra YOLO
         elif kilde := _godta_yolo_boks(tokens, yb, conf):
-            bokser.append([yb, kilde])            # kun YOLO
+            bokser.append([yb, kilde, round(conf, 3)])
 
-    return [(tuple(boks), kilde) for boks, kilde in bokser]
+    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
 
 def _godta_yolo_boks(tokens, boks, conf):
@@ -46,9 +47,12 @@ def _godta_yolo_boks(tokens, boks, conf):
 def _bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer):
     h, w = bilde.shape[:2]                        # originalens dimensjoner
     bokser = []
-    for boks, kilde in bokser_med_kilde:
+    for boks, kilde, conf in bokser_med_kilde:
         x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
-        bokser.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": kilde})
+        b = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": kilde}
+        if conf is not None:
+            b["conf"] = conf
+        bokser.append(b)
     side = {"side": si, "bilde_bredde": w, "bilde_hoyde": h, "bokser": bokser}
     if med_linjer:
         side["linjer"] = ocr_linjer_fra_tokens(tokens)

@@ -7,10 +7,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI
 
-FUNNET_FARGE  = (0, 0, 0)        # svart fyll = faktisk sladding
-PADDLE_FARGE  = (30, 80, 200)    # blaa outline = Paddle-treff
-YOLO_FARGE    = (200, 0, 0)      # roed outline = YOLO-treff
-FASIT_FARGE   = (30, 160, 30)    # groent = ground_truth
+FUNNET_FARGE    = (0, 0, 0)        # svart fyll = faktisk sladding
+PADDLE_FARGE    = (30, 80, 200)    # blaa outline = Paddle-treff
+YOLO_FARGE      = (200, 0, 0)      # roed outline = YOLO-treff
+OVERSLADD_FARGE = (255, 140, 0)    # oransje outline = over-sladding
+FASIT_FARGE     = (30, 160, 30)    # groent = ground_truth
 SKALA = PDF_DPI / 72.0           # PDF-punkt -> piksel
 
 
@@ -54,7 +55,8 @@ def _sider_aa_tegne(sladd_bokser, ground_truth, mappe):
 
 
 def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
-                  skriv_logg=True, rydd=True, yolo_bokser=None, kilder=None):
+                  skriv_logg=True, rydd=True, yolo_bokser=None, kilder=None,
+                  oversladd_bokser=None):
     """Tegner sladd (svart fyll), kilde-rammer (blaa=paddle, roed=yolo, begge farger=begge)
     og fasit (groenn ramme).
 
@@ -112,7 +114,8 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
                     tegner.rectangle(r, outline=YOLO_FARGE, width=3)
                     if conf is not None:
                         font = ImageFont.load_default(size=28)
-                        tegner.text((r[0] + 2, r[1] - 32), f"{conf:.2f}",
+                        ty = max(r[1] + 2, 2)   # inni boksen øverst
+                        tegner.text((r[0] + 2, ty), f"{conf:.2f}",
                                     fill=YOLO_FARGE, font=font)
 
             # 3) fasit oeverst
@@ -120,6 +123,13 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
                 for (x, y, w, h, _t) in ground_truth.get((nr, si), []):
                     tegner.rectangle(_fasit_piksler((x, y, w, h), bilde.height, y_origin),
                                      outline=FASIT_FARGE, width=3)
+
+            # 4) over-sladding: oransje outline
+            if oversladd_bokser and (navn, si) in oversladd_bokser:
+                _, _, over_f = oversladd_bokser[(navn, si)]
+                for (x0, y0, x1, y1) in over_f:
+                    r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+                    tegner.rectangle(r, outline=OVERSLADD_FARGE, width=4)
 
             ut = os.path.join(ut_mappe, f"{os.path.splitext(navn)[0]}_side{si}.png")
             bilde.save(ut)

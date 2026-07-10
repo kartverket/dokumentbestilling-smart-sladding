@@ -80,9 +80,13 @@ def main():
         start = time.perf_counter()
 
         navn = os.path.basename(fil)
+        print(f"\n→ Starter: {navn}")
         try:
             with open(fil, "rb") as f:
-                resultat = run_model_on_pdf_bytes(f.read(), skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn)  # akkurat som POST-endepunktet
+                t0 = time.perf_counter()
+                pdf_bytes = f.read()
+                print(f"  lest fil: {time.perf_counter()-t0:.2f}s")
+                resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn)  # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()
@@ -105,7 +109,7 @@ def main():
 
         for side in resultat["sider"]:
             bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
-            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"))
+            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"), b.get("conf"))
                           for b in side["bokser"]]
             yolo_bare  = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]
                           if b.get("kilde") in ("yolo", "begge")]

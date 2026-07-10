@@ -35,10 +35,13 @@ def _areal(a):
 def _sidestr(navn, si, mappe, sladd_bokser):
     fil = os.path.join(mappe, navn)
     if fil.lower().endswith(".pdf"):
-        d = fitz.open(fil)
-        r = d[si - 1].rect
-        d.close()
-        return r.width, r.height
+        try:
+            d = fitz.open(fil)
+            r = d[si - 1].rect
+            d.close()
+            return r.width, r.height
+        except Exception:
+            pass
     iw, ih, _ = sladd_bokser[(navn, si)]
     return iw, ih
 
@@ -51,6 +54,8 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
     sum_ov_areal = sum_fa_areal = 0.0
     pr_type = defaultdict(lambda: [0, 0])
     bom_filer = defaultdict(lambda: [0, 0])
+    overflod_filer = defaultdict(int)
+    oversladd_bokser = {}   # (navn, si) -> (iw, ih, [(x0,y0,x1,y1)])
     detaljer = []
 
     for (navn, si) in sorted(sladd_bokser):
@@ -62,9 +67,11 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
             _, _, yolo_raw = yolo_bokser[(navn, si)]
             yolo_coords = set(yolo_raw)
         kilde_liste = []
+        conf_liste = []
         if kilder and (navn, si) in kilder:
             _, _, med_kilde = kilder[(navn, si)]
             kilde_liste = [b[4] if len(b) > 4 else "paddle" for b in med_kilde]
+            conf_liste  = [b[5] if len(b) > 5 else None for b in med_kilde]
         pw, ph = _sidestr(navn, si, mappe, sladd_bokser)
         pred = [(x0 / iw, (y0 - 2) / ih, x1 / iw, (y1 + 2) / ih) for (x0, y0, x1, y1) in raw]
         fbokser = [(_norm_csv(x, y, w, h, pw, ph, y_origin), t)
@@ -89,8 +96,10 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
             truffet = best_dek >= terskel
             if kilde_liste:
                 kilde = kilde_liste[best_pi] if (0 <= best_pi < len(kilde_liste)) else ""
+                conf  = conf_liste[best_pi]  if (0 <= best_pi < len(conf_liste)) else None
             else:
                 kilde = "yolo" if (best_pi >= 0 and raw[best_pi] in yolo_coords) else "paddle"
+                conf  = None
             pr_type[t][1] += 1
             sum_fa_areal += fa
             sum_ov_areal += best_ov
@@ -100,6 +109,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
                 "dekning_pst": round(best_dek * 100, 1),
                 "resultat": "TRUFFET" if truffet else "MANGLER",
                 "kilde": kilde if truffet else "",
+                "conf": round(conf, 3) if (truffet and conf is not None) else "",
                 "fasit_x0": round(fb[0], 6),
                 "fasit_y0": round(fb[1], 6),
                 "fasit_x1": round(fb[2], 6),
@@ -113,7 +123,12 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
                 bom_filer[(navn, si)][0] += 1
             print(f"   fasit#{fi + 1} {t:<22} dekning={best_dek:5.0%}  IoU={best_iou:5.0%}  "
                   f"-> {'TRUFFET' if truffet else 'MANGLER'}")
-        sum_overflod += len(pred) - len(truffet_pred)
+        n_overflod = len(pred) - len(truffet_pred)
+        sum_overflod += n_overflod
+        if n_overflod > 0:
+            overflod_filer[(navn, si)] += n_overflod
+            over_bokser = [raw[i] for i in range(len(raw)) if i not in truffet_pred]
+            oversladd_bokser[(navn, si)] = (iw, ih, over_bokser)
 
     print("\n" + "=" * 64)
     rec = sum_truffet / sum_fasit if sum_fasit else 0.0
@@ -148,6 +163,11 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
         "bom_filer": [
             {"fil": navn, "side": si, "bom": b, "fasit_totalt": tot}
             for (navn, si), (b, tot) in sorted(bom_filer.items()) if b > 0
+        ],
+        "oversladd_bokser": oversladd_bokser,
+        "overflod_filer": [
+            {"fil": navn, "side": si, "oversladd": n}
+            for (navn, si), n in sorted(overflod_filer.items())
         ],
     }
 

@@ -1,6 +1,6 @@
 import csv
 
-FELT = ["navn", "side", "bilde_bredde", "bilde_hoyde", "x0", "y0", "x1", "y1", "kilde"]
+FELT = ["navn", "side", "bilde_bredde", "bilde_hoyde", "x0", "y0", "x1", "y1", "kilde", "conf"]
 
 
 def initialiser_csv(sti):
@@ -17,7 +17,8 @@ def append_csv(grupper, sti):
             for boks in bokser:
                 x0, y0, x1, y1 = boks[:4]
                 kilde = boks[4] if len(boks) > 4 else "paddle"
-                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1, kilde])
+                conf  = boks[5] if len(boks) > 5 else ""
+                skriv.writerow([navn, si, bw, bh, x0, y0, x1, y1, kilde, conf])
                 n += 1
     return n
 
