@@ -5,9 +5,9 @@ import numpy as np
 from ultralytics import YOLO
 
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "best.pt")
-YOLO_CONF = 0.10               # predict-terskel (lav: vi filtrerer selv etterpaa)
-YOLO_CONF_UTEN_TEKST = 0.26   # krav naar Paddle ikke leste noe i boksen
-YOLO_CONF_VERTIKAL = 0.20     # vertikale bokser: Paddle kan ikke lese staaende tekst
+YOLO_CONF = 0.12               # predict-terskel (lav: vi filtrerer selv etterpaa)
+YOLO_CONF_UTEN_TEKST = 0.40   # krav naar Paddle ikke leste noe i boksen
+YOLO_CONF_VERTIKAL = 0.90     # vertikale bokser: Paddle kan ikke lese staaende tekst
 VERTIKAL_FAKTOR = 1.3         # hoyde > 1.3 x bredde regnes som vertikal
 YOLO_IMGSZ = 1280
 MIN_SIFFER = 1               # "snill": minst saa mange siffer i boksen
