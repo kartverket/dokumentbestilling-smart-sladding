@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 def check(images_dir: str, labels_dir: str, min_boxes: int):
-    images_dir = Path("/Users/halvor/Downloads/uttrekk_2-uttrekk")
-    labels_dir = Path("/Users/halvor/Downloads/smartsladding_uttrekk_labels_2_29_06_26.csv")
+    images_dir = Path(images_dir)
+    labels_dir = Path(labels_dir)
 
     suspicious = []
     total = 0

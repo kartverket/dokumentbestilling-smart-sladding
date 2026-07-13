@@ -101,5 +101,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert CSV annotations to YOLO format")
     parser.add_argument("csv", help="Path to CSV file")
     parser.add_argument("pdfs", help="Directory containing PDF files")
+    parser.add_argument("--output", default="dataset", help="Output directory (default: dataset)")
     args = parser.parse_args()
-    convert(args.csv, args.pdfs, "dataset")
+    convert(args.csv, args.pdfs, args.output)
