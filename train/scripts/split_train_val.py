@@ -3,7 +3,7 @@ Split images_all/labels_all into train/val/test sets.
 
 Strategies:
   - random (default): shuffle all images and split by ratio
-  - yearly: use a metadata CSV with tinglysingsdato to pick X images per year
+  - yearly: use a metadata CSV with dokument_aar to pick X images per year
 """
 
 import argparse
@@ -90,11 +90,11 @@ def split_yearly(dataset_dir: str, metadata_csv: str, per_year: int,
     labels_all = dataset / "labels_all"
 
     meta = pd.read_csv(metadata_csv)
-    if "tinglysingsdato" not in meta.columns or "fil_revisjon_id" not in meta.columns:
-        print("ERROR: Metadata CSV must have 'fil_revisjon_id' and 'tinglysingsdato' columns")
+    if "dokument_aar" not in meta.columns or "fil_revisjon_id" not in meta.columns:
+        print("ERROR: Metadata CSV must have 'fil_revisjon_id' and 'dokument_aar' columns")
         raise SystemExit(1)
 
-    meta["year"] = pd.to_datetime(meta["tinglysingsdato"], errors="coerce").dt.year
+    meta["year"] = pd.to_numeric(meta["dokument_aar"], errors="coerce")
     id_to_year = dict(zip(meta["fil_revisjon_id"].astype(str), meta["year"]))
 
     # Grupperer images per år
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--strategy", choices=["random", "yearly"], default="random",
                         help="Split strategy (default: random)")
-    parser.add_argument("--metadata", default="", help="Path to metadata CSV with tinglysingsdato (required for yearly)")
+    parser.add_argument("--metadata", default="", help="Path to metadata CSV with dokument_aar (required for yearly)")
     parser.add_argument("--per-year", type=int, default=100, help="Max images per year for yearly strategy (default: 100)")
     args = parser.parse_args()
 
