@@ -17,6 +17,7 @@ valideringssett/results/**
 tmp/
 logs/**
 *.pdf
+!utils/testdokument.pdf
 *.png
 bokser.csv
 ocr_linjer.txt
