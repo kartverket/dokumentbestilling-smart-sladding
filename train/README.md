@@ -40,6 +40,8 @@ make convert \
   OUTPUT_DIR=/datasets
 ```
 
+Outputtet fra dette vil ligge i dataset-mappen spesifisert med `OUTPUT_DIR`. Her vil de konverte filene ligge i `images_all`.
+
 ### Steg 2: Split (`make split`)
 
 `scripts/split_train_val.py` fordeler bilder og labels tilfeldig i train/val/test (70/15/15 som standard). Logger også trening i en `split_log.txt`.

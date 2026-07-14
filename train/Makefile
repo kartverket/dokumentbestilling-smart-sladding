@@ -12,16 +12,25 @@ CSV ?= labels.csv
 OUTPUT_DIR ?= .
 DATASET := $(OUTPUT_DIR)/dataset_$(shell date +%Y-%m-%dT%H-%M-%S)
 # test ratio = 1 - TRAIN_RATIO - VAL_RATIO
-TRAIN_RATIO ?= 0.8
-VAL_RATIO ?= 0.2
+TRAIN_RATIO ?= 0.7
+VAL_RATIO ?= 0.15
 SEED ?= 42
+
+# ---- Split strategy -----------------------------------------
+# "random" (default) or "yearly" (requires METADATA)
+STRATEGY ?= random
+# metadata CSV with tinglysingsdato (required for yearly strategy)
+METADATA ?=
+# max images per year for yearly strategy
+PER_YEAR ?= 100
 
 # ---- Training -----------------------------------------------
 MODEL ?= yolo26x.pt
 EPOCHS ?= 200
 IMGSZ ?= 1280
 BATCH ?= 4
-DEVICE ?= cpu
+# Can either be cpu or cuda (if you have a GPU)
+DEVICE ?= cuda
 PATIENCE ?= 20
 
 PYTHON ?= python
@@ -61,7 +70,10 @@ $(DATASET)/.split: $(DATASET)/.converted
 		--dataset $(DATASET) \
 		--train-ratio $(TRAIN_RATIO) \
 		--val-ratio $(VAL_RATIO) \
-		--seed $(SEED)
+		--seed $(SEED) \
+		--strategy $(STRATEGY) \
+		$(if $(METADATA),--metadata $(METADATA)) \
+		--per-year $(PER_YEAR)
 	@touch $@
 
 # ---- Step 5: training ---------------------------------------
