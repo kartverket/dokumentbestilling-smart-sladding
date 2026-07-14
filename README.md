@@ -41,7 +41,9 @@ pip install paddlepaddle-gpu paddleocr
 
 ## Modeller
 
-`best.pt` (YOLO) leveres separat og legges i `app/`. PaddleOCR-modellene lastes ned manuelt (kjøres fra `app/`):
+`best.pt` (vektene til den trente YOLO-modellen) leveres separat og legges i `app/`.
+
+PaddleOCR-modellene er ferdig trente vekter fra PaddlePaddle sitt modellbibliotek og lastes ned manuelt (kjøres fra `app/`):
 
 ```sh
 # v6 (standard)
@@ -66,7 +68,7 @@ tar -xvf PP-LCNet_x1_0_doc_ori_infer.tar
 ```sh
 mkdir -p app/logs   # må opprettes første gang
 cd app
-python app.py    
+python app.py
 ```
 
 Test i ny terminal:
@@ -78,6 +80,17 @@ curl -X POST http://localhost:5070/model \
   --data-binary "@/sti/til/dokument.pdf"
 ```
 
+## Valideringskjøring med testdokument
+
+Et testdokument (`utils/testdokument.pdf`) følger med repoet. Bruk det for å verifisere at oppsettet fungerer:
+
+```sh
+cd utils
+python run.py --mappe . --velg testdokument.pdf --csv --csv-ut test_ut.csv --png --png-mappe visning_test --fasit --tid
+```
+
+PNG-resultat lagres i `utils/visning_test/`.
+
 ## Produksjon
 
 ```sh
@@ -88,9 +101,9 @@ chmod +x start_production.sh
 
 ---
 
-## run.py for testing— kjøre modellen mot fasit
+## run.py for testing — kjøre modellen mot fasit
 
-Kjøres fra `utils/`-mappa. PDF-ene ligger i `../uttrekk_3/`.
+Kjøres fra `utils/`-mappa. Pek på PDF-mappen din med `--mappe` (standard er `../uttrekk_3/`).
 
 ```sh
 cd utils
@@ -124,7 +137,16 @@ python run.py --antall alle --fasit --csv --png
 
 ---
 
-## tegn.py — visualisere fra koordinat-CSV
+## tegn.py — visualisere sladde-bokser som PNG
+
+Brukes for manuell gjennomgang av hva modellen har funnet. Tegner sladde-boksene oppå PDF-sidene og lagrer som PNG-bilder — slik kan man raskt bla gjennom og se om boksene treffer riktig. Bruker da sladd_koordinater laget av en run.py kjøring.
+
+```sh
+cd utils
+python tegn.py --csv sladd_koordinater.csv --png-mappe visning
+```
+
+Åpne bildene i `utils/visning/` for å se resultatet. Med `--fasit` tegnes også fasit-boksene i grønt for sammenligning.
 
 ```sh
 python tegn.py [flagg]
@@ -180,6 +202,49 @@ Lager `statistikk.txt` og `statistikk.png` i result-mappa.
 |-------------------------|------------------------------------------------------|
 | `app/config.py`         | PDF-DPI, YOLO-terskel, OCR-parametere, orientering   |
 | `utils/utils_config.py` | Stier, evalueringsterskler, visualiseringsfarger      |
+
+---
+
+## CSV-formater
+
+### Boks-CSV (`run.py --csv`, leses av `tegn.py`)
+
+| Kolonne        | Beskrivelse                                      |
+|----------------|--------------------------------------------------|
+| `navn`         | Filnavn (PDF)                                    |
+| `side`         | Sidenummer (1-basert)                            |
+| `bilde_bredde` | Bildebredde i piksler                            |
+| `bilde_hoyde`  | Bildehøyde i piksler                             |
+| `x0, y0`       | Øvre venstre hjørne av sladde-boks (piksler)     |
+| `x1, y1`       | Nedre høyre hjørne av sladde-boks (piksler)      |
+| `kilde`        | `paddle`, `yolo`, `begge` eller `yolo_vertikal`  |
+| `conf`         | YOLO-konfidensverdi (tom for rene Paddle-treff)  |
+
+### Fasit-CSV (labels fra eksisterende løsning)
+
+| Kolonne           | Beskrivelse                                        |
+|-------------------|----------------------------------------------------|
+| `fil_revisjon_id` | Dokument-ID (tilsvarer tall i PDF-filnavnet)       |
+| `sidetall`        | Sidenummer (1-basert)                              |
+| `x, y`            | Øvre venstre hjørne i PDF-punkter                  |
+| `width, height`   | Størrelse i PDF-punkter                            |
+| `type`            | Kategori (f.eks. `PERSONNUMMER`)                   |
+| `ml_generated`    | `true` hvis modellen fant den, `false` = manuell   |
+| `ml_status`       | `ACCEPTED` / `REJECTED`                            |
+
+### Detaljer-CSV (`run.py --fasit`, leses av `statistikk.py`)
+
+| Kolonne                      | Beskrivelse                              |
+|------------------------------|------------------------------------------|
+| `fil`                        | Filnavn (PDF)                            |
+| `side`                       | Sidenummer                               |
+| `fasit_nr`                   | Løpenummer for fasit-boks på siden       |
+| `type`                       | Kategori fra fasit                       |
+| `dekning_pst`                | Andel av fasit-boks dekket (%)           |
+| `resultat`                   | `TRUFFET` eller `MANGLER`                |
+| `kilde`                      | Hvilken modell som traff                 |
+| `conf`                       | Konfidensverdi                           |
+| `fasit_x0/y0/x1/y1`          | Fasit-boks i normaliserte koordinater    |
 
 ---
 
