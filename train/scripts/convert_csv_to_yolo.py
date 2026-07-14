@@ -12,6 +12,7 @@ Coordinate conventions (confirmed from codebase):
 """
 
 import argparse
+import numpy as np
 import pandas as pd
 import fitz
 from pathlib import Path
@@ -19,10 +20,6 @@ from pathlib import Path
 
 DPI = 300
 SCALE = DPI / 72.0
-
-
-def clamp(v, lo=0.0, hi=1.0):
-    return max(lo, min(hi, v))
 
 
 def convert(csv_path: str, pdf_dir: str, output_dir: str):
@@ -41,7 +38,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
         df["ml_generated"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "YES"])
     )
 
-    # Keep: ml_generated=TRUE + ACCEPTED, OR ml_generated=FALSE (human-placed boxes)
+    # Beholder kun dokumenter med: ml_generated=TRUE + ACCEPTED, OR ml_generated=FALSE (human-placed boxes)
     ml_accepted = (df["ml_generated"]) & (df["ml_status"] == "ACCEPTED")
     manual = ~df["ml_generated"]
     rejected = (df["ml_generated"]) & (df["ml_status"] == "REJECTED")
@@ -53,41 +50,45 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
     skipped_pages = 0
     total_boxes = 0
 
-    for (fil_id, page_no), group in df.groupby(["fil_revisjon_id", "sidetall"]):
+    for fil_id, doc_group in df.groupby("fil_revisjon_id"):
         pdf_path = pdf_dir / f"{fil_id}.pdf"
         if not pdf_path.exists():
             missing.add(str(fil_id))
             continue
 
         doc = fitz.open(pdf_path)
-        idx = int(page_no) - 1
-        if idx < 0 or idx >= len(doc):
-            doc.close()
-            skipped_pages += 1
-            continue
 
-        page = doc[idx]
-        pix = page.get_pixmap(dpi=DPI)
-        img_w, img_h = pix.width, pix.height
-        stem = f"{fil_id}_p{page_no}"
-        pix.save(str(images_dir / f"{stem}.png"))
+        for page_no, page_group in doc_group.groupby("sidetall"):
+            idx = int(page_no) - 1
+            if idx < 0 or idx >= len(doc):
+                skipped_pages += 1
+                continue
 
-        lines = []
-        for _, r in group.iterrows():
-            x_px = r["x"] * SCALE
-            y_px = r["y"] * SCALE
-            w_px = r["width"] * SCALE
-            h_px = r["height"] * SCALE
+            page = doc[idx]
+            pix = page.get_pixmap(dpi=DPI)
+            img_w, img_h = pix.width, pix.height
+            stem = f"{fil_id}_p{page_no}"
+            pix.save(str(images_dir / f"{stem}.png"))
 
-            x_center = clamp((x_px + w_px / 2) / img_w)
-            y_center = clamp((y_px + h_px / 2) / img_h)
-            bw = clamp(w_px / img_w)
-            bh = clamp(h_px / img_h)
-            lines.append(f"0 {x_center:.6f} {y_center:.6f} {bw:.6f} {bh:.6f}")
+            x_px = page_group["x"].values * SCALE
+            y_px = page_group["y"].values * SCALE
+            w_px = page_group["width"].values * SCALE
+            h_px = page_group["height"].values * SCALE
 
-        (labels_dir / f"{stem}.txt").write_text("\n".join(lines))
-        total_boxes += len(lines)
-        done += 1
+            x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
+            y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
+            bw = np.clip(w_px / img_w, 0.0, 1.0)
+            bh = np.clip(h_px / img_h, 0.0, 1.0)
+
+            lines = [
+                f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"
+                for xc, yc, w, h in zip(x_center, y_center, bw, bh)
+            ]
+
+            (labels_dir / f"{stem}.txt").write_text("\n".join(lines))
+            total_boxes += len(lines)
+            done += 1
+
         doc.close()
 
     print(f"Wrote {done} page-images with {total_boxes} boxes total")
