@@ -1,31 +1,40 @@
 # Treningspipeline for YOLO
 
 Denne mappen trener en YOLO-modell til å detektere fødselsnummer (FNR) i skannede PDF-dokumenter.
+Pipelinen inneholder disse delene:
+
+1. **Konvertering:** CSV-annotasjoner + PDFer -> PNG-bilder + YOLO-labels
+2. **Split:** Fordeler data i train/val/test (tilfeldig eller per år)
+3. **Trening:** Trener en YOLO-modell på det splittede datasettet
+
 
 ## Forutsetninger
-
 - Python venv med `ultralytics`, `pymupdf`, `pandas` installert
 - Aktiver venv før du kjører `make`
 
 ```bash
-pip install ultralytics pymupdf pandas
+pip install ultralytics pymupdf pandas numpy
 ```
+
+- En YOLO-modell, eks. yolo26x eller yolo26l. Modellen man velger å bruke vil bli lastet ned automatisk.
 
 ## Full kjøring
 
-For å kjøre pipelinen er det inkludert en `Makefile` for å lettere kjøre trening. 
+For å kjøre pipelinen er det inkludert en `Makefile` for å lettere kjøre treningen. 
 
 Eksempel kjøring
 
 ```bash
 make \
-  PDFS=/sti/til/pdf-mappe \
-  CSV=/sti/til/labels.csv
+PDFS=/sti/til/pdf-mappe \
+CSV=/sti/til/labels.csv
 ```
 
-Dette kjører hele pipelinen: konverterer CSV → YOLO-format, splitter til train/val/test, og starter trening.
+Dette kjører hele pipelinen: konverterer CSV -> YOLO-format, splitter til train/val/test, og starter trening.
 
-Det er derimot mulig å kjøre hvert steg separat hvis man for eksempel allerede har et eksisterende dataset man ønsker å trene på. Hvert steg har en egen make kommando man kjøre:
+Outputen fra pipelinen vil være en `runs/detect/train/` mappe som inneholder statistikk for trening, i tillegg til selve vektene (`best.pt`), som brukes senere i inferens.
+
+Det er derimot mulig å kjøre hvert steg separat hvis man for eksempel allerede har et eksisterende dataset man ønsker å trene på. Hvert steg har en egen make-kommando man kan kjøre:
 
 ### Steg 1: Konvertering (`make convert`)
 
@@ -35,9 +44,9 @@ Eksempel kjøring:
 
 ```bash
 make convert \
-  PDFS=/sti/til/pdf-mappe \
-  CSV=/sti/til/labels.csv \
-  OUTPUT_DIR=/datasets
+PDFS=/sti/til/pdf-mappe \
+CSV=/sti/til/labels.csv \
+OUTPUT_DIR=/datasets
 ```
 
 Outputtet fra dette vil ligge i dataset-mappen spesifisert med `OUTPUT_DIR`. Her vil de konverte filene ligge i `images_all`.
@@ -49,13 +58,25 @@ Outputtet fra dette vil ligge i dataset-mappen spesifisert med `OUTPUT_DIR`. Her
 Eksempel kjøring:
 
 ```bash
+# Tilfeldig split (standard)
 make split \
   PDFS=/sti/til/pdf-mappe \
   CSV=/sti/til/labels.csv \
   OUTPUT_DIR=/datasets \
-  TRAIN_RATIO=0.8 \
-  VAL_RATIO=0.2
+  TRAIN_RATIO=0.7 \
+  VAL_RATIO=0.15
+
+# Yearly split — tar maks 100 bilder per år
+make split \
+  PDFS=/sti/til/pdf-mappe \
+  CSV=/sti/til/labels.csv \
+  OUTPUT_DIR=/datasets \
+  STRATEGY=yearly \
+  METADATA=/sti/til/metadata.csv \
+  PER_YEAR=100
 ```
+
+Yearly-strategien krever en metadata-CSV med kolonnene `fil_revisjon_id` og `dokument_aar`. Den velger opptil `PER_YEAR` bilder per år og splitter innenfor hvert år etter train/val/test-ratio.
 
 ### Steg 3: Trening (`make train`)
 
@@ -69,9 +90,9 @@ make train DATASET=/sti/til/dataset
 
 # Trene med justerte hyperparametre:
 make train \
-  DATASET=/sti/til/dataset \
-  EPOCHS=50 \
-  PATIENCE=10
+DATASET=/sti/til/dataset \
+EPOCHS=50 \
+PATIENCE=10
 ```
 
 ## Make-targets
@@ -84,32 +105,40 @@ make train \
 | `train`    | Full pipeline inkl. YOLO-trening                    |
 | `verify`   | Tegner labels på bilder for visuell sjekk           |
 | `coverage` | Finner sider uten labels                            |
-| `smoke`    | 3-epoch røyktest for å sjekke at alt fungerer       |
+| `smoke`    | 3-epoch smoketest for å sjekke at alt fungerer       |
 | `help`     | Viser tilgjengelige targets og variabler             |
 
 ## Konfigurerbare variabler
 Man kan endre ulike variabler ved kjøring. Disse kan man legge ved med `make VARIABEL=verdi`.
 
+### Input / output
+
 | Variabel      | Standard                              | Beskrivelse                        |
 |---------------|---------------------------------------|------------------------------------|
-| `PDFS`        | `pdfs`                                | Mappe med kilde-PDFer              |
+| `PDFS`        | `pdfs`                                | Filbane til mappe med PDFer              |
 | `CSV`         | `labels.csv`                          | CSV med annotasjoner               |
-| `DATASET`     | `dataset_<timestamp>`                 | Utmappe (ny per kjøring)           |
+| `OUTPUT_DIR`  | `.`                                   | Mappen for datasett (generert automatisk )             |
+| `DATASET`     | `OUTPUT_DIR/dataset_<timestamp>`      | Utmappe (generert automatisk)      |
+
+### Split
+
+| Variabel      | Standard                              | Beskrivelse                        |
+|---------------|---------------------------------------|------------------------------------|
 | `TRAIN_RATIO` | `0.7`                                 | Andel treningsdata                 |
 | `VAL_RATIO`   | `0.15`                                | Andel valideringsdata              |
+| `SEED`        | `42`                                  | Random seed for reproduserbar split|
+| `STRATEGY`    | `random`                              | Split-strategi: `random` eller `yearly` |
+| `METADATA`    | *(tom)*                               | CSV med `dokument_aar` (påkrevd for `yearly`) |
+| `PER_YEAR`    | `100`                                 | Maks bilder per år for `yearly`    |
+
+### Trening
+
+| Variabel      | Standard                              | Beskrivelse                        |
+|---------------|---------------------------------------|------------------------------------|
 | `MODEL`       | `yolo26x.pt`                          | Pretrent modell å fintune fra      |
-| `EPOCHS`      | `100`                                 | Antall epoker                      |
+| `EPOCHS`      | `200`                                 | Antall epoker                      |
 | `IMGSZ`       | `1280`                                | Bildestørrelse under trening       |
 | `BATCH`       | `4`                                   | Batch-størrelse                    |
-| `DEVICE`      | `cuda`                                | Enhet (cuda/cpu/mps)               |
+| `DEVICE`      | `cuda`                                | Enhet (`cuda`/`cpu`/`mps`)         |
 | `PATIENCE`    | `20`                                  | Early stopping (epoker uten gain)  |
 
-## Trene på eksisterende datasett
-
-Hvis du allerede har konvertert et datasett og vil trene på nytt (eller med andre hyperparametre):
-
-```bash
-make train DATASET=/Users/william/Downloads/dataset_2026-07-13T12-27-05
-```
-
-Konverteringen hoppes over automatisk hvis `images_all/` allerede finnes.
