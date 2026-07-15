@@ -32,6 +32,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
     labels_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(csv_path)
+    print(f"Total documents in CSV: {df['fil_revisjon_id'].nunique()}, total boxes: {len(df)}")
 
     df["ml_status"] = df["ml_status"].astype(str).str.strip().str.upper()
     df["ml_generated"] = (
@@ -44,6 +45,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
     rejected = (df["ml_generated"]) & (df["ml_status"] == "REJECTED")
     df = df[ml_accepted | manual]
     print(f"Filtered to {len(df)} boxes ({ml_accepted.sum()} ML accepted, {manual.sum()} manual, {rejected.sum()} ML rejected excluded)")
+    print(f"Unique documents after filtering: {df['fil_revisjon_id'].nunique()}, unique pages: {df[['fil_revisjon_id', 'sidetall']].drop_duplicates().shape[0]}")
 
     missing = set()
     done = 0
@@ -90,6 +92,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
             done += 1
 
         doc.close()
+        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages)")
 
     print(f"Wrote {done} page-images with {total_boxes} boxes total")
     if missing:
