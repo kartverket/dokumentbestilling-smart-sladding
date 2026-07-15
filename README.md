@@ -196,6 +196,53 @@ python statistikk.py --labels smartsladding_uttrekk_labels_3_07_07_26.csv
 
 Lager `statistikk.txt` og `statistikk.png` i result-mappa.
 
+## API-kontrakt
+
+### `GET /health`
+
+Returnerer `{"health": "healthy"}` med status 200 når tjenesten kjører.
+Merk: modellene lastes først ved første kall til `/model`, så første
+forespørsel etter oppstart tar vesentlig lengre tid enn de påfølgende.
+
+### `POST /model`
+
+Tar imot en PDF som rå bytes i request-body (`Content-Type: application/pdf`)
+og returnerer funne sladde-bokser som JSON.
+
+200        | OK, respons som beskrevet under            
+400        | Tom request-body                           
+500        | Intern feil, `{"error": "<beskrivelse>"}` 
+
+#### Responsformat
+
+```json
+{
+  "sider": [
+    {
+      "side": 1,
+      "bilde_bredde": 2480,
+      "bilde_hoyde": 3510,
+      "bokser": [
+        { "x0": 856, "y0": 1203, "x1": 998, "y1": 1240, "kilde": "begge", "conf": 0.871 }
+      ]
+    }
+  ]
+}
+```
+
+| Felt                        | Beskrivelse                                                                 |
+|-----------------------------|-----------------------------------------------------------------------------|
+| `sider`                     | Én oppføring per side i PDF-en, også sider uten funn (`bokser` er da tom)  |
+| `side`                      | Sidenummer, 1-basert                                                        |
+| `bilde_bredde`/`bilde_hoyde`| Sidens størrelse i piksler                                                  |
+| `x0, y0`                    | Øvre venstre hjørne av sladde-boksen (origo øverst til venstre)             |
+| `x1, y1`                    | Nedre høyre hjørne av sladde-boksen                                         |
+| `kilde`                     | `paddle`, `yolo`, `begge` eller `yolo_vertikal`                             |
+| `conf`                      | YOLO-konfidens (0–1). Finnes bare når YOLO var involvert, rene Paddle-treff har ikke feltet |
+
+Koordinatene refererer til sidens opprinnelige orientering, eventuell
+rotasjon under analysen er allerede regnet tilbake.
+
 ---
 
 ## Konfigurasjon
