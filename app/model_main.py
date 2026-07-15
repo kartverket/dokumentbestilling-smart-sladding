@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import numpy as np
 
 from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
-from load_pdf import les_sider_fra_bytes, PDF_DPI
+from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 from orientering import finn_rotasjon, boks_tilbake
 from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal
@@ -78,7 +78,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     if skriv_tid:
         _skriv_tid(t, len(sider), navn)
 
-    return {"dpi": PDF_DPI, "sider": sider}
+    return {"sider": sider}
 
 
 def _skriv_tid(t, n_sider, navn=None):
