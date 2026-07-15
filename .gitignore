@@ -19,6 +19,7 @@ logs/**
 *.pdf
 !utils/testdokument.pdf
 *.png
+!docs/diagrams/skjermbilder/*.png
 bokser.csv
 ocr_linjer.txt
 smartsladding_uttrekk_1_22_06_26.csv

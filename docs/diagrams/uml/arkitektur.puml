@@ -1,0 +1,27 @@
+@startuml
+title Smart sladding – overordnet arkitektur
+
+skinparam componentStyle rectangle
+
+cloud "Eksterne systemer" {
+  [Database\ndokumentkø + sladde-labels] as db
+  [Dokument-API\nleverer PDF-er] as dok
+}
+
+[Batch-jobb\ngår gjennom ubehandlede\ndokumenter] as jobb
+
+[Modell-API\nfinner fødselsnummer i PDF\n(OCR + YOLO)] as modell
+
+package "Utvikling og forbedring" {
+  [Analyse- og testverktøy\nmåler treffsikkerhet mot fasit,\nvisualiserer resultatene] as verktoy
+  [Treningspipeline\ntrener YOLO-modellen] as trening
+}
+
+jobb --> db : 1. hent ubehandlede\n4. lagre sladdinger
+jobb --> dok : 2. hent PDF
+jobb --> modell : 3. PDF inn → sladde-bokser ut
+
+verktoy ..> modell : kjører samme modellkode\nlokalt på testdokumenter
+trening ..> modell : leverer nye vekter (best.pt)
+db ..> trening : labels brukes\nsom treningsdata
+@enduml
