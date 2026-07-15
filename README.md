@@ -6,6 +6,8 @@ Hvis du jobber med dette i Kartverket-sammenheng, så skal du være inneforståt
 ## Beskrivelse
 Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger.
 
+Se [docs/TEKNISK.md](docs/TEKNISK.md) for teknisk beskrivelse av arkitektur og deteksjonspipeline med figurer.
+
 ## Repo-struktur
 
 ```
