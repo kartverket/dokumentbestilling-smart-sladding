@@ -1,0 +1,3 @@
+[submodule "app/weights"]
+	path = app/weights
+	url = git@github.com:kartverket/dokumentbestilling-smart-sladding-model.git
