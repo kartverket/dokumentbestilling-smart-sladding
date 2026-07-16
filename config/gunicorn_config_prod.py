@@ -9,12 +9,12 @@ os.makedirs(log_dir, exist_ok=True)
 
 # Worker configuration
 worker_class = 'sync'
-workers = 4
+workers = 1
 timeout = 600
 
 # Logging configuration
 loglevel = 'debug'
-accesslog = os.path.join(log_dir, 'gunicorn_access.log')
+accesslog = os.path.join(log_dir, 'gunicorn_access_prod.log')
 accesslogformat = "%(h)s %(l)s %(u)s %(t)s %(r)s %(s)s %(b)s %(f)s %(a)s"
-errorlog = os.path.join(log_dir, 'gunicorn_error.log')
+errorlog = os.path.join(log_dir, 'gunicorn_error_prod.log')
 capture_output = True

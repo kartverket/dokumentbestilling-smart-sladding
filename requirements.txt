@@ -6,7 +6,7 @@ PyPDF2
 numpy
 matplotlib
 pandas
-torch
+torch==2.4.0 #måtte ha 2.4.0. for at det skulle fungere i container, kan være vi kan justere denne i samsvar med nvidia/cuda:12.1.1-runtime-ubuntu22.04 + https://download.pytorch.org/whl/cu121
 torchvision
 pymupdf
 requests
