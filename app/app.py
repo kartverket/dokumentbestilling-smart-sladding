@@ -38,7 +38,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("logs/app.log", when="midnight", backupCount=30),
+        zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("/data/ml_logs/app.log", when="midnight", backupCount=30),
         logging.StreamHandler()
     ]
 )
