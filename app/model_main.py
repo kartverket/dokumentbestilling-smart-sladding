@@ -17,18 +17,19 @@ def _ta_tid(t, post):
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
 
 
-def _finn_bokser_med_kilde(tokens, bilde_ocr):
+def _finn_bokser_med_kilde(tokens, bilde_ocr, med_yolo=True):
     bokser = [[boks, "paddle", None] for (boks, _mod11) in finn_bokser_fra_tokens(tokens)]
 
-    for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
-        yb = (x0, y0, x1, y1)
-        dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
-        if dekket:
-            for par in dekket:
-                par[1] = "begge"
-                par[2] = round(conf, 3)           # conf fra YOLO
-        elif kilde := _godta_yolo_boks(tokens, yb, conf):
-            bokser.append([yb, kilde, round(conf, 3)])
+    if med_yolo:
+        for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
+            yb = (x0, y0, x1, y1)
+            dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
+            if dekket:
+                for par in dekket:
+                    par[1] = "begge"
+                    par[2] = round(conf, 3)           # conf fra YOLO
+            elif kilde := _godta_yolo_boks(tokens, yb, conf):
+                bokser.append([yb, kilde, round(conf, 3)])
 
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
@@ -56,7 +57,7 @@ def _bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer):
     return side
 
 
-def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None):
+def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None, elektronisk_tinglyst=False):
     t = {}
 
     with _ta_tid(t, "render"):
@@ -71,7 +72,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     for si, (bilde, bilde_ocr, tokens, k) in enumerate(
             zip(bilder, bilder_ocr, tokens_per_side, rotasjoner), start=1):
         with _ta_tid(t, "yolo+match"):
-            bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde)
+            bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde, med_yolo=not elektronisk_tinglyst)
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer))
 

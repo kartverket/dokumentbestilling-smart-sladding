@@ -15,9 +15,15 @@ def hentDokumenterTilSladding():
     logging.info(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
 
     for dokument in dokumenter.json():
-        dokumentaar = dokument.get('dokumentaar')
-        dokumentnummer = dokument.get('dokumentnummer')
-        embetenummer = dokument.get('embetenummer')
+        ident = dokument.get('dokumentIdent')
+        dokumentaar = ident.get('dokumentaar')
+        dokumentnummer = ident.get('dokumentnummer')
+        embetenummer = ident.get('embetenummer')
+
+        er_elektronisk_tinglyst = dokument.get('erElektroniskTinglyst')
+        # Bruk er_elektronisk_tinglyst til det du trenger
+        if er_elektronisk_tinglyst:
+            logging.info(f'Dokument {docid} er elektronisk tinglyst')
 
         dokumentStatus = requests.get(f'{database_base_url()}/dokumentstatus/{dokumentaar}/{dokumentnummer}/{embetenummer}')
 
@@ -56,6 +62,7 @@ def hentDokumenterTilSladding():
         try:
             response = requests.post(
                 model_url,
+                params={'elektronisk_tinglyst': str(er_elektronisk_tinglyst).lower()},
                 data=pdf_bytes,
                 headers={
                     'Content-Type': 'application/pdf',

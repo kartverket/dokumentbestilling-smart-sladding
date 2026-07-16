@@ -23,8 +23,9 @@ def get_bounding_boxes():
         return jsonify({'error': 'No data provided in the request body'}), 400
 
     try:
+        elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
         pdf_file_stream = request.get_data()
-        bounding_boxes_result = model_main.run_model_on_pdf_bytes(pdf_file_stream)
+        bounding_boxes_result = model_main.run_model_on_pdf_bytes(pdf_file_stream, elektronisk_tinglyst=elektronisk_tinglyst)
 
         return jsonify(bounding_boxes_result)
 
