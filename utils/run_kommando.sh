@@ -1,4 +1,6 @@
-nohup bash -c '
+#!/bin/bash
+set -e
+
 python run.py \
   --mappe /data2/smartsladding-uttrekk/uttrekk_4/ \
   --velg 16715849 \
@@ -5332,7 +5334,7 @@ python run.py \
   --fasit --fasit-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
   --beskrivelse fredag_randomshuffle2000 \
   --tid
-&& \
+
 python run.py \
   --mappe /data2/smartsladding-uttrekk/uttrekk_4/ \
   --velg 16715849 \
@@ -10666,4 +10668,3 @@ python run.py \
   --fasit --fasit-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
   --beskrivelse fredag_yearly10000 \
   --tid
-' > run_fredag_beggevekt.log 2>&1 &
