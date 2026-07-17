@@ -11,12 +11,24 @@ from config import (
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "weights", "best.pt")
 
 _modell = None
+_vekter_sti = YOLO_VEKTER
+
+
+def sett_vekter(sti):
+    """Overstyr vektfilen. Maa kalles foer foerste prediksjon."""
+    global _vekter_sti, _modell
+    if sti:
+        _vekter_sti = sti
+        _modell = None          # tving ny lasting hvis modellen alt er lastet
 
 
 def _hent_modell():
     global _modell
     if _modell is None:
-        _modell = YOLO(YOLO_VEKTER)
+        if not os.path.isfile(_vekter_sti):
+            raise FileNotFoundError(f"Fant ikke YOLO-vekter: {_vekter_sti}")
+        print(f"Laster YOLO-vekter fra: {_vekter_sti}")
+        _modell = YOLO(_vekter_sti)
     return _modell
 
 
@@ -49,7 +61,7 @@ def snill_sjekk(tokens, boks):
     bokstaver = 0
     for token in tokens_i_boks(tokens, boks):
         if not any(ch.isdigit() for ch in token.tekst):
-            continue               
+            continue
         n_siffer += sum(ch.isdigit() for ch in token.tekst)
         bokstaver += sum(ch.isalpha() for ch in token.tekst)
     return n_siffer >= MIN_SIFFER and bokstaver <= MAKS_BOKSTAVER

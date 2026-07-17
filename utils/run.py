@@ -14,6 +14,7 @@ from csv_export import initialiser_csv, append_csv
 from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
+from yolo_fnr import sett_vekter
 import traceback
 from save_result import lagre_resultat
 
@@ -63,7 +64,11 @@ def main():
     p.add_argument("--y-origin", choices=["topp", "bunn"], default=Y_ORIGIN, help="CSV y-origo")
     p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
     p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
+    p.add_argument("--yolo-vekter", default=None,
+                   help="path til YOLO-vektfil (best.pt); default er weights/weights/best.pt i app-mappen")
     args = p.parse_args()
+
+    sett_vekter(args.yolo_vekter)
 
     filer = velg_filer(args.mappe, args.velg, args.antall)
 
