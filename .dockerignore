@@ -1,2 +1,7 @@
-Dockerfile
-docker-compose.yml
+*
+!app/
+!config/
+!requirements.txt
+app/logs/
+app/__pycache__/
+app/*.tar
