@@ -43,7 +43,7 @@ pip install paddlepaddle-gpu paddleocr
 
 ## Modeller
 
-`best.pt` (vektene til den trente YOLO-modellen) leveres separat og legges i `app/`.
+`best.pt` (vektene til den trente YOLO-modellen) leveres separat og legges i `app/weights/weights/`. Andre vektfiler kan legges samme sted og velges per kjøring med `--yolo-vekter` (se run.py-flaggene under).
 
 PaddleOCR-modellene er ferdig trente vekter fra PaddlePaddle sitt modellbibliotek og lastes ned manuelt (kjøres fra `app/`):
 
@@ -117,6 +117,7 @@ python run.py [flagg]
 | `--mappe STI`            | `../uttrekk_3`                                | Mappe med PDF-er                                 |
 | `--velg FIL [FIL ...]`   | —                                             | Kjør bare disse filene (filnavn/delstreng)       |
 | `--antall N`             | `20`                                          | Antall filer når `--velg` er tom (`alle` = alle) |
+| `--yolo-vekter FIL`      | `app/weights/weights/best.pt`                 | Path til YOLO-vektfil (for å teste andre vekter) |
 | `--csv`                  | av                                            | Skriv funne bokser til CSV                       |
 | `--csv-ut FIL`           | `sladd_koordinater.csv`                       | Filnavn for boks-CSV                             |
 | `--fasit`                | av                                            | Mål recall mot fasit-CSV                         |
@@ -135,6 +136,7 @@ python run.py [flagg]
 ```sh
 python run.py --velg 10000676.pdf --csv --fasit --tid
 python run.py --antall alle --fasit --csv --png
+python run.py --velg 10000676.pdf --yolo-vekter weights/weights/yolo-yearly-10000-docs.pt --fasit --tid
 ```
 
 ---
@@ -305,5 +307,3 @@ Se [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Sikkerhet
 Se [SECURITY.md](.github/SECURITY.md) for rapportering av sårbarheter.
-
-
