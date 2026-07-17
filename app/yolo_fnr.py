@@ -8,7 +8,7 @@ from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER
 )
 
-YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
+YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "weights", "best.pt")
 
 _modell = None
 
