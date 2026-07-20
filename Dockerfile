@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
+    --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
 
 COPY app/ .
 COPY config/ config/
