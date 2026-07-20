@@ -167,7 +167,7 @@ def split_doc_type(dataset_dir: str, metadata_csv: str, doc_type: str,
                    train_ratio: float, val_ratio: float, seed: int):
     dataset = Path(dataset_dir)
     meta = _load_metadata(metadata_csv, ["fil_revisjon_id", "rettsstiftelsestyper"])
-    valid_ids = set(meta.loc[meta["rettsstiftelsestyper"] == doc_type, "fil_revisjon_id"].astype(str))
+    valid_ids = set(meta.loc[meta["rettsstiftelsestyper"].str.split(" ", n=1).str[0] == doc_type, "fil_revisjon_id"].astype(str))
 
     imgs = sorted((dataset / "images_all").glob("*.png"))
     selected = [img for img in imgs if img.stem.rsplit("_p", 1)[0] in valid_ids]
@@ -189,7 +189,7 @@ def split_year_and_doc_type(dataset_dir: str, metadata_csv: str, doc_type: str,
                             train_ratio: float, val_ratio: float, seed: int):
     dataset = Path(dataset_dir)
     meta = _load_metadata(metadata_csv, ["fil_revisjon_id", "dokument_aar", "rettsstiftelsestyper"])
-    filtered = meta[meta["rettsstiftelsestyper"] == doc_type]
+    filtered = meta[meta["rettsstiftelsestyper"].str.split(" ", n=1).str[0] == doc_type]
     id_to_year = _year_map(filtered)
 
     # Keep only IDs within the year range
