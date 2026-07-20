@@ -4,7 +4,7 @@ Denne mappen trener en YOLO-modell til å detektere fødselsnummer (FNR) i skann
 Pipelinen inneholder disse delene:
 
 1. **Konvertering:** CSV-annotasjoner + PDFer -> PNG-bilder + YOLO-labels
-2. **Split:** Fordeler data i train/val/test (tilfeldig eller per år)
+2. **Split:** Fordeler data i train/val/test (tilfeldig, per år, per dokumenttype, eller kombinasjon)
 3. **Trening:** Trener en YOLO-modell på det splittede datasettet
 
 
@@ -74,9 +74,35 @@ make split \
   STRATEGY=yearly \
   METADATA=/sti/til/metadata.csv \
   PER_YEAR=100
+
+# Doc type split — kun én dokumenttype
+make split \
+  PDFS=/sti/til/pdf-mappe \
+  CSV=/sti/til/labels.csv \
+  OUTPUT_DIR=/datasets \
+  STRATEGY=doc_type \
+  METADATA=/sti/til/metadata.csv \
+  DOC_TYPE=Pantedokument
+
+# Year + doc type — én dokumenttype innenfor et årsintervall
+make split \
+  PDFS=/sti/til/pdf-mappe \
+  CSV=/sti/til/labels.csv \
+  OUTPUT_DIR=/datasets \
+  STRATEGY=year_and_doc_type \
+  METADATA=/sti/til/metadata.csv \
+  DOC_TYPE=Pantedokument \
+  YEAR_FROM=1970 \
+  YEAR_TO=1978
 ```
 
-Yearly-strategien krever en metadata-CSV med kolonnene `fil_revisjon_id` og `dokument_aar`. Den velger opptil `PER_YEAR` bilder per år og splitter innenfor hvert år etter train/val/test-ratio.
+Strategier:
+- **random** — tilfeldig shuffle og split etter ratio
+- **yearly** — grupperer per år, velger opptil `PER_YEAR` per år, splitter innenfor hver gruppe
+- **doc_type** — filtrerer på `rettsstiftelsestyper`-kolonnen, splitter tilfeldig
+- **year_and_doc_type** — filtrerer på dokumenttype og årsintervall (`YEAR_FROM`–`YEAR_TO`), splitter tilfeldig
+
+Yearly-strategien krever en metadata-CSV med kolonnene `fil_revisjon_id` og `dokument_aar`. Doc type-strategiene krever i tillegg `rettsstiftelsestyper`.
 
 ### Steg 3: Trening (`make train`)
 

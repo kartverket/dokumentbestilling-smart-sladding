@@ -17,12 +17,17 @@ VAL_RATIO ?= 0.15
 SEED ?= 42
 
 # ---- Split strategy -----------------------------------------
-# "random" (default) or "yearly" (requires METADATA)
+# "random" (default), "yearly", "doc_type", or "year_and_doc_type"
 STRATEGY ?= random
-# metadata CSV with tinglysingsdato (required for yearly strategy)
+# metadata CSV with tinglysingsdato (required for non-random strategies)
 METADATA ?=
 # max images per year for yearly strategy
 PER_YEAR ?= 100
+# rettsstiftelsestyper value (required for doc_type / year_and_doc_type)
+DOC_TYPE ?=
+# year range for year_and_doc_type strategy
+YEAR_FROM ?=
+YEAR_TO ?=
 
 # ---- Training -----------------------------------------------
 MODEL ?= yolo26x.pt
@@ -73,7 +78,10 @@ $(DATASET)/.split: $(DATASET)/.converted
 		--seed $(SEED) \
 		--strategy $(STRATEGY) \
 		$(if $(METADATA),--metadata $(METADATA)) \
-		--per-year $(PER_YEAR)
+		--per-year $(PER_YEAR) \
+		$(if $(DOC_TYPE),--doc-type $(DOC_TYPE)) \
+		$(if $(YEAR_FROM),--year-from $(YEAR_FROM)) \
+		$(if $(YEAR_TO),--year-to $(YEAR_TO))
 	@touch $@
 
 # ---- Step 5: training ---------------------------------------
@@ -123,4 +131,4 @@ help:
 	@echo "make smoke         3-epoch smoke test on $(MODEL)"
 	@echo "make clean         remove $(DATASET)/"
 	@echo ""
-	@echo "Vars: PDFS CSV DATASET TRAIN_RATIO VAL_RATIO MODEL EPOCHS IMGSZ BATCH DEVICE PATIENCE"
+	@echo "Vars: PDFS CSV DATASET TRAIN_RATIO VAL_RATIO STRATEGY METADATA PER_YEAR DOC_TYPE YEAR_FROM YEAR_TO MODEL EPOCHS IMGSZ BATCH DEVICE PATIENCE"
