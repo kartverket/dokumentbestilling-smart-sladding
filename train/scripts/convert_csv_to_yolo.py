@@ -51,6 +51,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
     done = 0
     skipped_pages = 0
     total_boxes = 0
+    negatives = 0
 
     for fil_id, doc_group in df.groupby("fil_revisjon_id"):
         pdf_path = pdf_dir / f"{fil_id}.pdf"
@@ -59,6 +60,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
             continue
 
         doc = fitz.open(pdf_path)
+        annotated_pages = set()
 
         for page_no, page_group in doc_group.groupby("sidetall"):
             idx = int(page_no) - 1
@@ -66,6 +68,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
                 skipped_pages += 1
                 continue
 
+            annotated_pages.add(int(page_no))
             page = doc[idx]
             pix = page.get_pixmap(dpi=DPI)
             img_w, img_h = pix.width, pix.height
@@ -91,10 +94,22 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
             total_boxes += len(lines)
             done += 1
 
-        doc.close()
-        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages)")
+        # Render unannotated pages as negatives (empty label files)
+        for idx in range(len(doc)):
+            page_no = idx + 1
+            if page_no in annotated_pages:
+                continue
+            page = doc[idx]
+            pix = page.get_pixmap(dpi=DPI)
+            stem = f"{fil_id}_p{page_no}"
+            pix.save(str(images_dir / f"{stem}.png"))
+            (labels_dir / f"{stem}.txt").write_text("")
+            negatives += 1
 
-    print(f"Wrote {done} page-images with {total_boxes} boxes total")
+        doc.close()
+        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {len(doc) - len(annotated_pages)} negatives)")
+
+    print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages")
     if missing:
         print(f"Missing PDFs: {len(missing)}")
     if skipped_pages:

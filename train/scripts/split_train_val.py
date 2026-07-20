@@ -20,6 +20,40 @@ import pandas as pd
 
 # ─── Core split engine ────────────────────────────────────────────────────────
 
+NEGATIVE_RATIO = 0.10
+
+
+def _is_negative(img: Path, labels_all: Path) -> bool:
+    """An image is a negative sample if its label file is empty or missing."""
+    label = labels_all / (img.stem + ".txt")
+    return not label.exists() or label.stat().st_size == 0
+
+
+def _separate_positives_negatives(imgs: list, labels_all: Path) -> tuple[list, list]:
+    """Split image list into positives (have annotations) and negatives (empty labels)."""
+    positives = []
+    negatives = []
+    for img in imgs:
+        if _is_negative(img, labels_all):
+            negatives.append(img)
+        else:
+            positives.append(img)
+    return positives, negatives
+
+
+def _add_negatives(splits: list, negatives: list, ratio: float = NEGATIVE_RATIO):
+    """Add negatives to each split subset proportional to its positive count."""
+    random.shuffle(negatives)
+    offset = 0
+    for i, (subset, positives) in enumerate(splits):
+        n_neg = int(len(positives) * ratio)
+        selected_neg = negatives[offset:offset + n_neg]
+        offset += n_neg
+        splits[i] = (subset, positives + selected_neg)
+        if selected_neg:
+            print(f"  {subset}: +{len(selected_neg)} negatives")
+    return splits
+
 
 def _do_split(imgs: list, train_ratio: float, val_ratio: float):
     """Compute train/val/test split boundaries on an already-shuffled list."""
@@ -62,33 +96,51 @@ def _copy_and_log(dataset: Path, splits: list, log_lines: list):
 
 def _shuffle_and_split(dataset: Path, imgs: list, train_ratio: float, val_ratio: float,
                        seed: int, log_header: list):
-    """Shuffle images, split by ratio, copy and log."""
+    """Shuffle positives, split by ratio, add 10% negatives per subset, copy and log."""
+    labels_all = dataset / "labels_all"
+    positives, negatives = _separate_positives_negatives(imgs, labels_all)
+
     random.seed(seed)
-    random.shuffle(imgs)
-    splits = _do_split(imgs, train_ratio, val_ratio)
+    random.shuffle(positives)
+    splits = _do_split(positives, train_ratio, val_ratio)
+    splits = _add_negatives(splits, negatives)
+
+    log_header.append(f"Negatives: {sum(len(s) for _, s in splits) - len(positives)} of {len(negatives)} available")
+    log_header.append("")
     _copy_and_log(dataset, splits, log_header)
 
 
 def _split_per_group(dataset: Path, groups: dict, per_group: int,
                      train_ratio: float, val_ratio: float, seed: int, log_header: list):
-    """Split per group: shuffle each, select up to per_group, split, merge."""
+    """Split per group: shuffle each, select up to per_group, split, merge. Add 10% negatives."""
+    labels_all = dataset / "labels_all"
     random.seed(seed)
     train, val, test = [], [], []
+    all_negatives = []
+
     for key in sorted(groups):
         g = groups[key]
-        random.shuffle(g)
-        selected = g[:per_group]
+        positives, negatives = _separate_positives_negatives(g, labels_all)
+        random.shuffle(positives)
+        selected = positives[:per_group]
         s = _do_split(selected, train_ratio, val_ratio)
         train.extend(s[0][1])
         val.extend(s[1][1])
         test.extend(s[2][1])
-        print(f"  {key}: {len(g)} available, {len(selected)} selected")
+        all_negatives.extend(negatives)
+        print(f"  {key}: {len(positives)} positives available, {len(selected)} selected, {len(negatives)} negatives")
 
     for key in sorted(groups):
-        log_header.append(f"  {key}: {min(len(groups[key]), per_group)} used of {len(groups[key])} available")
+        pos_in_group = [img for img in groups[key] if not _is_negative(img, labels_all)]
+        log_header.append(f"  {key}: {min(len(pos_in_group), per_group)} used of {len(pos_in_group)} available")
     log_header.append("")
 
+    total_positives = len(train) + len(val) + len(test)
     splits = [("train", train), ("val", val), ("test", test)]
+    splits = _add_negatives(splits, all_negatives)
+    total_negatives = sum(len(s) for _, s in splits) - total_positives
+
+    log_header.append(f"Negatives: {total_negatives} added from {len(all_negatives)} available")
     _copy_and_log(dataset, splits, log_header)
 
 
