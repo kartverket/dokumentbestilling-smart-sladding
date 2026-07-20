@@ -106,8 +106,9 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
             (labels_dir / f"{stem}.txt").write_text("")
             negatives += 1
 
+        n_negatives_in_doc = len(doc) - len(annotated_pages)
         doc.close()
-        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {len(doc) - len(annotated_pages)} negatives)")
+        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {n_negatives_in_doc} negatives)")
 
     print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages")
     if missing:

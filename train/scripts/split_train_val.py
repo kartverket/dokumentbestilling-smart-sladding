@@ -295,16 +295,15 @@ if __name__ == "__main__":
         print("ERROR: --year-from and --year-to are required for year_and_doc_type strategy")
         raise SystemExit(1)
 
-    match args.strategy:
-        case "yearly":
-            split_yearly(args.dataset, args.metadata, args.per_year,
-                         args.train_ratio, args.val_ratio, args.seed)
-        case "doc_type":
-            split_doc_type(args.dataset, args.metadata, args.doc_type,
-                           args.train_ratio, args.val_ratio, args.seed)
-        case "year_and_doc_type":
-            split_year_and_doc_type(args.dataset, args.metadata, args.doc_type,
-                                    args.year_from, args.year_to,
-                                    args.train_ratio, args.val_ratio, args.seed)
-        case _:
-            split_random(args.dataset, args.train_ratio, args.val_ratio, args.seed)
+    if args.strategy == "yearly":
+        split_yearly(args.dataset, args.metadata, args.per_year,
+                     args.train_ratio, args.val_ratio, args.seed)
+    elif args.strategy == "doc_type":
+        split_doc_type(args.dataset, args.metadata, args.doc_type,
+                       args.train_ratio, args.val_ratio, args.seed)
+    elif args.strategy == "year_and_doc_type":
+        split_year_and_doc_type(args.dataset, args.metadata, args.doc_type,
+                                args.year_from, args.year_to,
+                                args.train_ratio, args.val_ratio, args.seed)
+    else:
+        split_random(args.dataset, args.train_ratio, args.val_ratio, args.seed)
