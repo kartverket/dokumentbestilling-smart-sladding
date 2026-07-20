@@ -29,17 +29,16 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### PaddleOCR — separat installasjon
+### PaddleOCR — CPU vs GPU (må velges konsistent i hele systemet)
 
-Paddle-pakken installeres for seg fordi CPU- og GPU-bygget er forskjellige pakker:
+CPU- og GPU-bygget av Paddle er to forskjellige pakker. Du må velge **samme variant alle stedene under** 
 
-```sh
-# CPU (Mac / maskin uten GPU):
-pip install paddlepaddle paddleocr
+| Sted | CPU (Mac / uten GPU) | GPU (Linux-server med CUDA) |
+|------|----------------------|------------------------------|
+| Manuell install | `pip install paddlepaddle paddleocr` | `pip install paddlepaddle-gpu paddleocr` |
+| `requirements.txt` | `paddlepaddle==3.3.1` | `paddlepaddle-gpu==3.3.1` |
+| `Dockerfile` (`--extra-index-url`) | `.../packages/stable/cpu/` | `.../packages/stable/cu126/` |
 
-# GPU (Linux-server med CUDA):
-pip install paddlepaddle-gpu paddleocr
-```
 
 ## Modeller
 
@@ -93,12 +92,29 @@ python run.py --mappe . --velg testdokument.pdf --csv --csv-ut test_ut.csv --png
 
 PNG-resultat lagres i `utils/visning_test/`.
 
-## Produksjon
+## Produksjon (Docker)
+
+Produksjon kjøres som Docker-container. `docker-compose.yml` har to tjenester som bygges fra samme `Dockerfile`:
+
+| Tjeneste   | MODE | Port (host→container) | Container          |
+|------------|------|------------------------|--------------------|
+| `app-prod` | prod | 5071 → 8080            | `smsl-server-prod` |
+| `app-dev`  | dev  | 5072 → 8080            | `smsl-server-dev`  |
 
 ```sh
-cd app
-chmod +x start_production.sh
-./start_production.sh
+# bygg + start prod (port 5071)
+docker compose up -d --build app-prod
+
+# følg loggen (modellene lastes først ved første /model-kall)
+docker compose logs -f app-prod
+
+# test
+curl http://localhost:5071/health
+```
+
+
+```sh
+docker compose logs app-prod | grep -i "GPU tilgjengelig"   # -> True hvis du kjører på gpu
 ```
 
 ---
