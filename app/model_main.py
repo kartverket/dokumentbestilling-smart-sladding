@@ -33,7 +33,7 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, med_yolo=True):
 
     # fjern for smaa bokser uansett kilde (paddle/yolo/begge)
     bokser = [par for par in bokser if not er_for_liten(par[0])]
-    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser], avvist
+    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
 
 def _godta_yolo_boks(tokens, boks, conf):
