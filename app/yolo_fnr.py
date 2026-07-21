@@ -5,8 +5,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from config import (
-    YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER
-)
+    YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,MIN_BOKS_AREAL)
 
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "weights", "best.pt")
 
@@ -15,7 +14,6 @@ _vekter_sti = YOLO_VEKTER
 
 
 def sett_vekter(sti):
-    """Overstyr vektfilen. Maa kalles foer foerste prediksjon."""
     global _vekter_sti, _modell
     if sti:
         _vekter_sti = sti
@@ -70,6 +68,11 @@ def snill_sjekk(tokens, boks):
 def er_vertikal(boks):
     x0, y0, x1, y1 = boks[:4]
     return (y1 - y0) > VERTIKAL_FAKTOR * (x1 - x0)
+
+
+def er_for_liten(boks):
+    x0, y0, x1, y1 = boks[:4]
+    return (x1 - x0) * (y1 - y0) < MIN_BOKS_AREAL
 
 
 def overlapp_andel_boks(a, b):

@@ -6,6 +6,7 @@ YOLO_CONF          = 0.12      # predict-terskel
 YOLO_CONF_UTEN_TEKST = 0.40   # krav når Paddle ikke leste noe i boksen
 YOLO_CONF_VERTIKAL = 0.90     # vertikale bokser (stående tekst)
 VERTIKAL_FAKTOR    = 1.3       # høyde > 1.3 × bredde regnes som vertikal
+MIN_BOKS_AREAL     = 965      # bokser med mindre areal regnes som støy
 YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
 MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
 MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO

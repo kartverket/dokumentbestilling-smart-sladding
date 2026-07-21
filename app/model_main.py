@@ -7,7 +7,7 @@ from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 from orientering import finn_rotasjon, boks_tilbake
-from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal
+from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten
 
 
 @contextmanager
@@ -31,7 +31,9 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, med_yolo=True):
             elif kilde := _godta_yolo_boks(tokens, yb, conf):
                 bokser.append([yb, kilde, round(conf, 3)])
 
-    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
+    # fjern for smaa bokser uansett kilde (paddle/yolo/begge)
+    bokser = [par for par in bokser if not er_for_liten(par[0])]
+    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser], avvist
 
 
 def _godta_yolo_boks(tokens, boks, conf):
