@@ -1,19 +1,19 @@
 services:
-  app-prod:
+  app-paddleyolo:
     build:
       context: .
       args:
         - HTTP_PROXY=http://159.162.48.7:3128
         - HTTPS_PROXY=http://159.162.48.7:3128
-    container_name: smsl-server-prod 
-    image: smart_sladding_app_prod
+    container_name: smsl-server-paddleyolo
+    image: smart_sladding_app_paddleyolo
     restart: unless-stopped
     environment:
       - HTTP_PROXY=http://159.162.48.7:3128
       - HTTPS_PROXY=http://159.162.48.7:3128
-      - MODE=prod  
+      - MODE=prod
     ports:
-      - "5071:8080"
+      - "5081:8080"
     volumes:
       - /data/docker/gunicorn_logs:/data/gunicorn_logs
       - /data/docker/ml_logs:/data/ml_logs
@@ -24,32 +24,5 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-  app-dev:
-    build:
-      context: .
-      args:
-        - HTTP_PROXY=http://159.162.48.7:3128
-        - HTTPS_PROXY=http://159.162.48.7:3128
-    container_name: smsl-server-dev
-    image: smart_sladding_app_dev
-    restart: unless-stopped
-    environment:
-      - HTTP_PROXY=http://159.162.48.7:3128
-      - HTTPS_PROXY=http://159.162.48.7:3128
-      - MODE=dev
-    ports:
-      - "5072:8080"
-    volumes:
-      - /data/docker/gunicorn_logs:/data/gunicorn_logs
-      - /data/docker/ml_logs:/data/ml_logs
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
-
 volumes:
   data:

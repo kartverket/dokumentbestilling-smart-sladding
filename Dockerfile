@@ -28,11 +28,14 @@ RUN set -eux; \
         rm "${model}.tar"; \
     done
 
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+
+RUN pip install --no-cache-dir torch==2.12.1 torchvision==0.27.1 \
+    --index-url https://download.pytorch.org/whl/cu126
+RUN pip install --no-cache-dir --force-reinstall --no-deps nvidia-cudnn-cu12==9.5.1.17
 
 COPY app/ .
 COPY config/ config/
