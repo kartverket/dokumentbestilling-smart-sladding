@@ -2,7 +2,10 @@ import argparse
 import io
 import os
 import sys
+from collections import defaultdict
 from contextlib import redirect_stdout
+
+import fitz
 
 _APP = os.path.join(os.path.dirname(__file__), "..", "app")
 if _APP not in sys.path:
@@ -15,6 +18,7 @@ from evaluation import mal_overlapp, les_fasit
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 from yolo_fnr import sett_vekter
+from load_pdf import PDF_DPI
 import traceback
 from save_result import lagre_resultat
 
@@ -24,6 +28,39 @@ from utils_config import (
     MAPPE, ANTALL, FASIT_CSV, CSV_UT, OCR_LOGG_FIL,
     PNG_MAPPE, SLADD_MAPPE, Y_ORIGIN, TERSKEL
 )
+
+SKALA = PDF_DPI / 72.0                     # PDF-punkt -> piksel
+
+
+def _sider_fra_resultat(resultat, pdf_bytes):
+    if isinstance(resultat, dict):
+        return resultat.get("sider", [])
+
+    per_side = defaultdict(list)
+    for b in resultat:
+        per_side[b["page"]].append(b)
+
+    sider = []
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as dok:
+        for n in range(1, dok.page_count + 1):
+            rect = dok[n - 1].rect
+            bw = int(round(rect.width * SKALA))
+            bh = int(round(rect.height * SKALA))
+            bokser = []
+            for b in per_side.get(n, []):
+                boks = {
+                    "x0": b["x"] * SKALA,
+                    "y0": b["y"] * SKALA,
+                    "x1": (b["x"] + b["width"]) * SKALA,
+                    "y1": (b["y"] + b["height"]) * SKALA,
+                    "kilde": b.get("kilde", "paddle"),
+                }
+                if b.get("conf") is not None:
+                    boks["conf"] = b["conf"]
+                bokser.append(boks)
+            sider.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
+                          "bokser": bokser})
+    return sider
 
 
 def _skriv_ocr_logg(ocr_linjer, sti):
@@ -87,6 +124,7 @@ def main():
     sladd_bokser, yolo_bokser, csv_bokser, feilet = {}, {}, {}, []
     tider = {}
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
+    advart_om_linjer = False
     for fil in filer:
         start = time.perf_counter()
 
@@ -103,22 +141,27 @@ def main():
             traceback.print_exc()
             continue
 
+        sider = _sider_fra_resultat(resultat, pdf_bytes)
+
         tid_brukt = time.perf_counter() - start
         total_tid += tid_brukt
         tider[navn] = tid_brukt
 
         if args.ocr_logg:
-            for side in resultat["sider"]:
+            if isinstance(resultat, list) and not advart_om_linjer:
+                print("  !! --ocr-logg: modellen returnerer flatt format uten 'linjer' - loggen blir tom.")
+                advart_om_linjer = True
+            for side in sider:
                 ocr_linjer[(navn, side["side"])] = side.get("linjer", [])
 
         if not vil_ha_artefakt:
-            n = sum(len(s["bokser"]) for s in resultat["sider"])
-            print(f"{navn}: {n} boks(er) over {len(resultat['sider'])} side(r)")
+            n = sum(len(s["bokser"]) for s in sider)
+            print(f"{navn}: {n} boks(er) over {len(sider)} side(r)")
             print(f"    Tid brukt: {tid_brukt:.6f} sekunder")
 
             continue
 
-        for side in resultat["sider"]:
+        for side in sider:
             bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
             med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"), b.get("conf"))
                           for b in side["bokser"]]
