@@ -1,6 +1,7 @@
 import time
 from contextlib import contextmanager
 
+import fitz
 import numpy as np
 
 from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
@@ -45,7 +46,7 @@ def _godta_yolo_boks(tokens, boks, conf):
 
 
 def _bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer):
-    h, w = bilde.shape[:2]                        
+    h, w = bilde.shape[:2]
     bokser = []
     for boks, kilde, conf in bokser_med_kilde:
         x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
@@ -57,6 +58,29 @@ def _bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer):
     if med_linjer:
         side["linjer"] = ocr_linjer_fra_tokens(tokens)
     return side
+
+
+def _til_flat(sider, pdf_bytes):
+    ut = []
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as dok:
+        for side in sider:
+            n = side["side"]
+            bb, bh = side.get("bilde_bredde"), side.get("bilde_hoyde")
+            if not bb or not bh or not (1 <= n <= dok.page_count):
+                continue
+            rect = dok[n - 1].rect                
+            sx = rect.width / bb
+            sy = rect.height / bh
+            for b in side.get("bokser", []):
+                x0, x1 = sorted((b["x0"] * sx, b["x1"] * sx))
+                y0, y1 = sorted((b["y0"] * sy, b["y1"] * sy))
+                d = {"page": n, "x": x0, "y": y0,
+                     "width": x1 - x0, "height": y1 - y0,
+                     "kilde": b.get("kilde")}
+                if "conf" in b:
+                    d["conf"] = b["conf"]
+                ut.append(d)
+    return ut
 
 
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None, elektronisk_tinglyst=False):
@@ -81,7 +105,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     if skriv_tid:
         _skriv_tid(t, len(sider), navn)
 
-    return {"sider": sider}
+    return _til_flat(sider, pdf_bytes)
 
 
 def _skriv_tid(t, n_sider, navn=None):
