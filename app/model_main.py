@@ -6,7 +6,7 @@ import numpy as np
 
 from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
 from load_pdf import les_sider_fra_bytes
-from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
+from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens, er_for_bred
 from orientering import finn_rotasjon, boks_tilbake
 from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten
 
@@ -18,10 +18,10 @@ def _ta_tid(t, post):
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
 
 
-def _finn_bokser_med_kilde(tokens, bilde_ocr, med_yolo=True):
+def _finn_bokser_med_kilde(tokens, bilde_ocr, elektronisk_tinglyst=False):
     bokser = [[boks, "paddle", None] for (boks, _mod11) in finn_bokser_fra_tokens(tokens)]
 
-    if med_yolo:
+    if not elektronisk_tinglyst:
         for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
             yb = (x0, y0, x1, y1)
             dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
@@ -34,6 +34,11 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, med_yolo=True):
 
     # fjern for smaa bokser uansett kilde (paddle/yolo/begge)
     bokser = [par for par in bokser if not er_for_liten(par[0])]
+
+    # uvanlig brede bokser er feil-deteksjon for elektroniske, ikke FNR
+    if elektronisk_tinglyst:
+        bokser = [par for par in bokser if not er_for_bred(par[0])]
+
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
 
@@ -98,7 +103,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     for si, (bilde, bilde_ocr, tokens, k) in enumerate(
             zip(bilder, bilder_ocr, tokens_per_side, rotasjoner), start=1):
         with _ta_tid(t, "yolo+match"):
-            bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde, med_yolo=not elektronisk_tinglyst)
+            bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde, elektronisk_tinglyst=elektronisk_tinglyst)
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer))
 

@@ -22,6 +22,7 @@ SLADDE_SIFFER      = 5         # antall sifre som vises i sladde-boksen
 LUFT_X             = 0.35      # horisontal utvidelse (andel av sifferbredde)
 LUFT_Y             = 0.0       # vertikal utvidelse
 MAKS_HOYDE_FAKTOR  = 3.0       # sladde-høyde maks N × median sifferbredde
+MAKS_BREDDE_PT     = 50       # elektronisk tinglyst: bokser bredere enn dette (PDF-punkt) er feil-deteksjon
 
 # ---- Pipeline ----------------------------------------------
 DEDUP_OVERLAPP     = 0.5       # YOLO-boks regnes som "samme" når den dekker Paddle-boks så mye

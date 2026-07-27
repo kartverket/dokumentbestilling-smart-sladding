@@ -7,10 +7,9 @@ from collections import namedtuple
 import numpy as np
 from paddleocr import PaddleOCR
 
-from config import (
-    SLADDE_SIFFER, LUFT_X, LUFT_Y, MAKS_HOYDE_FAKTOR,
-    MODELL_SETT, DET_SIDE_LEN, REC_BATCH, SIDER_PER_OCR_BATCH
-)             
+from config import SLADDE_SIFFER, LUFT_X, LUFT_Y, MAKS_HOYDE_FAKTOR, MAKS_BREDDE_PT, MODELL_SETT, DET_SIDE_LEN, REC_BATCH, SIDER_PER_OCR_BATCH, PDF_DPI
+
+MAKS_BREDDE_PX = MAKS_BREDDE_PT * PDF_DPI / 72.0
 
 VEKTER_KONTROLL_1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
 VEKTER_KONTROLL_2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
@@ -217,6 +216,11 @@ def _sladdeboks(sifferbokser):
         topp, bunn = senter - tak / 2, senter + tak / 2
 
     return (math.floor(venstre), math.floor(topp), math.ceil(hoyre), math.ceil(bunn))
+
+
+def er_for_bred(boks):
+    x0, y0, x1, y1 = boks[:4]
+    return (x1 - x0) > MAKS_BREDDE_PX
 
 
 def finn_bokser_fra_tokens(tokens):
