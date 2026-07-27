@@ -40,7 +40,11 @@ partition "Deteksjon (per side)" {
     repeat while (Flere siffer på linja?) is (ja) not (nei)
   fork again
     :**YOLO-sporet**;
-    :YOLO predict\nconf >= 0.12, imgsz 1280;
+    if (Elektronisk tinglyst?) then (ja)
+      :Hopp over YOLO\nkun Paddle-bokser;
+    else (nei)
+      :YOLO predict\nconf >= 0.12, imgsz 1280;
+    endif
   end fork
 
   :Slå sammen boksene;
@@ -74,6 +78,12 @@ partition "Deteksjon (per side)" {
     som inneholder minst ett siffer –
     rene tekstord i boksen ignoreres
   end note
+
+  :Fjern for små bokser\nareal < 965 px² – uansett kilde;
+  if (Elektronisk tinglyst?) then (ja)
+    :Fjern for brede bokser\nbredde > 50 pt (208 px @ 300 DPI);
+  else (nei)
+  endif
 }
 
 :Roter bokser tilbake til original orientering;
