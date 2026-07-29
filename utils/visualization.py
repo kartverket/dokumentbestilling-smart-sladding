@@ -7,10 +7,27 @@ from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI
 from utils_config import (
-    FUNNET_FARGE, PADDLE_FARGE, YOLO_FARGE, OVERSLADD_FARGE, FASIT_FARGE
+    FUNNET_FARGE, PADDLE_FARGE, YOLO_FARGE, OVERSLADD_FARGE, FASIT_FARGE,
+    UKJENT_FARGE
 )
 
 SKALA = PDF_DPI / 72.0           # PDF-punkt -> piksel
+
+_CONF_FONT = None
+
+
+def _conf_font():
+    global _CONF_FONT
+    if _CONF_FONT is None:
+        _CONF_FONT = ImageFont.load_default(size=28)
+    return _CONF_FONT
+
+
+def _tegn_conf(tegner, r, conf):
+    if conf is None:
+        return
+    tegner.text((r[0] + 2, max(r[1] + 2, 2)), f"{conf:.2f}",
+                fill=YOLO_FARGE, font=_conf_font())
 
 
 def _dok_nr(navn):
@@ -89,26 +106,29 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
                 for boks in med_kilde:
                     x0, y0, x1, y1 = boks[:4]
                     kilde = boks[4] if len(boks) > 4 else "paddle"
+                    conf = boks[5] if len(boks) > 5 else None
                     r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+                    if kilde not in ("paddle", "yolo", "begge"):
+                        # prod-CSV / ukjent verdi: vi vet ikke hvem som fant boksen
+                        tegner.rectangle(r, outline=UKJENT_FARGE, width=3)
+                        continue
                     if kilde in ("paddle", "begge"):
                         tegner.rectangle(r, outline=PADDLE_FARGE, width=3)
                     if kilde in ("yolo", "begge"):
                         # "begge": roed indre ramme innenfor den blaa
                         indre = [r[0] + 4, r[1] + 4, r[2] - 4, r[3] - 4] if kilde == "begge" else r
                         tegner.rectangle(indre, outline=YOLO_FARGE, width=3)
-            elif yolo_bokser and (navn, si) in yolo_bokser:
-                # bakoverkompatibel modus: kun yolo-rammer, som foer
-                _, _, yolo_f = yolo_bokser[(navn, si)]
+                        _tegn_conf(tegner, indre, conf)
+
+            # 2b) YOLO kjort live (--yolo): egne roede rammer med conf, i tillegg
+            if yolo_bokser and (navn, si) in yolo_bokser:
+                yw, yh, yolo_f = yolo_bokser[(navn, si)]
+                ysx, ysy = bilde.width / yw, bilde.height / yh
                 for boks in yolo_f:
                     x0, y0, x1, y1 = boks[:4]
-                    conf = boks[4] if len(boks) > 4 else None
-                    r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
+                    r = [x0 * ysx, y0 * ysy, x1 * ysx, y1 * ysy]
                     tegner.rectangle(r, outline=YOLO_FARGE, width=3)
-                    if conf is not None:
-                        font = ImageFont.load_default(size=28)
-                        ty = max(r[1] + 2, 2)   # inni boksen øverst
-                        tegner.text((r[0] + 2, ty), f"{conf:.2f}",
-                                    fill=YOLO_FARGE, font=font)
+                    _tegn_conf(tegner, r, boks[4] if len(boks) > 4 else None)
 
             # 3) fasit oeverst
             if ground_truth:

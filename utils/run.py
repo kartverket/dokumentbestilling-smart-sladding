@@ -99,6 +99,8 @@ def main():
     p.add_argument("--sladd-mappe", default=SLADD_MAPPE, help="hvor sladdede PDF-er lagres")
     p.add_argument("--terskel", type=float, default=TERSKEL, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default=Y_ORIGIN, help="CSV y-origo")
+    p.add_argument("--elektronisk-tinglyst", action="store_true",
+                   help="behandle som elektronisk tinglyst: uten YOLO, med bredde-filter")
     p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
     p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
     p.add_argument("--yolo-vekter", default=None,
@@ -135,7 +137,8 @@ def main():
                 t0 = time.perf_counter()
                 pdf_bytes = f.read()
                 print(f"  lest fil: {time.perf_counter()-t0:.2f}s")
-                resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn)  # akkurat som POST-endepunktet
+                resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
+                                                  elektronisk_tinglyst=args.elektronisk_tinglyst)  # akkurat som POST-endepunktet
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()

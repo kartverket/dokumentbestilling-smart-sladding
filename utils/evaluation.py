@@ -95,6 +95,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
             truffet = best_dek >= terskel
             if kilde_liste:
                 kilde = kilde_liste[best_pi] if (0 <= best_pi < len(kilde_liste)) else ""
+                kilde = kilde or "ukjent"   # prod-CSV har ingen kilde-kolonne
                 conf  = conf_liste[best_pi]  if (0 <= best_pi < len(conf_liste)) else None
             else:
                 kilde = "yolo" if (best_pi >= 0 and raw[best_pi] in yolo_coords) else "paddle"

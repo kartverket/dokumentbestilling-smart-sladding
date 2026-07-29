@@ -17,3 +17,4 @@ PADDLE_FARGE    = (30, 80, 200)    # blå outline = Paddle-treff
 YOLO_FARGE      = (200, 0, 0)      # rød outline = YOLO-treff
 OVERSLADD_FARGE = (255, 140, 0)    # oransje outline = over-sladding
 FASIT_FARGE     = (30, 160, 30)    # grønt = ground_truth
+UKJENT_FARGE    = (110, 110, 110)  # grå outline = kilde ukjent (prod-CSV)
