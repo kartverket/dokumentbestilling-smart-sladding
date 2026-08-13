@@ -37,6 +37,10 @@ BATCH ?= 4
 # Can either be cpu or cuda (if you have a GPU)
 DEVICE ?= cuda
 PATIENCE ?= 20
+# Name for the training run (output in runs/detect/<NAME>/)
+NAME ?=
+# Set RESUME=1 to resume from last.pt of a previous run
+RESUME ?=
 
 PYTHON ?= python
 YOLO := $(shell dirname $(shell which $(PYTHON)))/yolo
@@ -93,7 +97,9 @@ train: split $(DATASET)/data.yaml
 		imgsz=$(IMGSZ) \
 		batch=$(BATCH) \
 		device=$(DEVICE) \
-		patience=$(PATIENCE)
+		patience=$(PATIENCE) \
+		$(if $(NAME),name=$(NAME)) \
+		$(if $(RESUME),resume=True)
 
 $(DATASET)/data.yaml: $(DATASET)/.split
 	@echo "path: $(abspath $(DATASET))" > $@
