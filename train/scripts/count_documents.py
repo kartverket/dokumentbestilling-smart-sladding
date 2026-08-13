@@ -138,4 +138,3 @@ if __name__ == "__main__":
     count(args.metadata, args.labels or None, args.strategy,
           args.doc_type or None, args.year_from, args.year_to,
           list_files=args.list_files, output_ids=args.output_ids)
-          list_files=args.list_files)
