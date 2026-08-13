@@ -193,6 +193,14 @@ def main():
         if hoppet_over:
             print(f"--fortsett: hopper over {hoppet_over} allerede prosesserte, {len(filer)} gjenstår")
     elif args.csv and not args.fortsett:
+        if os.path.isfile(args.csv_ut) and os.path.getsize(args.csv_ut) > 0 and sys.stdin.isatty():
+            n_eksisterende = len(_les_ferdige_fra_csv(args.csv_ut))
+            if n_eksisterende:
+                svar = input(f"OBS: {args.csv_ut} inneholder {n_eksisterende} dokumenter. "
+                             f"Overskrive? (j/n, eller bruk --fortsett): ")
+                if svar.strip().lower() not in ("j", "ja", "y", "yes"):
+                    print("Avbrutt. Bruk --fortsett for å fortsette der du slapp.")
+                    return
         initialiser_csv(args.csv_ut)
         print(f"Starter kontinuerlig skriving til {args.csv_ut}")
 
