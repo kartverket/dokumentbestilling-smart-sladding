@@ -149,6 +149,8 @@ def main():
                    help="path til YOLO-vektfil (best.pt); default er weights/weights/best.pt i app-mappen")
     p.add_argument("--fortsett", action="store_true",
                    help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
+    p.add_argument("--overskriv", action="store_true",
+                   help="overskriv eksisterende CSV uten å spørre")
     args = p.parse_args()
 
     # ── Tidlig validering av inputfiler ─────────────────────────
@@ -193,14 +195,12 @@ def main():
         if hoppet_over:
             print(f"--fortsett: hopper over {hoppet_over} allerede prosesserte, {len(filer)} gjenstår")
     elif args.csv and not args.fortsett:
-        if os.path.isfile(args.csv_ut) and os.path.getsize(args.csv_ut) > 0 and sys.stdin.isatty():
+        if os.path.isfile(args.csv_ut) and os.path.getsize(args.csv_ut) > 0 and not args.overskriv:
             n_eksisterende = len(_les_ferdige_fra_csv(args.csv_ut))
             if n_eksisterende:
-                svar = input(f"OBS: {args.csv_ut} inneholder {n_eksisterende} dokumenter. "
-                             f"Overskrive? (j/n, eller bruk --fortsett): ")
-                if svar.strip().lower() not in ("j", "ja", "y", "yes"):
-                    print("Avbrutt. Bruk --fortsett for å fortsette der du slapp.")
-                    return
+                print(f"FEIL: {args.csv_ut} inneholder allerede {n_eksisterende} dokumenter.")
+                print(f"      Bruk --fortsett for å fortsette, eller --overskriv for å starte på nytt.")
+                return
         initialiser_csv(args.csv_ut)
         print(f"Starter kontinuerlig skriving til {args.csv_ut}")
 
