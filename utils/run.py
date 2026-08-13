@@ -10,9 +10,6 @@ from contextlib import redirect_stdout
 # Demp irrelevante advarsler (PaddlePaddle ccache etc.)
 warnings.filterwarnings("ignore", message=".*ccache.*")
 os.environ["GLOG_minloglevel"] = "2"    # demp PaddlePaddle C++ logging
-_devnull = open(os.devnull, "w")
-_old_stderr = sys.stderr
-sys.stderr = _devnull                    # demp "which: no ccache" fra PaddlePaddle
 
 import fitz
 
@@ -30,10 +27,6 @@ from yolo_fnr import sett_vekter
 from load_pdf import PDF_DPI
 import traceback
 from save_result import lagre_resultat
-
-# Gjenopprett stderr etter import
-sys.stderr = _old_stderr
-_devnull.close()
 
 import time
 import csv as csv_modul
