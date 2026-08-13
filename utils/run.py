@@ -2,8 +2,12 @@ import argparse
 import io
 import os
 import sys
+import warnings
 from collections import defaultdict
 from contextlib import redirect_stdout
+
+# Demp irrelevante advarsler (PaddlePaddle ccache etc.)
+warnings.filterwarnings("ignore", message=".*ccache.*")
 
 import fitz
 
@@ -23,6 +27,7 @@ import traceback
 from save_result import lagre_resultat
 
 import time
+import csv as csv_modul
 
 from utils_config import (
     MAPPE, ANTALL, FASIT_CSV, CSV_UT, OCR_LOGG_FIL,
@@ -80,12 +85,36 @@ def _skriv_ocr_logg(ocr_linjer, sti):
     return n_sider
 
 
+def _les_ferdige_fra_csv(csv_sti):
+    """Les allerede prosesserte filnavn fra en eksisterende CSV (for --fortsett)."""
+    ferdige = set()
+    if os.path.isfile(csv_sti) and os.path.getsize(csv_sti) > 0:
+        with open(csv_sti, newline="", encoding="utf-8") as f:
+            for rad in csv_modul.DictReader(f):
+                ferdige.add(rad["navn"])
+    return ferdige
+
+
+def _les_filer_fra_fil(sti):
+    """Les en liste med filnavn/IDer fra en tekstfil (én per linje)."""
+    with open(sti, encoding="utf-8") as f:
+        return [linje.strip() for linje in f if linje.strip()]
+
+
+def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser_dok, sladd_bokser_dok):
+    """Tegn PNG for ett dokument umiddelbart etter inferens."""
+    tegn_og_lagre(sladd_bokser_dok, fasit, mappe, png_mappe,
+                  y_origin=y_origin, skriv_logg=True, rydd=False, kilder=csv_bokser_dok)
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Kjor modellen lokalt som om filene var POST-er: "
                     "bytes -> run_model_on_pdf_bytes. Flagg legger til CSV/PNG/fasit/sladding.")
     p.add_argument("--mappe", default=MAPPE, help="mappe med PDF-er (spiller rollen som POST-body)")
     p.add_argument("--velg", nargs="*", default=[], help="spesifikke filer (filnavn/delstreng)")
+    p.add_argument("--velg-fra-fil", default=None,
+                   help="les fil-IDer fra en tekstfil (én per linje), brukes som --velg")
     p.add_argument("--antall", default=ANTALL, help="antall filer naar --velg er tom (tall, eller 'alle')")
     p.add_argument("--csv", action="store_true", help="skriv alle funne bokser til CSV")
     p.add_argument("--png", action="store_true", help="tegn funne + fasit-bokser til PNG")
@@ -109,41 +138,81 @@ def main():
     p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
     p.add_argument("--yolo-vekter", default=None,
                    help="path til YOLO-vektfil (best.pt); default er weights/weights/best.pt i app-mappen")
+    p.add_argument("--fortsett", action="store_true",
+                   help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
     args = p.parse_args()
+
+    # ── Tidlig validering av inputfiler ─────────────────────────
+    if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
+        print(f"FEIL: --velg-fra-fil ikke funnet: {args.velg_fra_fil}")
+        return
+
+    if (args.fasit or args.kun_feil) and not os.path.isfile(args.fasit_csv):
+        print(f"FEIL: --fasit-csv ikke funnet: {args.fasit_csv}")
+        print(f"      Spesifiser riktig sti med --fasit-csv /sti/til/labels.csv")
+        return
+
+    if args.yolo_vekter and not os.path.isfile(args.yolo_vekter):
+        print(f"FEIL: --yolo-vekter ikke funnet: {args.yolo_vekter}")
+        return
+
+    if not os.path.isdir(args.mappe):
+        print(f"FEIL: --mappe ikke funnet: {args.mappe}")
+        return
 
     sett_vekter(args.yolo_vekter)
 
-    filer = velg_filer(args.mappe, args.velg, args.antall)
+    # Bygg fillisten
+    velg = args.velg
+    if args.velg_fra_fil:
+        velg = _les_filer_fra_fil(args.velg_fra_fil)
+        print(f"Leste {len(velg)} IDer fra {args.velg_fra_fil}")
 
-    total_tid = 0
+    filer = velg_filer(args.mappe, velg, args.antall)
 
     if not filer:
         print("Ingen filer aa behandle - sjekk --mappe / --velg / --antall.")
         return
 
-    vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd or args.kun_feil
-
-    if args.csv:
+    # Resume: hopp over allerede prosesserte filer
+    hoppet_over = 0
+    if args.fortsett and args.csv and os.path.isfile(args.csv_ut):
+        ferdige = _les_ferdige_fra_csv(args.csv_ut)
+        opprinnelig = len(filer)
+        filer = [f for f in filer if os.path.basename(f) not in ferdige]
+        hoppet_over = opprinnelig - len(filer)
+        if hoppet_over:
+            print(f"--fortsett: hopper over {hoppet_over} allerede prosesserte, {len(filer)} gjenstår")
+    elif args.csv and not args.fortsett:
         initialiser_csv(args.csv_ut)
         print(f"Starter kontinuerlig skriving til {args.csv_ut}")
+
+    total_tid = 0
+    totalt_antall = len(filer)
+
+    vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd or args.kun_feil
+
+    # Forhåndslast fasit for fortløpende PNG
+    fasit = None
+    if args.png or args.kun_feil:
+        fasit = les_fasit(args.fasit_csv) if os.path.isfile(args.fasit_csv) else None
+        os.makedirs(args.png_mappe, exist_ok=True)
 
     sladd_bokser, yolo_bokser, csv_bokser, feilet = {}, {}, {}, []
     tider = {}
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
     advart_om_linjer = False
-    for fil in filer:
+    for i, fil in enumerate(filer, start=1):
         start = time.perf_counter()
 
         navn = os.path.basename(fil)
-        print(f"\n→ Starter: {navn}")
+        print(f"\n[{i}/{totalt_antall}] → {navn}")
         try:
             with open(fil, "rb") as f:
-                t0 = time.perf_counter()
                 pdf_bytes = f.read()
-                print(f"  lest fil: {time.perf_counter()-t0:.2f}s")
                 resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
                                                   elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                                  kun_yolo=args.kun_yolo)  # akkurat som POST-endepunktet
+                                                  kun_yolo=args.kun_yolo)
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()
@@ -164,11 +233,13 @@ def main():
 
         if not vil_ha_artefakt:
             n = sum(len(s["bokser"]) for s in sider)
-            print(f"{navn}: {n} boks(er) over {len(sider)} side(r)")
-            print(f"    Tid brukt: {tid_brukt:.6f} sekunder")
-
+            snitt = total_tid / i
+            gjenstaar = snitt * (totalt_antall - i)
+            print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
             continue
 
+        sladd_dok = {}
+        csv_dok = {}
         for side in sider:
             bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
             med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"), b.get("conf"))
@@ -177,20 +248,34 @@ def main():
                           if b.get("kilde") in ("yolo", "begge")]
             sladd_bokser[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], bokser)
+            sladd_dok[(navn, side["side"])] = (
+                side["bilde_bredde"], side["bilde_hoyde"], bokser)
             csv_bokser[(navn, side["side"])] = (
+                side["bilde_bredde"], side["bilde_hoyde"], med_kilde)
+            csv_dok[(navn, side["side"])] = (
                 side["bilde_bredde"], side["bilde_hoyde"], med_kilde)
             if yolo_bare:
                 yolo_bokser[(navn, side["side"])] = (
                     side["bilde_bredde"], side["bilde_hoyde"], yolo_bare)
 
+        # Fortløpende CSV
         if args.csv:
-            dok_bokser = {k: v for k, v in csv_bokser.items() if k[0] == navn}
-            append_csv(dok_bokser, args.csv_ut)
+            append_csv(csv_dok, args.csv_ut)
 
-    print(f"\nTotal tid brukt: {total_tid:.6f} sekunder")
+        # Fortløpende PNG (ikke ved --kun-feil, de trenger eval)
+        if args.png and not args.kun_feil:
+            _tegn_fortlopende(navn, sider, args.mappe, args.png_mappe,
+                              fasit, args.y_origin, csv_dok, sladd_dok)
+
+        n = sum(len(s["bokser"]) for s in sider)
+        snitt = total_tid / i
+        gjenstaar = snitt * (totalt_antall - i)
+        print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
+
+    print(f"\nFerdig! {totalt_antall} dokumenter på {total_tid:.1f}s ({total_tid/max(totalt_antall,1):.2f}s/dok)")
 
     if feilet:
-        print("Feilet:", feilet[:5])
+        print(f"Feilet ({len(feilet)}):", feilet[:5])
 
     if args.ocr_logg:
         n = _skriv_ocr_logg(ocr_linjer, args.ocr_logg_fil)
@@ -199,14 +284,14 @@ def main():
     if not vil_ha_artefakt and not args.kun_feil:
         return
 
-    fasit = les_fasit(args.fasit_csv) if (args.png or args.fasit or args.kun_feil) else None
+    fasit_eval = les_fasit(args.fasit_csv) if (args.fasit or args.kun_feil) else None
 
     # Kjør evaluering (trenger den alltid for --kun-feil, og for --fasit)
     eval_resultat = None
     if args.fasit or args.kun_feil:
         buf = io.StringIO()
         with redirect_stdout(buf):
-            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
+            eval_resultat = mal_overlapp(sladd_bokser, fasit_eval, args.mappe, terskel=args.terskel,
                                          y_origin=args.y_origin, kilder=csv_bokser)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
@@ -220,37 +305,30 @@ def main():
             )
             lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=header + logg)
 
-    # PNG: tegn enten alle sider, eller bare feil-sider
-    # Beregn bom_indekser fra eval-resultat for korrekt fargekoding
-    bom_indekser = None
-    oversladd = None
-    if eval_resultat:
-        from visualization import _dok_nr as _vnr
-        bom_indekser = {
-            (_vnr(d["fil"]), d["side"], d["fasit_nr"] - 1)
-            for d in eval_resultat.get("detaljer", [])
-            if d["resultat"] == "MANGLER"
-        }
-        oversladd = eval_resultat.get("oversladd_bokser", None)
+    # --kun-feil: tegn bare sider med feil (etter eval)
+    if args.kun_feil and eval_resultat:
+        bom_indekser = None
+        oversladd = None
+        if eval_resultat:
+            from visualization import _dok_nr as _vnr
+            bom_indekser = {
+                (_vnr(d["fil"]), d["side"], d["fasit_nr"] - 1)
+                for d in eval_resultat.get("detaljer", [])
+                if d["resultat"] == "MANGLER"
+            }
+            oversladd = eval_resultat.get("oversladd_bokser", None)
 
-    if args.png or args.kun_feil:
-        if args.kun_feil and eval_resultat:
-            # Filtrer til bare sider med bom eller over-sladding
-            feil_sider = set()
-            for bf in eval_resultat.get("bom_filer", []):
-                feil_sider.add((bf["fil"], bf["side"]))
-            for of in eval_resultat.get("overflod_filer", []):
-                feil_sider.add((of["fil"], of["side"]))
-            sladd_filtrert = {k: v for k, v in sladd_bokser.items() if k in feil_sider}
-            csv_filtrert = {k: v for k, v in csv_bokser.items() if k in feil_sider}
-            print(f"\n--kun-feil: tegner {len(sladd_filtrert)} side(r) med feil")
-            tegn_og_lagre(sladd_filtrert, fasit, args.mappe, args.png_mappe,
-                          y_origin=args.y_origin, kilder=csv_filtrert,
-                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
-        else:
-            tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe,
-                          y_origin=args.y_origin, kilder=csv_bokser,
-                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+        feil_sider = set()
+        for bf in eval_resultat.get("bom_filer", []):
+            feil_sider.add((bf["fil"], bf["side"]))
+        for of in eval_resultat.get("overflod_filer", []):
+            feil_sider.add((of["fil"], of["side"]))
+        sladd_filtrert = {k: v for k, v in sladd_bokser.items() if k in feil_sider}
+        csv_filtrert = {k: v for k, v in csv_bokser.items() if k in feil_sider}
+        print(f"\n--kun-feil: tegner {len(sladd_filtrert)} side(r) med feil")
+        tegn_og_lagre(sladd_filtrert, fasit_eval, args.mappe, args.png_mappe,
+                      y_origin=args.y_origin, kilder=csv_filtrert,
+                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)

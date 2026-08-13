@@ -114,9 +114,10 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
         except Exception as e:
             print(f"   {navn}: kunne ikke aapnes ({e!r})")
             continue
+        n_sider_tegnet = 0
+        n_med_funn = 0
         for si in per_fil[navn]:
             if not 1 <= si <= len(d):
-                print(f"   {navn} side {si}: finnes ikke i PDF-en ({len(d)} sider)")
                 continue
             bilde = _render_side(d[si - 1])
             base = bilde.convert("RGBA")
@@ -170,7 +171,10 @@ def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
 
             ut = os.path.join(ut_mappe, f"{os.path.splitext(navn)[0]}_side{si}.png")
             bilde.save(ut)
-            if skriv_logg:
-                n_fa = len(ground_truth.get((nr, si), [])) if ground_truth else 0
-                print(f"   {navn} side {si}: {len(funnet)} funnet, {n_fa} ground_truth -> {ut}")
+            n_sider_tegnet += 1
+            if funnet:
+                n_med_funn += 1
+
+        if skriv_logg:
+            print(f"  PNG: {navn} — {n_sider_tegnet} sider, {n_med_funn} med deteksjoner")
         d.close()

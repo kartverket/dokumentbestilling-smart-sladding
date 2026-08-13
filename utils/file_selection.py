@@ -9,12 +9,13 @@ def velg_filer(mappe, velg_dokumenter, antall):
     if velg_dokumenter:
         valg = [str(v).strip() for v in velg_dokumenter if str(v).strip()]
         filer = [f for f in alle if any(v in os.path.basename(f) for v in valg)]
-        print(f"Modus: SPESIFIKKE — {len(filer)} fil(er) matchet {len(valg)} søk:")
-        for f in filer:
-            print("   ", os.path.basename(f))
+        print(f"Valgt: {len(filer)} fil(er) matchet {len(valg)} søk")
+        if len(filer) <= 5:
+            for f in filer:
+                print("   ", os.path.basename(f))
         mangler = [v for v in valg if not any(v in os.path.basename(f) for f in alle)]
         if mangler:
-            print("!! Fant ingen treff for:", mangler)
+            print(f"!! Fant ingen treff for {len(mangler)} av søkene:", mangler[:5])
     elif antall in (None, 0) or str(antall).strip().lower() in ("alle", "alt"):
         filer = alle
         print(f"Modus: ALLE — kjører alle {len(filer)} filene.")
