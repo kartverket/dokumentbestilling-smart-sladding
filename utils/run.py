@@ -4,10 +4,15 @@ import os
 import sys
 import warnings
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 
 # Demp irrelevante advarsler (PaddlePaddle ccache etc.)
 warnings.filterwarnings("ignore", message=".*ccache.*")
+os.environ["GLOG_minloglevel"] = "2"    # demp PaddlePaddle C++ logging
+_devnull = open(os.devnull, "w")
+_old_stderr = sys.stderr
+sys.stderr = _devnull                    # demp "which: no ccache" fra PaddlePaddle
 
 import fitz
 
@@ -25,6 +30,10 @@ from yolo_fnr import sett_vekter
 from load_pdf import PDF_DPI
 import traceback
 from save_result import lagre_resultat
+
+# Gjenopprett stderr etter import
+sys.stderr = _old_stderr
+_devnull.close()
 
 import time
 import csv as csv_modul
@@ -202,17 +211,35 @@ def main():
     tider = {}
     ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
     advart_om_linjer = False
+
+    # Bakgrunnstråder for PNG-generering (CPU) mens GPU jobber videre
+    png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.kun_feil) else None
+    png_futures = []
+
+    # Pre-les neste fil mens GPU jobber
+    neste_bytes = None
+    if filer:
+        with open(filer[0], "rb") as f:
+            neste_bytes = f.read()
+
     for i, fil in enumerate(filer, start=1):
         start = time.perf_counter()
 
         navn = os.path.basename(fil)
         print(f"\n[{i}/{totalt_antall}] → {navn}")
+
+        pdf_bytes = neste_bytes
+
+        # Pre-les neste fil i parallell med inferens
+        if i < totalt_antall:
+            # Les neste fil nå (rask I/O, ferdig før GPU er done)
+            with open(filer[i], "rb") as f:
+                neste_bytes = f.read()
+
         try:
-            with open(fil, "rb") as f:
-                pdf_bytes = f.read()
-                resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
-                                                  elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                                  kun_yolo=args.kun_yolo)
+            resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
+                                              elektronisk_tinglyst=args.elektronisk_tinglyst,
+                                              kun_yolo=args.kun_yolo)
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()
@@ -262,15 +289,27 @@ def main():
         if args.csv:
             append_csv(csv_dok, args.csv_ut)
 
-        # Fortløpende PNG (ikke ved --kun-feil, de trenger eval)
-        if args.png and not args.kun_feil:
-            _tegn_fortlopende(navn, sider, args.mappe, args.png_mappe,
-                              fasit, args.y_origin, csv_dok, sladd_dok)
+        # Fortløpende PNG i bakgrunnen (ikke ved --kun-feil, de trenger eval)
+        if png_executor:
+            fut = png_executor.submit(
+                _tegn_fortlopende, navn, sider, args.mappe, args.png_mappe,
+                fasit, args.y_origin, csv_dok, sladd_dok)
+            png_futures.append(fut)
 
         n = sum(len(s["bokser"]) for s in sider)
         snitt = total_tid / i
         gjenstaar = snitt * (totalt_antall - i)
         print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
+
+    # Vent på at alle bakgrunns-PNG-er er ferdige
+    if png_futures:
+        print(f"\nVenter på {len(png_futures)} PNG-jobber i bakgrunnen...")
+        for fut in png_futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"  PNG-feil: {e!r}")
+        png_executor.shutdown(wait=False)
 
     print(f"\nFerdig! {totalt_antall} dokumenter på {total_tid:.1f}s ({total_tid/max(totalt_antall,1):.2f}s/dok)")
 
