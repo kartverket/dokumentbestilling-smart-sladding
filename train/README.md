@@ -121,6 +121,29 @@ EPOCHS=50 \
 PATIENCE=10
 ```
 
+### Forhåndssjekk: Tell dokumenter (`make count`)
+
+Før du starter en treningskjøring kan du sjekke hvor mange dokumenter og annotasjoner som matcher filteret ditt. Dette krever ikke PDF-ene — kun metadata- og labels-CSV.
+
+```bash
+# Tell HJG-dokumenter fra 1990–2006
+make count \
+  METADATA=/sti/til/metadata.csv \
+  CSV=/sti/til/labels.csv \
+  STRATEGY=year_and_doc_type \
+  DOC_TYPE=HJ_HJG \
+  YEAR_FROM=1990 \
+  YEAR_TO=2006
+
+# Tell alle Pantedokument-dokumenter
+make count \
+  METADATA=/sti/til/metadata.csv \
+  STRATEGY=doc_type \
+  DOC_TYPE=OB_PAN
+```
+
+Outputen viser antall matchende dokumenter, fordeling per år, og (om `CSV` er satt) hvor mange av dem som har annotasjoner.
+
 ## Make-targets
 
 | Target     | Beskrivelse                                        |
@@ -132,6 +155,7 @@ PATIENCE=10
 | `verify`   | Tegner labels på bilder for visuell sjekk           |
 | `coverage` | Finner sider uten labels                            |
 | `smoke`    | 3-epoch smoketest for å sjekke at alt fungerer       |
+| `count`    | Teller matchende dokumenter før trening               |
 | `help`     | Viser tilgjengelige targets og variabler             |
 
 ## Konfigurerbare variabler

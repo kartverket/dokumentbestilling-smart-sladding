@@ -43,7 +43,7 @@ YOLO := $(shell dirname $(shell which $(PYTHON)))/yolo
 SCRIPTS := scripts
 
 .DEFAULT_GOAL := all
-.PHONY: all split train convert verify coverage smoke clean help
+.PHONY: all split train convert verify coverage smoke count clean help
 
 all: split train
 
@@ -121,6 +121,17 @@ smoke: split $(DATASET)/data.yaml
 	$(YOLO) detect train data=$(DATASET)/data.yaml model=$(MODEL) \
 		epochs=3 imgsz=640 batch=2 device=$(DEVICE)
 
+# ---- Count matching documents (pre-check) --------------------
+count:
+	@test -f "$(METADATA)" || { echo "ERROR: METADATA not set or not found: $(METADATA)"; exit 1; }
+	$(PYTHON) $(SCRIPTS)/count_documents.py \
+		--metadata $(METADATA) \
+		$(if $(CSV),--labels $(CSV)) \
+		--strategy $(STRATEGY) \
+		$(if $(DOC_TYPE),--doc-type $(DOC_TYPE)) \
+		$(if $(YEAR_FROM),--year-from $(YEAR_FROM)) \
+		$(if $(YEAR_TO),--year-to $(YEAR_TO))
+
 
 help:
 	@echo "make               split + train"
@@ -129,6 +140,7 @@ help:
 	@echo "make verify        draw labels on images for visual check"
 	@echo "make coverage      find pages without labels"
 	@echo "make smoke         3-epoch smoke test on $(MODEL)"
+	@echo "make count         count matching documents before training"
 	@echo "make clean         remove $(DATASET)/"
 	@echo ""
 	@echo "Vars: PDFS CSV DATASET TRAIN_RATIO VAL_RATIO STRATEGY METADATA PER_YEAR DOC_TYPE YEAR_FROM YEAR_TO MODEL EPOCHS IMGSZ BATCH DEVICE PATIENCE"

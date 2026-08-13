@@ -215,11 +215,20 @@ def split_yearly(dataset_dir: str, metadata_csv: str, per_year: int,
     _split_per_group(dataset, groups, per_year, train_ratio, val_ratio, seed, log_header)
 
 
+def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
+    """Check if any of the comma-separated rettsstiftelsestyper matches doc_type."""
+    return any(
+        part.strip().split(" ", 1)[0] == doc_type
+        for part in str(rettsstiftelsestyper).split(",")
+    )
+
+
 def split_doc_type(dataset_dir: str, metadata_csv: str, doc_type: str,
                    train_ratio: float, val_ratio: float, seed: int):
     dataset = Path(dataset_dir)
     meta = _load_metadata(metadata_csv, ["fil_revisjon_id", "rettsstiftelsestyper"])
-    valid_ids = set(meta.loc[meta["rettsstiftelsestyper"].str.split(" ", n=1).str[0] == doc_type, "fil_revisjon_id"].astype(str))
+    mask = meta["rettsstiftelsestyper"].apply(lambda s: _has_doc_type(s, doc_type))
+    valid_ids = set(meta.loc[mask, "fil_revisjon_id"].astype(str))
 
     imgs = sorted((dataset / "images_all").glob("*.png"))
     selected = [img for img in imgs if img.stem.rsplit("_p", 1)[0] in valid_ids]
@@ -241,7 +250,8 @@ def split_year_and_doc_type(dataset_dir: str, metadata_csv: str, doc_type: str,
                             train_ratio: float, val_ratio: float, seed: int):
     dataset = Path(dataset_dir)
     meta = _load_metadata(metadata_csv, ["fil_revisjon_id", "dokument_aar", "rettsstiftelsestyper"])
-    filtered = meta[meta["rettsstiftelsestyper"].str.split(" ", n=1).str[0] == doc_type]
+    mask = meta["rettsstiftelsestyper"].apply(lambda s: _has_doc_type(s, doc_type))
+    filtered = meta[mask]
     id_to_year = _year_map(filtered)
 
     # Keep only IDs within the year range
