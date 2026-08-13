@@ -38,27 +38,37 @@ def _read_csv(path: str) -> list[dict]:
 
 def count(metadata_csv: str, labels_csv: str | None, strategy: str,
           doc_type: str | None, year_from: int | None, year_to: int | None,
-          list_files: bool = False):
+          list_files: bool = False, output_ids: bool = False):
     rows = _read_csv(metadata_csv)
-    print(f"Metadata: {len(rows)} documents total")
 
     # ── Filter by doc type ──────────────────────────────────────
     if strategy in ("doc_type", "year_and_doc_type") and doc_type:
         rows = [r for r in rows if _has_doc_type(r.get("rettsstiftelsestyper", ""), doc_type)]
-        print(f"  Filter doc_type={doc_type}: {len(rows)} documents match")
 
     # ── Filter by year range ────────────────────────────────────
     if strategy == "year_and_doc_type" and year_from is not None and year_to is not None:
         rows = [r for r in rows
                 if (y := _safe_int(r.get("dokument_aar"))) is not None
                 and year_from <= y <= year_to]
-        print(f"  Filter years {year_from}\u2013{year_to}: {len(rows)} documents match")
     elif strategy == "yearly":
         rows = [r for r in rows if _safe_int(r.get("dokument_aar")) is not None]
-        print(f"  Yearly: {len(rows)} documents with valid year")
 
-    # ── Summary ─────────────────────────────────────────────────
     matched_ids = {str(r["fil_revisjon_id"]) for r in rows}
+
+    # ── If --output-ids: just print IDs and exit ────────────────
+    if output_ids:
+        for doc_id in sorted(matched_ids):
+            print(doc_id)
+        return
+
+    # ── Normal summary output ───────────────────────────────────
+    print(f"Metadata: {len(_read_csv(metadata_csv))} documents total")
+    if strategy in ("doc_type", "year_and_doc_type") and doc_type:
+        print(f"  Filter doc_type={doc_type}: {len(rows)} documents match")
+    if strategy == "year_and_doc_type" and year_from is not None and year_to is not None:
+        print(f"  Filter years {year_from}\u2013{year_to}: {len(rows)} documents match")
+    elif strategy == "yearly":
+        print(f"  Yearly: {len(rows)} documents with valid year")
 
     print(f"\n{'='*50}")
     print(f"Matching documents: {len(matched_ids)}")
@@ -114,6 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--year-from", type=int, default=None)
     parser.add_argument("--year-to", type=int, default=None)
     parser.add_argument("--list-files", action="store_true", help="Print PDF filenames per year")
+    parser.add_argument("--output-ids", action="store_true", help="Print only matching fil_revisjon_ids (for piping)")
     args = parser.parse_args()
 
     if args.strategy in ("doc_type", "year_and_doc_type") and not args.doc_type:
@@ -126,4 +137,5 @@ if __name__ == "__main__":
 
     count(args.metadata, args.labels or None, args.strategy,
           args.doc_type or None, args.year_from, args.year_to,
+          list_files=args.list_files, output_ids=args.output_ids)
           list_files=args.list_files)
