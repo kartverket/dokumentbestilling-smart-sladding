@@ -3,12 +3,16 @@ Count documents matching a given strategy configuration.
 
 Run before training to verify how many documents and labels
 are available for a given doc type / year range filter.
+
+No external dependencies — uses only the Python standard library.
 """
 
-import argparse
-from pathlib import Path
+from __future__ import annotations
 
-import pandas as pd
+import argparse
+import csv
+from collections import Counter
+from pathlib import Path
 
 
 def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
@@ -19,56 +23,67 @@ def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
     )
 
 
+def _safe_int(value: str) -> int | None:
+    """Try to parse an int, return None on failure."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _read_csv(path: str) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
 def count(metadata_csv: str, labels_csv: str | None, strategy: str,
           doc_type: str | None, year_from: int | None, year_to: int | None):
-    meta = pd.read_csv(metadata_csv)
-    print(f"Metadata: {len(meta)} documents total")
+    rows = _read_csv(metadata_csv)
+    print(f"Metadata: {len(rows)} documents total")
 
     # ── Filter by doc type ──────────────────────────────────────
     if strategy in ("doc_type", "year_and_doc_type") and doc_type:
-        mask = meta["rettsstiftelsestyper"].apply(lambda s: _has_doc_type(s, doc_type))
-        meta = meta[mask]
-        print(f"  Filter doc_type={doc_type}: {len(meta)} documents match")
+        rows = [r for r in rows if _has_doc_type(r.get("rettsstiftelsestyper", ""), doc_type)]
+        print(f"  Filter doc_type={doc_type}: {len(rows)} documents match")
 
     # ── Filter by year range ────────────────────────────────────
     if strategy == "year_and_doc_type" and year_from is not None and year_to is not None:
-        years = pd.to_numeric(meta["dokument_aar"], errors="coerce")
-        meta = meta[(years >= year_from) & (years <= year_to)]
-        print(f"  Filter years {year_from}–{year_to}: {len(meta)} documents match")
+        rows = [r for r in rows
+                if (y := _safe_int(r.get("dokument_aar"))) is not None
+                and year_from <= y <= year_to]
+        print(f"  Filter years {year_from}\u2013{year_to}: {len(rows)} documents match")
     elif strategy == "yearly":
-        years = pd.to_numeric(meta["dokument_aar"], errors="coerce")
-        meta = meta[years.notna()]
-        print(f"  Yearly: {len(meta)} documents with valid year")
+        rows = [r for r in rows if _safe_int(r.get("dokument_aar")) is not None]
+        print(f"  Yearly: {len(rows)} documents with valid year")
 
     # ── Summary ─────────────────────────────────────────────────
-    matched_ids = set(meta["fil_revisjon_id"].astype(str))
+    matched_ids = {str(r["fil_revisjon_id"]) for r in rows}
 
     print(f"\n{'='*50}")
     print(f"Matching documents: {len(matched_ids)}")
 
-    if "dokument_aar" in meta.columns:
-        years = pd.to_numeric(meta["dokument_aar"], errors="coerce").dropna().astype(int)
-        if not years.empty:
-            year_counts = years.value_counts().sort_index()
-            print(f"Year range: {years.min()}–{years.max()}")
-            print(f"\nPer year:")
-            for year, n in year_counts.items():
-                print(f"  {year}: {n} documents")
+    years = [_safe_int(r.get("dokument_aar")) for r in rows]
+    years = [y for y in years if y is not None]
+    if years:
+        year_counts = Counter(years)
+        print(f"Year range: {min(years)}\u2013{max(years)}")
+        print(f"\nPer year:")
+        for year in sorted(year_counts):
+            print(f"  {year}: {year_counts[year]} documents")
 
     # ── Cross-reference with labels if provided ─────────────────
     if labels_csv and Path(labels_csv).exists():
-        labels = pd.read_csv(labels_csv)
-        labels["fil_revisjon_id"] = labels["fil_revisjon_id"].astype(str)
-        matched_labels = labels[labels["fil_revisjon_id"].isin(matched_ids)]
-        docs_with_labels = matched_labels["fil_revisjon_id"].nunique()
+        label_rows = _read_csv(labels_csv)
+        matched_labels = [r for r in label_rows if str(r["fil_revisjon_id"]) in matched_ids]
+        docs_with_labels = {r["fil_revisjon_id"] for r in matched_labels}
         total_boxes = len(matched_labels)
-        total_pages = matched_labels[["fil_revisjon_id", "sidetall"]].drop_duplicates().shape[0]
+        total_pages = len({(r["fil_revisjon_id"], r["sidetall"]) for r in matched_labels})
 
         print(f"\nLabels ({Path(labels_csv).name}):")
-        print(f"  Documents with annotations: {docs_with_labels} of {len(matched_ids)}")
+        print(f"  Documents with annotations: {len(docs_with_labels)} of {len(matched_ids)}")
         print(f"  Annotated pages: {total_pages}")
         print(f"  Total bounding boxes: {total_boxes}")
-        docs_without = matched_ids - set(matched_labels["fil_revisjon_id"])
+        docs_without = matched_ids - {str(d) for d in docs_with_labels}
         if docs_without:
             print(f"  Documents without annotations: {len(docs_without)}")
 
@@ -95,4 +110,3 @@ if __name__ == "__main__":
 
     count(args.metadata, args.labels or None, args.strategy,
           args.doc_type or None, args.year_from, args.year_to)
-
