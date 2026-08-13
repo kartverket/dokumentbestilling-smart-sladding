@@ -77,9 +77,8 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
                 if y is not None:
                     docs_by_year[y].append(str(r["fil_revisjon_id"]))
             for year in sorted(year_counts):
-                print(f"  {year}: {year_counts[year]} documents")
-                for doc_id in sorted(docs_by_year[year]):
-                    print(f"    {doc_id}.pdf")
+                files = ", ".join(f"{d}.pdf" for d in sorted(docs_by_year[year]))
+                print(f"  {year}: {year_counts[year]} documents — {files}")
         else:
             for year in sorted(year_counts):
                 print(f"  {year}: {year_counts[year]} documents")
@@ -100,8 +99,8 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
         if docs_without:
             print(f"  Documents without annotations: {len(docs_without)}")
             if list_files:
-                for doc_id in sorted(docs_without):
-                    print(f"    {doc_id}.pdf")
+                files = ", ".join(f"{d}.pdf" for d in sorted(docs_without))
+                print(f"    {files}")
 
     print(f"{'='*50}")
 
