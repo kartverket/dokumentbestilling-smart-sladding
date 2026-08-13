@@ -18,6 +18,15 @@ def _ta_tid(t, post):
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
 
 
+def _finn_bokser_kun_yolo(bilde_ocr):
+    bokser = []
+    for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
+        yb = (x0, y0, x1, y1)
+        if not er_for_liten(yb):
+            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3)])
+    return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
+
+
 def _finn_bokser_med_kilde(tokens, bilde_ocr, elektronisk_tinglyst=False):
     bokser = [[boks, "paddle", None] for (boks, _mod11) in finn_bokser_fra_tokens(tokens)]
 
@@ -88,22 +97,31 @@ def _til_flat(sider, pdf_bytes):
     return ut
 
 
-def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None, elektronisk_tinglyst=False):
+def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
+                           elektronisk_tinglyst=False, kun_yolo=False):
     t = {}
 
     with _ta_tid(t, "render"):
         bilder = list(les_sider_fra_bytes(pdf_bytes))
 
-    with _ta_tid(t, "ocr"):
+    with _ta_tid(t, "orientering"):
         rotasjoner = [finn_rotasjon(b) for b in bilder]
         bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
-        tokens_per_side = les_tokens_batched(bilder_ocr)
+
+    if not kun_yolo:
+        with _ta_tid(t, "ocr"):
+            tokens_per_side = les_tokens_batched(bilder_ocr)
+    else:
+        tokens_per_side = [[] for _ in bilder_ocr]
 
     sider = []
     for si, (bilde, bilde_ocr, tokens, k) in enumerate(
             zip(bilder, bilder_ocr, tokens_per_side, rotasjoner), start=1):
         with _ta_tid(t, "yolo+match"):
-            bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde, elektronisk_tinglyst=elektronisk_tinglyst)
+            if kun_yolo:
+                bokser_med_kilde = _finn_bokser_kun_yolo(bilde_ocr)
+            else:
+                bokser_med_kilde = _finn_bokser_med_kilde(tokens, bilde, elektronisk_tinglyst=elektronisk_tinglyst)
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer))
 
@@ -114,7 +132,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
 
 
 def _skriv_tid(t, n_sider, navn=None):
-    poster = ["render", "ocr", "yolo+match", "etterbehandling"]
+    poster = ["render", "orientering", "ocr", "yolo+match", "etterbehandling"]
     total = sum(t.get(p, 0.0) for p in poster)
 
     print(f"Timing [{navn}]:" if navn else "Timing:")

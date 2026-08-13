@@ -238,6 +238,7 @@ def main():
                       oversladd_bokser=ov_bokser)
     else:
         bom_indekser = None
+        oversladd = None
         if args.fasit:
             eval_res = mal_overlapp(sladd_bokser, fasit, args.mappe,
                                     terskel=args.terskel, y_origin=args.y_origin,
@@ -249,13 +250,15 @@ def main():
                 for d in eval_res.get("detaljer", [])
                 if d["resultat"] == "MANGLER"
             }
+            oversladd = eval_res.get("oversladd_bokser", None)
             if args.kun_bom:
                 bom_sider = {(d["fil"], d["side"]) for d in eval_res.get("detaljer", []) if d["resultat"] == "MANGLER"}
                 sladd_bokser = {k: v for k, v in sladd_bokser.items() if k in bom_sider}
                 print(f"Filtrert til {len(bom_sider)} side(r) med bom.")
         tegn_og_lagre(sladd_bokser, fasit, args.mappe, args.png_mappe,
                       y_origin=args.y_origin, yolo_bokser=yolo_bokser,
-                      kilder=sladd_bokser, bom_indekser=bom_indekser)
+                      kilder=sladd_bokser, bom_indekser=bom_indekser,
+                      oversladd_bokser=oversladd)
 
 
 if __name__ == "__main__":

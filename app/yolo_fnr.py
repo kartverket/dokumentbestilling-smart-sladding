@@ -7,7 +7,7 @@ from ultralytics import YOLO
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,MIN_BOKS_AREAL)
 
-YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "weights", "best.pt")
+YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
 
 _modell = None
 _vekter_sti = YOLO_VEKTER

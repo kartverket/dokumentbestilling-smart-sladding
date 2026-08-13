@@ -12,9 +12,12 @@ Y_ORIGIN     = "topp"
 TERSKEL      = 0.15            # andel fasit-areal som kreves for TRUFFET
 
 # --- Farger (visualization.py) ---
-FUNNET_FARGE    = (0, 0, 0)        # svart fyll = faktisk sladding
-PADDLE_FARGE    = (30, 80, 200)    # blå outline = Paddle-treff
-YOLO_FARGE      = (200, 0, 0)      # rød outline = YOLO-treff
-OVERSLADD_FARGE = (255, 140, 0)    # oransje outline = over-sladding
-FASIT_FARGE     = (30, 160, 30)    # grønt = ground_truth
-UKJENT_FARGE    = (110, 110, 110)  # grå outline = kilde ukjent (prod-CSV)
+# Alle farger RGBA med 0.8 opacity (alpha=204). Aldri fyll, kun outline.
+BOM_FARGE              = (220, 30, 30, 204)     # rød = fasit-boks som ble bommet (MANGLER)
+KORREKT_PADDLE_FARGE   = (30, 180, 30, 204)     # grønn = korrekt sladding fra Paddle
+KORREKT_YOLO_FARGE     = (30, 80, 220, 204)     # blå = korrekt sladding fra YOLO
+KORREKT_BEGGE_FARGE    = (0, 180, 180, 204)     # teal = korrekt sladding fra begge
+OVERSLADD_PADDLE_FARGE = (255, 140, 0, 204)     # oransje = over-sladding fra Paddle
+OVERSLADD_YOLO_FARGE   = (255, 180, 0, 204)     # mørk gul/amber = over-sladding fra YOLO
+OVERSLADD_BEGGE_FARGE  = (180, 180, 0, 204)     # mørk gul-grønn = over-sladding fra begge
+UKJENT_FARGE           = (110, 110, 110, 204)   # grå = kilde ukjent (prod-CSV)

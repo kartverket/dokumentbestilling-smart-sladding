@@ -1,0 +1,12 @@
+FARGEKODER
+==========
+Grønn ramme:   ACCEPTED  — ML fant den, saksbehandler godkjente
+Oransje ramme: REJECTED  — ML fant den, saksbehandler avviste (false positive)
+Rød ramme:     MANUELL   — Saksbehandler la til selv (true negative / model bom)
+
+MAPPER
+======
+false_positive/  — Sider med minst én REJECTED-boks (oransje)
+true_negative/   — Sider med minst én manuell boks (rød)
+
+Merk: En side kan ligge i begge mapper hvis den har både FP og TN.
