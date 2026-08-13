@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -37,7 +37,8 @@ def _read_csv(path: str) -> list[dict]:
 
 
 def count(metadata_csv: str, labels_csv: str | None, strategy: str,
-          doc_type: str | None, year_from: int | None, year_to: int | None):
+          doc_type: str | None, year_from: int | None, year_to: int | None,
+          list_files: bool = False):
     rows = _read_csv(metadata_csv)
     print(f"Metadata: {len(rows)} documents total")
 
@@ -68,8 +69,20 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
         year_counts = Counter(years)
         print(f"Year range: {min(years)}\u2013{max(years)}")
         print(f"\nPer year:")
-        for year in sorted(year_counts):
-            print(f"  {year}: {year_counts[year]} documents")
+
+        if list_files:
+            docs_by_year: dict[int, list[str]] = defaultdict(list)
+            for r in rows:
+                y = _safe_int(r.get("dokument_aar"))
+                if y is not None:
+                    docs_by_year[y].append(str(r["fil_revisjon_id"]))
+            for year in sorted(year_counts):
+                print(f"  {year}: {year_counts[year]} documents")
+                for doc_id in sorted(docs_by_year[year]):
+                    print(f"    {doc_id}.pdf")
+        else:
+            for year in sorted(year_counts):
+                print(f"  {year}: {year_counts[year]} documents")
 
     # ── Cross-reference with labels if provided ─────────────────
     if labels_csv and Path(labels_csv).exists():
@@ -86,6 +99,9 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
         docs_without = matched_ids - {str(d) for d in docs_with_labels}
         if docs_without:
             print(f"  Documents without annotations: {len(docs_without)}")
+            if list_files:
+                for doc_id in sorted(docs_without):
+                    print(f"    {doc_id}.pdf")
 
     print(f"{'='*50}")
 
@@ -98,6 +114,7 @@ if __name__ == "__main__":
     parser.add_argument("--doc-type", default="")
     parser.add_argument("--year-from", type=int, default=None)
     parser.add_argument("--year-to", type=int, default=None)
+    parser.add_argument("--list-files", action="store_true", help="Print PDF filenames per year")
     args = parser.parse_args()
 
     if args.strategy in ("doc_type", "year_and_doc_type") and not args.doc_type:
@@ -109,4 +126,5 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     count(args.metadata, args.labels or None, args.strategy,
-          args.doc_type or None, args.year_from, args.year_to)
+          args.doc_type or None, args.year_from, args.year_to,
+          list_files=args.list_files)

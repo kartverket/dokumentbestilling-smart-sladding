@@ -121,6 +121,9 @@ smoke: split $(DATASET)/data.yaml
 	$(YOLO) detect train data=$(DATASET)/data.yaml model=$(MODEL) \
 		epochs=3 imgsz=640 batch=2 device=$(DEVICE)
 
+# list PDF filenames per year (set LIST_FILES=1 to enable)
+LIST_FILES ?=
+
 # ---- Count matching documents (pre-check) --------------------
 count:
 	@test -f "$(METADATA)" || { echo "ERROR: METADATA not set or not found: $(METADATA)"; exit 1; }
@@ -130,7 +133,8 @@ count:
 		--strategy $(STRATEGY) \
 		$(if $(DOC_TYPE),--doc-type $(DOC_TYPE)) \
 		$(if $(YEAR_FROM),--year-from $(YEAR_FROM)) \
-		$(if $(YEAR_TO),--year-to $(YEAR_TO))
+		$(if $(YEAR_TO),--year-to $(YEAR_TO)) \
+		$(if $(LIST_FILES),--list-files)
 
 
 help:
