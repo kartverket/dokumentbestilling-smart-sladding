@@ -10,7 +10,8 @@ PDFS ?= pdfs
 CSV ?= labels.csv
 # where generated data lands (base dir + timestamped subfolder)
 OUTPUT_DIR ?= .
-DATASET := $(OUTPUT_DIR)/dataset_$(shell date +%Y-%m-%dT%H-%M-%S)
+# Set DATASET explicitly to reuse a previously converted dataset
+DATASET ?= $(OUTPUT_DIR)/dataset_$(shell date +%Y-%m-%dT%H-%M-%S)
 # test ratio = 1 - TRAIN_RATIO - VAL_RATIO
 TRAIN_RATIO ?= 0.7
 VAL_RATIO ?= 0.15
@@ -37,8 +38,10 @@ BATCH ?= 4
 # Can either be cpu or cuda (if you have a GPU)
 DEVICE ?= cuda
 PATIENCE ?= 20
-# Name for the training run (output in runs/detect/<NAME>/)
+# Name for the training run (output in <PROJECT>/<NAME>/)
 NAME ?=
+# Project directory for training output (default: runs/detect)
+PROJECT ?=
 # Set RESUME=1 to resume from last.pt of a previous run
 RESUME ?=
 
@@ -99,6 +102,7 @@ train: split $(DATASET)/data.yaml
 		device=$(DEVICE) \
 		patience=$(PATIENCE) \
 		$(if $(NAME),name=$(NAME)) \
+		$(if $(PROJECT),project=$(PROJECT)) \
 		$(if $(RESUME),resume=True)
 
 $(DATASET)/data.yaml: $(DATASET)/.split
