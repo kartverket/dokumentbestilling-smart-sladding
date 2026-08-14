@@ -13,7 +13,11 @@ os.environ["GLOG_minloglevel"] = "2"    # demp PaddlePaddle C++ logging
 
 import fitz
 
-_APP = os.path.join(os.path.dirname(__file__), "..", "app")
+_UTILS = os.path.dirname(os.path.abspath(__file__))
+if _UTILS not in sys.path:
+    sys.path.insert(0, _UTILS)
+
+_APP = os.path.join(_UTILS, "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
@@ -142,6 +146,8 @@ def main():
                    help="path til YOLO-vektfil (best.pt); default er weights/weights/best.pt i app-mappen")
     p.add_argument("--fortsett", action="store_true",
                    help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
+    p.add_argument("--resultat-mappe", default=".",
+                   help="mappe der result-* undermappen opprettes (default: gjeldende mappe)")
     p.add_argument("--overskriv", action="store_true",
                    help="overskriv eksisterende CSV uten å spørre")
     args = p.parse_args()
@@ -165,6 +171,26 @@ def main():
         return
 
     sett_vekter(args.yolo_vekter)
+
+    # ── Opprett utdata-mapper automatisk ─────────────────────────
+    utdata_mapper = [m for m in [
+        os.path.dirname(args.csv_ut) if args.csv else None,
+        args.png_mappe if (args.png or args.kun_feil) else None,
+        args.sladd_mappe if args.sladd else None,
+        args.resultat_mappe if args.fasit else None,
+    ] if m]
+
+    if not args.fortsett and not args.overskriv:
+        eksisterende = [m for m in utdata_mapper if os.path.isdir(m)]
+        if eksisterende:
+            print("FEIL: Utdata-mappe(r) finnes allerede:")
+            for m in eksisterende:
+                print(f"      {m}")
+            print("      Bruk --fortsett for å gjenoppta, eller --overskriv for å starte på nytt.")
+            return
+
+    for mappe in utdata_mapper:
+        os.makedirs(mappe, exist_ok=True)
 
     # Bygg fillisten
     velg = args.velg
@@ -343,7 +369,7 @@ def main():
                 f"Total tid: {total_tid:.2f}s\n"
                 f"Tid per dokument:\n{tid_linjer}\n"
             )
-            lagre_resultat(eval_resultat, beskrivelse=args.beskrivelse, logg=header + logg)
+            lagre_resultat(eval_resultat, mappe=args.resultat_mappe, beskrivelse=args.beskrivelse, logg=header + logg)
 
     # --kun-feil: tegn bare sider med feil (etter eval)
     if args.kun_feil and eval_resultat:
