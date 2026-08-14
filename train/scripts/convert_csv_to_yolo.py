@@ -121,7 +121,35 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
         doc.close()
         print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {n_negatives_in_doc} negatives)")
 
-    print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages")
+    # Render fully unlabeled documents (in ID list but not in CSV) as pure negatives
+    negative_docs = 0
+    if only_ids:
+        labeled_ids = set(df["fil_revisjon_id"].astype(str).unique())
+        unlabeled_ids = only_ids - labeled_ids
+        if unlabeled_ids:
+            print(f"Rendering {len(unlabeled_ids)} unlabeled documents as negatives...")
+        for fil_id in sorted(unlabeled_ids):
+            pdf_path = pdf_dir / f"{fil_id}.pdf"
+            if not pdf_path.exists():
+                missing.add(str(fil_id))
+                continue
+            first_page = f"{fil_id}_p1.png"
+            if (images_dir / first_page).exists():
+                skipped_docs += 1
+                continue
+            doc = fitz.open(pdf_path)
+            n_pages = len(doc)
+            for idx in range(n_pages):
+                page = doc[idx]
+                pix = page.get_pixmap(dpi=DPI)
+                stem = f"{fil_id}_p{idx + 1}"
+                pix.save(str(images_dir / f"{stem}.png"))
+                (labels_dir / f"{stem}.txt").write_text("")
+                negatives += 1
+            doc.close()
+            negative_docs += 1
+
+    print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages ({negative_docs} fully negative docs)")
     if skipped_docs:
         print(f"Skipped {skipped_docs} already converted documents")
     if missing:
