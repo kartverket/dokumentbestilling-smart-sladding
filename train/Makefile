@@ -60,12 +60,12 @@ all: split train
 convert: $(DATASET)/.converted
 
 $(DATASET)/.converted:
-	test -f "$(SCRIPTS)/convert_csv_to_yolo.py" || { \
+	@test -f "$(SCRIPTS)/convert_csv_to_yolo.py" || { \
 		echo "ERROR: $(SCRIPTS)/convert_csv_to_yolo.py not found."; \
 		echo "       Run make from the train/ directory."; \
 		exit 1; }
-	test -f "$(CSV)"  || { echo "ERROR: CSV not found: $(CSV)"; exit 1; }
-	test -d "$(PDFS)" || { echo "ERROR: PDF folder not found: $(PDFS)"; exit 1; }
+	@test -f "$(CSV)"  || { echo "ERROR: CSV not found: $(CSV)"; exit 1; }
+	@test -d "$(PDFS)" || { echo "ERROR: PDF folder not found: $(PDFS)"; exit 1; }
 	@if [ -n "$(METADATA)" ] && [ "$(STRATEGY)" != "random" ]; then \
 		echo "Generating ID list from metadata filter..."; \
 		$(PYTHON) $(SCRIPTS)/count_documents.py \
