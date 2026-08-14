@@ -137,13 +137,40 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kild
     print(f"Sladde-bokser totalt:             {sum_pred}")
     print(f"Over-sladding (uten fasit-treff): {sum_overflod}")
     print(f"Terskel for treff:                {terskel:.0%} av fasit-boksens areal")
+
+    # Diagnostikk: vis om fasit-oppslag feilet
+    eval_dok_nrs = {_dok_nr(n) for (n, _) in sladd_bokser}
+    eval_dok_nrs.discard(None)
+    fasit_dok_nrs = {nr for (nr, _) in fasit}
+    felles = eval_dok_nrs & fasit_dok_nrs
+    n_fasit_totalt = sum(len(v) for v in fasit.values())
+
+    if sum_fasit == 0 and n_fasit_totalt > 0 and eval_dok_nrs:
+        print(f"\n!! ADVARSEL: Ingen av de {len(eval_dok_nrs)} evaluerte dokumentene "
+              f"matcher de {len(fasit_dok_nrs)} dokumentene i fasit.")
+        print(f"   Evaluert (dok_nr fra filnavn):  {sorted(eval_dok_nrs)[:5]}")
+        print(f"   Fasit (fil_revisjon_id):        {sorted(fasit_dok_nrs)[:5]}")
+        eval_navneksempler = sorted({n for (n, _) in sladd_bokser})[:3]
+        print(f"   Filnavn-eksempler:              {eval_navneksempler}")
+        print(f"   Sjekk at filnavnene i --mappe samsvarer med fil_revisjon_id i --fasit-csv.")
+    elif felles and len(felles) < len(eval_dok_nrs):
+        n_uten = len(eval_dok_nrs) - len(felles)
+        print(f"\n   Info: {len(felles)}/{len(eval_dok_nrs)} evaluerte dokumenter har fasit "
+              f"({n_uten} uten fasit-bokser)")
+
     print("Recall per type:")
     for t, (tr, tot) in sorted(pr_type.items()):
         print(f"   {t or '(tom)':<22} {tr}/{tot} = {tr / tot:.0%}")
 
     feil = sorted((k for k, (b, _tot) in bom_filer.items() if b > 0))
     print("\n" + "=" * 64)
-    if feil:
+    if sum_fasit == 0:
+        if n_fasit_totalt > 0:
+            print(f"Ingen fasit-bokser matchet de evaluerte dokumentene "
+                  f"({n_fasit_totalt} fasit-bokser finnes, men for andre dokumenter).")
+        else:
+            print("Ingen fasit-bokser lastet — kan ikke måle recall.")
+    elif feil:
         print(f"Filer med bom ({len(feil)} side(r) med minst én MANGLER):")
        
         for (navn, si) in feil:

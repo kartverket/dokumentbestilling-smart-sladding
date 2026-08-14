@@ -24,7 +24,7 @@ if _APP not in sys.path:
 from file_selection import velg_filer
 from model_main import run_model_on_pdf_bytes
 from csv_export import initialiser_csv, append_csv
-from evaluation import mal_overlapp, les_fasit
+from evaluation import mal_overlapp, les_fasit, _dok_nr
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
 from yolo_fnr import sett_vekter
@@ -113,6 +113,38 @@ def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser
                   y_origin=y_origin, skriv_logg=True, rydd=False, kilder=csv_bokser_dok)
 
 
+def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
+                           terskel, y_origin):
+    """Evaluer ett dokument mot fasit og tegn feilbilder hvis det finnes feil."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        dok_eval = mal_overlapp(sladd_dok, fasit, mappe, terskel=terskel,
+                                y_origin=y_origin, kilder=csv_dok)
+    if not dok_eval:
+        return
+
+    har_feil = dok_eval.get("bom_filer") or dok_eval.get("overflod_filer")
+    if not har_feil:
+        return
+
+    bom_indekser = {
+        (_dok_nr(d["fil"]), d["side"], d["fasit_nr"] - 1)
+        for d in dok_eval.get("detaljer", [])
+        if d["resultat"] == "MANGLER"
+    }
+    oversladd = dok_eval.get("oversladd_bokser", None)
+    feil_sider = set()
+    for bf in dok_eval.get("bom_filer", []):
+        feil_sider.add((bf["fil"], bf["side"]))
+    for of in dok_eval.get("overflod_filer", []):
+        feil_sider.add((of["fil"], of["side"]))
+    sladd_f = {k: v for k, v in sladd_dok.items() if k in feil_sider}
+    csv_f = {k: v for k, v in csv_dok.items() if k in feil_sider}
+    tegn_og_lagre(sladd_f, fasit, mappe, png_mappe,
+                  y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_f,
+                  oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Kjor modellen lokalt som om filene var POST-er: "
@@ -194,11 +226,13 @@ def main():
 
     # Bygg fillisten
     velg = args.velg
+    fra_fil = False
     if args.velg_fra_fil:
         velg = _les_filer_fra_fil(args.velg_fra_fil)
+        fra_fil = True
         print(f"Leste {len(velg)} IDer fra {args.velg_fra_fil}")
 
-    filer = velg_filer(args.mappe, velg, args.antall)
+    filer = velg_filer(args.mappe, velg, args.antall, eksakt=fra_fil)
 
     if not filer:
         print("Ingen filer aa behandle - sjekk --mappe / --velg / --antall.")
@@ -228,10 +262,11 @@ def main():
 
     vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd or args.kun_feil
 
-    # Forhåndslast fasit for fortløpende PNG
+    # Forhåndslast fasit
     fasit = None
-    if args.png or args.kun_feil:
+    if args.png or args.kun_feil or args.fasit:
         fasit = les_fasit(args.fasit_csv) if os.path.isfile(args.fasit_csv) else None
+    if args.png or args.kun_feil:
         os.makedirs(args.png_mappe, exist_ok=True)
 
     sladd_bokser, yolo_bokser, csv_bokser, feilet = {}, {}, {}, []
@@ -242,6 +277,8 @@ def main():
     # Bakgrunnstråder for PNG-generering (CPU) mens GPU jobber videre
     png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.kun_feil) else None
     png_futures = []
+    feil_executor = ThreadPoolExecutor(max_workers=2) if args.kun_feil else None
+    feil_futures = []
 
     # Pre-les neste fil mens GPU jobber
     neste_bytes = None
@@ -323,6 +360,13 @@ def main():
                 fasit, args.y_origin, csv_dok, sladd_dok)
             png_futures.append(fut)
 
+        # Fortløpende eval + feilbilder i bakgrunnen
+        if feil_executor and fasit:
+            fut = feil_executor.submit(
+                _evaluer_og_tegn_feil, sladd_dok, csv_dok,
+                fasit, args.mappe, args.png_mappe, args.terskel, args.y_origin)
+            feil_futures.append(fut)
+
         n = sum(len(s["bokser"]) for s in sider)
         snitt = total_tid / i
         gjenstaar = snitt * (totalt_antall - i)
@@ -338,6 +382,15 @@ def main():
                 print(f"  PNG-feil: {e!r}")
         png_executor.shutdown(wait=False)
 
+    if feil_futures:
+        print(f"\nVenter på {len(feil_futures)} feilbilde-jobber i bakgrunnen...")
+        for fut in feil_futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"  Feilbilde-feil: {e!r}")
+        feil_executor.shutdown(wait=False)
+
     print(f"\nFerdig! {totalt_antall} dokumenter på {total_tid:.1f}s ({total_tid/max(totalt_antall,1):.2f}s/dok)")
 
     if feilet:
@@ -350,14 +403,12 @@ def main():
     if not vil_ha_artefakt and not args.kun_feil:
         return
 
-    fasit_eval = les_fasit(args.fasit_csv) if (args.fasit or args.kun_feil) else None
-
-    # Kjør evaluering (trenger den alltid for --kun-feil, og for --fasit)
+    # Kjør evaluering (for sammendrag + lagre_resultat)
     eval_resultat = None
     if args.fasit or args.kun_feil:
         buf = io.StringIO()
         with redirect_stdout(buf):
-            eval_resultat = mal_overlapp(sladd_bokser, fasit_eval, args.mappe, terskel=args.terskel,
+            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
                                          y_origin=args.y_origin, kilder=csv_bokser)
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
@@ -371,19 +422,14 @@ def main():
             )
             lagre_resultat(eval_resultat, mappe=args.resultat_mappe, beskrivelse=args.beskrivelse, logg=header + logg)
 
-    # --kun-feil: tegn bare sider med feil (etter eval)
-    if args.kun_feil and eval_resultat:
-        bom_indekser = None
-        oversladd = None
-        if eval_resultat:
-            from visualization import _dok_nr as _vnr
-            bom_indekser = {
-                (_vnr(d["fil"]), d["side"], d["fasit_nr"] - 1)
-                for d in eval_resultat.get("detaljer", [])
-                if d["resultat"] == "MANGLER"
-            }
-            oversladd = eval_resultat.get("oversladd_bokser", None)
-
+    # --kun-feil uten feil_executor (fallback, bør ikke skje)
+    if args.kun_feil and eval_resultat and not feil_futures:
+        bom_indekser = {
+            (_dok_nr(d["fil"]), d["side"], d["fasit_nr"] - 1)
+            for d in eval_resultat.get("detaljer", [])
+            if d["resultat"] == "MANGLER"
+        }
+        oversladd = eval_resultat.get("oversladd_bokser", None)
         feil_sider = set()
         for bf in eval_resultat.get("bom_filer", []):
             feil_sider.add((bf["fil"], bf["side"]))
@@ -392,7 +438,7 @@ def main():
         sladd_filtrert = {k: v for k, v in sladd_bokser.items() if k in feil_sider}
         csv_filtrert = {k: v for k, v in csv_bokser.items() if k in feil_sider}
         print(f"\n--kun-feil: tegner {len(sladd_filtrert)} side(r) med feil")
-        tegn_og_lagre(sladd_filtrert, fasit_eval, args.mappe, args.png_mappe,
+        tegn_og_lagre(sladd_filtrert, fasit, args.mappe, args.png_mappe,
                       y_origin=args.y_origin, kilder=csv_filtrert,
                       oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
