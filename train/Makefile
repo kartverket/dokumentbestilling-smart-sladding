@@ -60,19 +60,26 @@ all: split train
 convert: $(DATASET)/.converted
 
 $(DATASET)/.converted:
-	@if [ -d "$(DATASET)/images_all" ]; then \
-		echo "Dataset already converted: $(DATASET)"; \
-		mkdir -p $(DATASET) && touch $@; \
+	test -f "$(SCRIPTS)/convert_csv_to_yolo.py" || { \
+		echo "ERROR: $(SCRIPTS)/convert_csv_to_yolo.py not found."; \
+		echo "       Run make from the train/ directory."; \
+		exit 1; }
+	test -f "$(CSV)"  || { echo "ERROR: CSV not found: $(CSV)"; exit 1; }
+	test -d "$(PDFS)" || { echo "ERROR: PDF folder not found: $(PDFS)"; exit 1; }
+	@if [ -n "$(METADATA)" ] && [ "$(STRATEGY)" != "random" ]; then \
+		echo "Generating ID list from metadata filter..."; \
+		$(PYTHON) $(SCRIPTS)/count_documents.py \
+			--metadata $(METADATA) \
+			--strategy $(STRATEGY) \
+			$(if $(DOC_TYPE),--doc-type $(DOC_TYPE)) \
+			$(if $(YEAR_FROM),--year-from $(YEAR_FROM)) \
+			$(if $(YEAR_TO),--year-to $(YEAR_TO)) \
+			--output-ids > $(DATASET)/.convert_ids.txt; \
+		$(PYTHON) $(SCRIPTS)/convert_csv_to_yolo.py "$(CSV)" "$(PDFS)" --output "$(DATASET)" --ids $(DATASET)/.convert_ids.txt; \
 	else \
-		test -f "$(SCRIPTS)/convert_csv_to_yolo.py" || { \
-			echo "ERROR: $(SCRIPTS)/convert_csv_to_yolo.py not found."; \
-			echo "       Run make from the yolo/ directory (where data.yaml lives)."; \
-			exit 1; }; \
-		test -f "$(CSV)"  || { echo "ERROR: CSV not found: $(CSV)"; exit 1; }; \
-		test -d "$(PDFS)" || { echo "ERROR: PDF folder not found: $(PDFS)"; exit 1; }; \
 		$(PYTHON) $(SCRIPTS)/convert_csv_to_yolo.py "$(CSV)" "$(PDFS)" --output "$(DATASET)"; \
-		touch $@; \
 	fi
+	@touch $@
 
 # ---- Step 4: train/val/test split ---------------------------
 split: $(DATASET)/.split

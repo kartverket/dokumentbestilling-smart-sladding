@@ -22,7 +22,7 @@ DPI = 300
 SCALE = DPI / 72.0
 
 
-def convert(csv_path: str, pdf_dir: str, output_dir: str):
+def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
     csv_path = Path(csv_path)
     pdf_dir = Path(pdf_dir)
     output = Path(output_dir)
@@ -33,6 +33,10 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
 
     df = pd.read_csv(csv_path)
     print(f"Total documents in CSV: {df['fil_revisjon_id'].nunique()}, total boxes: {len(df)}")
+
+    if only_ids:
+        df = df[df["fil_revisjon_id"].astype(str).isin(only_ids)]
+        print(f"Filtered to {df['fil_revisjon_id'].nunique()} documents matching --ids")
 
     df["ml_status"] = df["ml_status"].astype(str).str.strip().str.upper()
     df["ml_generated"] = (
@@ -50,6 +54,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
     missing = set()
     done = 0
     skipped_pages = 0
+    skipped_docs = 0
     total_boxes = 0
     negatives = 0
 
@@ -57,6 +62,12 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
         pdf_path = pdf_dir / f"{fil_id}.pdf"
         if not pdf_path.exists():
             missing.add(str(fil_id))
+            continue
+
+        # Hopp over dokumenter som allerede er konvertert (cache)
+        first_page = f"{fil_id}_p1.png"
+        if (images_dir / first_page).exists():
+            skipped_docs += 1
             continue
 
         doc = fitz.open(pdf_path)
@@ -111,6 +122,8 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str):
         print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {n_negatives_in_doc} negatives)")
 
     print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages")
+    if skipped_docs:
+        print(f"Skipped {skipped_docs} already converted documents")
     if missing:
         print(f"Missing PDFs: {len(missing)}")
     if skipped_pages:
@@ -122,5 +135,13 @@ if __name__ == "__main__":
     parser.add_argument("csv", help="Path to CSV file")
     parser.add_argument("pdfs", help="Directory containing PDF files")
     parser.add_argument("--output", default="dataset", help="Output directory (default: dataset)")
+    parser.add_argument("--ids", default=None, help="File with document IDs to convert (one per line). Converts all if not set.")
     args = parser.parse_args()
-    convert(args.csv, args.pdfs, args.output)
+
+    only_ids = None
+    if args.ids:
+        with open(args.ids) as f:
+            only_ids = {line.strip() for line in f if line.strip()}
+        print(f"Loaded {len(only_ids)} IDs from {args.ids}")
+
+    convert(args.csv, args.pdfs, args.output, only_ids=only_ids)
