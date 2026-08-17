@@ -174,18 +174,17 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
         # Opprett ny side med samme dimensjoner
         ny_side = ut_dok.new_page(width=bredde_pt, height=hoyde_pt)
 
-        # Sett inn originalsiden som bakgrunn med redusert opacity
+        # Sett inn originalsiden som rasterbilde (ikke PDF XObject)
+        # slik at OCR-teksten garantert havner oppå.
         if bakgrunn_opacity < 1.0:
-            ny_side.draw_rect(ny_side.rect, color=None, fill=(1, 1, 1))
-            ny_side.show_pdf_page(ny_side.rect, inn_dok, side_nr)
-            # Legg et semi-transparent hvitt rektangel over for å "fade" bakgrunnen
-            fade_alpha = 1.0 - bakgrunn_opacity
-            shape = ny_side.new_shape()
-            shape.draw_rect(ny_side.rect)
-            shape.finish(color=None, fill=(1, 1, 1), fill_opacity=fade_alpha)
-            shape.commit()
+            faded = (bilde.astype(np.float32) * bakgrunn_opacity
+                     + 255.0 * (1.0 - bakgrunn_opacity)).astype(np.uint8)
         else:
-            ny_side.show_pdf_page(ny_side.rect, inn_dok, side_nr)
+            faded = bilde
+        # Bruk fitz.Pixmap via samples-buffer
+        pix_bg = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, bilde_w, bilde_h), 0)
+        pix_bg.samples = bytes(faded)
+        ny_side.insert_image(ny_side.rect, pixmap=pix_bg)
 
         for tekst, x0_px, y0_px, x1_px, y1_px in tekstbokser:
             # Konverter fra piksel til PDF-punkt
