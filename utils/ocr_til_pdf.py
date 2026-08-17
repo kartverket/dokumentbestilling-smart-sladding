@@ -162,12 +162,15 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
         skala_x = bredde_pt / bilde_w
         skala_y = hoyde_pt / bilde_h
 
-        # PaddleOCR forventer BGR
+        # PaddleOCR forventer BGR, og predict skal ha en *liste* av bilder
+        # (samme konvensjon som paddle_ocr_model_fnr.py)
         bilde_bgr = np.ascontiguousarray(bilde[:, :, ::-1])
 
         # Kjør PaddleOCR
-        resultater = reader.predict(bilde_bgr, return_word_box=True)
+        resultater = reader.predict([bilde_bgr], return_word_box=True) or []
         res = resultater[0] if resultater else None
+        if res:
+            print(f"    OCR-resultat nøkler: {list(res.keys()) if hasattr(res, 'keys') else type(res)}")
         tekstbokser = _hent_tekstbokser(res)
         print(f"{len(tekstbokser)} tekstfragmenter funnet")
 
@@ -199,11 +202,13 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
             rect = fitz.Rect(x0, y0, x1, y1)
             boks_hoyde_pt = y1 - y0
 
-            # Velg fontstørrelse som passer boksens høyde
-            fontstr = max(4, boks_hoyde_pt * 0.85)
+            # Velg fontstørrelse som passer boksens høyde.
+            # insert_textbox bruker lineheight ≈ 1.2 × fontsize,
+            # så vi deler på 1.2 for å sikre at teksten passer.
+            fontstr = max(4, boks_hoyde_pt / 1.2)
 
             if synlig:
-                ny_side.insert_textbox(
+                rc = ny_side.insert_textbox(
                     rect,
                     tekst,
                     fontsize=fontstr,
@@ -211,6 +216,9 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
                     color=(0, 0, 0),
                     align=fitz.TEXT_ALIGN_LEFT,
                 )
+                if rc < 0 and boks_hoyde_pt > 5:
+                    print(f"    ADVARSEL: tekst passet ikke i boks "
+                          f"({boks_hoyde_pt:.1f}pt, font={fontstr:.1f}): {tekst[:30]}")
             else:
                 ny_side.insert_textbox(
                     rect,
