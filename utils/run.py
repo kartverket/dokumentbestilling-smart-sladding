@@ -182,7 +182,23 @@ def main():
                    help="mappe der result-* undermappen opprettes (default: gjeldende mappe)")
     p.add_argument("--overskriv", action="store_true",
                    help="overskriv eksisterende CSV uten å spørre")
+    p.add_argument("--ocr-cache", default=None,
+                   help="mappe for per-dokument OCR-cache (tokens + orientering). "
+                        "Standard: $SLADD_CACHE/<uttrekk-navn>/ocr/ utledet fra --mappe. "
+                        "Sett til eksplisitt sti for å overstyre.")
+    p.add_argument("--no-ocr-cache", action="store_true",
+                   help="deaktiver OCR-cache helt")
     args = p.parse_args()
+
+    # ── Utled OCR-cache-sti ──────────────────────────────────────
+    if args.no_ocr_cache:
+        args.ocr_cache = None
+    elif args.ocr_cache is None:
+        # Auto-utled fra SLADD_CACHE + mappenavnet til uttrekket
+        cache_base = os.environ.get("SLADD_CACHE")
+        if cache_base:
+            uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
+            args.ocr_cache = os.path.join(cache_base, uttrekk_navn, "ocr")
 
     # ── Tidlig validering av inputfiler ─────────────────────────
     if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
@@ -237,6 +253,13 @@ def main():
     if not filer:
         print("Ingen filer aa behandle - sjekk --mappe / --velg / --antall.")
         return
+
+    if args.ocr_cache:
+        os.makedirs(args.ocr_cache, exist_ok=True)
+        n_cachet = sum(1 for f in filer
+                       if os.path.isfile(os.path.join(args.ocr_cache,
+                           os.path.splitext(os.path.basename(f))[0] + ".json")))
+        print(f"OCR-cache: {args.ocr_cache} ({n_cachet}/{len(filer)} dokumenter cachet)")
 
     # Resume: hopp over allerede prosesserte filer
     hoppet_over = 0
@@ -303,7 +326,8 @@ def main():
         try:
             resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
                                               elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                              kun_yolo=args.kun_yolo)
+                                              kun_yolo=args.kun_yolo,
+                                              cache_mappe=args.ocr_cache)
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()

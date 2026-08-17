@@ -9,6 +9,7 @@ from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens, er_for_bred
 from orientering import finn_rotasjon, boks_tilbake
 from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten
+from ocr_cache import les_cache, skriv_cache
 
 
 @contextmanager
@@ -98,21 +99,39 @@ def _til_flat(sider, pdf_bytes):
 
 
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
-                           elektronisk_tinglyst=False, kun_yolo=False):
+                           elektronisk_tinglyst=False, kun_yolo=False,
+                           cache_mappe=None):
     t = {}
 
     with _ta_tid(t, "render"):
         bilder = list(les_sider_fra_bytes(pdf_bytes))
 
-    with _ta_tid(t, "orientering"):
-        rotasjoner = [finn_rotasjon(b) for b in bilder]
-        bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+    # ── Forsøk å laste OCR-resultater fra cache ─────────────────
+    cache_treff = False
+    if cache_mappe and not kun_yolo and navn:
+        cachet = les_cache(cache_mappe, navn)
+        if cachet is not None:
+            rotasjoner, tokens_per_side = cachet
+            if len(rotasjoner) == len(bilder):
+                bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+                cache_treff = True
 
-    if not kun_yolo:
-        with _ta_tid(t, "ocr"):
-            tokens_per_side = les_tokens_batched(bilder_ocr)
+    if not cache_treff:
+        with _ta_tid(t, "orientering"):
+            rotasjoner = [finn_rotasjon(b) for b in bilder]
+            bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+
+        if not kun_yolo:
+            with _ta_tid(t, "ocr"):
+                tokens_per_side = les_tokens_batched(bilder_ocr)
+            # Lagre til cache for fremtidige kjøringer
+            if cache_mappe and navn:
+                skriv_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+        else:
+            tokens_per_side = [[] for _ in bilder_ocr]
     else:
-        tokens_per_side = [[] for _ in bilder_ocr]
+        if kun_yolo:
+            tokens_per_side = [[] for _ in bilder_ocr]
 
     sider = []
     for si, (bilde, bilde_ocr, tokens, k) in enumerate(
@@ -126,16 +145,19 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             sider.append(_bygg_side(si, bilde, tokens, bokser_med_kilde, k, med_linjer))
 
     if skriv_tid:
-        _skriv_tid(t, len(sider), navn)
+        _skriv_tid(t, len(sider), navn, cache_treff)
 
     return _til_flat(sider, pdf_bytes)
 
 
-def _skriv_tid(t, n_sider, navn=None):
+def _skriv_tid(t, n_sider, navn=None, cache_treff=False):
     poster = ["render", "orientering", "ocr", "yolo+match", "etterbehandling"]
     total = sum(t.get(p, 0.0) for p in poster)
 
-    print(f"Timing [{navn}]:" if navn else "Timing:")
+    label = f"Timing [{navn}]:" if navn else "Timing:"
+    if cache_treff:
+        label += " (OCR fra cache)"
+    print(label)
     for post in poster:
         sek = t.get(post, 0.0)
         pct = (sek / total * 100) if total else 0.0
