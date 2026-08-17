@@ -181,10 +181,13 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
                      + 255.0 * (1.0 - bakgrunn_opacity)).astype(np.uint8)
         else:
             faded = bilde
-        # Bruk fitz.Pixmap via samples-buffer
-        pix_bg = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, bilde_w, bilde_h), 0)
-        pix_bg.samples = bytes(faded)
-        ny_side.insert_image(ny_side.rect, pixmap=pix_bg)
+        # Bruk Pillow for å konvertere til PNG-bytes, deretter insert_image
+        import io
+        from PIL import Image
+        pil_img = Image.fromarray(faded)
+        buf = io.BytesIO()
+        pil_img.save(buf, format="PNG")
+        ny_side.insert_image(ny_side.rect, stream=buf.getvalue())
 
         for tekst, x0_px, y0_px, x1_px, y1_px in tekstbokser:
             # Konverter fra piksel til PDF-punkt
