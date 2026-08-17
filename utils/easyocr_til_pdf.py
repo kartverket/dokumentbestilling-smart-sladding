@@ -20,7 +20,6 @@ import numpy as np
 
 # DPI brukt for rendering – bestemmer oppløsningen OCR jobber på
 RENDER_DPI = 300
-SKALA = RENDER_DPI / 72.0  # PDF-punkt til piksel
 
 
 def render_side(side, dpi=RENDER_DPI):
@@ -38,7 +37,7 @@ def kjor_easyocr(reader, bilde):
     return resultater
 
 
-def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, spraak, synlig=True, min_konf=0.1, bakgrunn_opacity=0.5):
+def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, spraak, synlig=True, min_konf=0.1, bakgrunn_opacity=0.5, dpi=300):
     """
     Les inn-PDF, kjør EasyOCR per side, og skriv en ny PDF der teksten
     er plassert i posisjonene OCR fant den.
@@ -65,7 +64,7 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, spraak, synlig=True, min_konf=0.1
         print(f"  Side {side_nr + 1}/{inn_dok.page_count} ({bredde_pt:.0f}×{hoyde_pt:.0f} pt) ...", end=" ")
 
         # Render siden til bilde for OCR
-        bilde = render_side(side)
+        bilde = render_side(side, dpi=dpi)
         bilde_h, bilde_w = bilde.shape[:2]
 
         # Skaleringsfaktorer: piksel -> PDF-punkt
@@ -161,8 +160,8 @@ def main():
                    help="gjør OCR-teksten usynlig (søkbart lag uten visuell tekst)")
     p.add_argument("--min-konf", type=float, default=0.1,
                    help="minimum konfidens for å inkludere tekst (0.0-1.0)")
-    p.add_argument("--dpi", type=int, default=RENDER_DPI,
-                   help=f"DPI for rendering av PDF-sider (default: {RENDER_DPI})")
+    p.add_argument("--dpi", type=int, default=300,
+                   help="DPI for rendering av PDF-sider (default: 300)")
     p.add_argument("--opacity", type=float, default=0.5,
                    help="opacity for originaldokumentet i bakgrunnen (0.0-1.0, default: 0.5)")
     args = p.parse_args()
@@ -170,9 +169,6 @@ def main():
     if not args.output:
         args.output = args.pdf.rsplit(".", 1)[0] + "_ocr.pdf"
 
-    global RENDER_DPI, SKALA
-    RENDER_DPI = args.dpi
-    SKALA = RENDER_DPI / 72.0
 
     synlig = not args.usynlig
 
@@ -183,6 +179,7 @@ def main():
         synlig=synlig,
         min_konf=args.min_konf,
         bakgrunn_opacity=args.opacity if synlig else 1.0,
+        dpi=args.dpi,
     )
 
 
