@@ -3,11 +3,12 @@
 #
 # Bruk (eksplisitte navngitte parametere):
 #   ./valider_full.sh uttrekk=5 liste=jou
+#   ./valider_full.sh uttrekk=5                    # alle dokumenter i uttrekket
 #   ./valider_full.sh uttrekk=5 liste=jou navn=mitt-eksperiment
 #
 # Parametere:
 #   uttrekk  — uttrekk-nummer å validere på (påkrevd)
-#   liste    — navn på ID-listen (filnavn uten uttrekk_N_-prefix) (påkrevd)
+#   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #
 # Bruker OCR-cache ($SLADD_CACHE) for å unngå å kjøre OCR på nytt.
@@ -37,7 +38,7 @@ for arg in "$@"; do
         -*)        EKSTRA_FLAGG+=("$arg") ;;
         *)
             echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: uttrekk=N liste=NAVN [navn=ALIAS]"
+            echo "Gyldige: uttrekk=N [liste=NAVN] [navn=ALIAS]"
             exit 1
             ;;
     esac
@@ -50,31 +51,34 @@ if [[ -z "$UTTREKK_NR" ]]; then
     exit 1
 fi
 
-if [[ -z "$LISTE" ]]; then
-    echo "FEIL: liste= er påkrevd"
-    echo "Eksempel: $0 uttrekk=5 liste=jou"
-    exit 1
-fi
-
 # ── Bygg stier ───────────────────────────────────────────────────
-LISTE_FIL="$SLADD_LISTER/uttrekk_${UTTREKK_NR}_${LISTE}.txt"
 UTTREKK_MAPPE="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
 FASIT="$SLADD_LABELS/uttrekk_${UTTREKK_NR}.csv"
 
+LISTE_FIL=""
+if [[ -n "$LISTE" ]]; then
+    LISTE_FIL="$SLADD_LISTER/uttrekk_${UTTREKK_NR}_${LISTE}.txt"
+fi
+
 if [[ -n "$NAVN" ]]; then
     UT_NAVN="$NAVN"
-else
+elif [[ -n "$LISTE" ]]; then
     UT_NAVN="full_validert_pa_uttrekk_${UTTREKK_NR}_${LISTE}"
+else
+    UT_NAVN="full_validert_pa_uttrekk_${UTTREKK_NR}_alle"
 fi
 UT_MAPPE="$SLADD_VALIDERING/$UT_NAVN"
 
 # ── Sjekk at filer finnes ────────────────────────────────────────
-for fil in "$LISTE_FIL" "$FASIT"; do
-    if [[ ! -f "$fil" ]]; then
-        echo "FEIL: Finner ikke: $fil"
-        exit 1
-    fi
-done
+if [[ -n "$LISTE_FIL" && ! -f "$LISTE_FIL" ]]; then
+    echo "FEIL: Finner ikke: $LISTE_FIL"
+    exit 1
+fi
+
+if [[ ! -f "$FASIT" ]]; then
+    echo "FEIL: Finner ikke: $FASIT"
+    exit 1
+fi
 
 if [[ ! -d "$UTTREKK_MAPPE" ]]; then
     echo "FEIL: Uttrekk-mappe finnes ikke: $UTTREKK_MAPPE"
@@ -86,23 +90,33 @@ echo "╭───────────────────────�
 echo "│ Full validering (OCR+YOLO): $UT_NAVN"
 echo "├─────────────────────────────────────────────┤"
 printf "│ uttrekk:  %s\n" "$UTTREKK_MAPPE"
-printf "│ liste:    %s\n" "$LISTE_FIL"
+if [[ -n "$LISTE_FIL" ]]; then
+    printf "│ liste:    %s\n" "$LISTE_FIL"
+else
+    printf "│ liste:    (alle dokumenter)\n"
+fi
 printf "│ fasit:    %s\n" "$FASIT"
 printf "│ utmappe:  %s\n" "$UT_MAPPE"
 printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/ocr"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 
+# ── Bygg kommando ────────────────────────────────────────────────
+CMD=(python -u "$SLADD_RUN"
+    --mappe "$UTTREKK_MAPPE"
+    --csv --fasit --kun-feil
+    --fasit-csv "$FASIT"
+    --csv-ut "$UT_MAPPE/resultat.csv"
+    --png-mappe "$UT_MAPPE/feilbilder"
+    --resultat-mappe "$UT_MAPPE"
+    --tid
+)
+
+if [[ -n "$LISTE_FIL" ]]; then
+    CMD+=(--velg-fra-fil "$LISTE_FIL")
+else
+    CMD+=(--antall alle)
+fi
+
 # ── Kjør full validering (produksjonslogikk) ─────────────────────
-python -u "$SLADD_RUN" \
-    --mappe "$UTTREKK_MAPPE" \
-    --velg-fra-fil "$LISTE_FIL" \
-    --csv --fasit --kun-feil \
-    --fasit-csv "$FASIT" \
-    --csv-ut "$UT_MAPPE/resultat.csv" \
-    --png-mappe "$UT_MAPPE/feilbilder" \
-    --resultat-mappe "$UT_MAPPE" \
-    --tid \
-    ${EKSTRA_FLAGG[@]+"${EKSTRA_FLAGG[@]}"}
-
-
+"${CMD[@]}" ${EKSTRA_FLAGG[@]+"${EKSTRA_FLAGG[@]}"}
