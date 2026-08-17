@@ -147,7 +147,11 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
         os.makedirs(bom_mappe, exist_ok=True)
         sladd_b = {k: v for k, v in sladd_dok.items() if k in bom_sider}
         csv_b = {k: v for k, v in csv_dok.items() if k in bom_sider}
-        tegn_og_lagre(sladd_b, fasit, mappe, bom_mappe,
+        # Filtrer fasit til kun bom-sider så _sider_aa_tegne ikke legger til
+        # sider uten feil (som ville blitt tomme PNG-er)
+        bom_nr_sider = {(_dok_nr(navn), si) for (navn, si) in bom_sider}
+        fasit_bom = {k: v for k, v in fasit.items() if k in bom_nr_sider} if fasit else None
+        tegn_og_lagre(sladd_b, fasit_bom, mappe, bom_mappe,
                       y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_b,
                       oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
@@ -156,7 +160,10 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
         os.makedirs(over_mappe, exist_ok=True)
         sladd_o = {k: v for k, v in sladd_dok.items() if k in over_sider}
         csv_o = {k: v for k, v in csv_dok.items() if k in over_sider}
-        tegn_og_lagre(sladd_o, fasit, mappe, over_mappe,
+        # Filtrer fasit til kun oversladd-sider
+        over_nr_sider = {(_dok_nr(navn), si) for (navn, si) in over_sider}
+        fasit_over = {k: v for k, v in fasit.items() if k in over_nr_sider} if fasit else None
+        tegn_og_lagre(sladd_o, fasit_over, mappe, over_mappe,
                       y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_o,
                       oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
@@ -480,7 +487,9 @@ def main():
             os.makedirs(bom_mappe, exist_ok=True)
             sladd_b = {k: v for k, v in sladd_bokser.items() if k in bom_sider}
             csv_b = {k: v for k, v in csv_bokser.items() if k in bom_sider}
-            tegn_og_lagre(sladd_b, fasit, args.mappe, bom_mappe,
+            bom_nr_sider = {(_dok_nr(navn), si) for (navn, si) in bom_sider}
+            fasit_bom = {k: v for k, v in fasit.items() if k in bom_nr_sider} if fasit else None
+            tegn_og_lagre(sladd_b, fasit_bom, args.mappe, bom_mappe,
                           y_origin=args.y_origin, kilder=csv_b,
                           oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
@@ -489,7 +498,9 @@ def main():
             os.makedirs(over_mappe, exist_ok=True)
             sladd_o = {k: v for k, v in sladd_bokser.items() if k in over_sider}
             csv_o = {k: v for k, v in csv_bokser.items() if k in over_sider}
-            tegn_og_lagre(sladd_o, fasit, args.mappe, over_mappe,
+            over_nr_sider = {(_dok_nr(navn), si) for (navn, si) in over_sider}
+            fasit_over = {k: v for k, v in fasit.items() if k in over_nr_sider} if fasit else None
+            tegn_og_lagre(sladd_o, fasit_over, args.mappe, over_mappe,
                           y_origin=args.y_origin, kilder=csv_o,
                           oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
