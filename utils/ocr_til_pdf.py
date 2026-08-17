@@ -177,13 +177,12 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.5
         if bakgrunn_opacity < 1.0:
             ny_side.draw_rect(ny_side.rect, color=None, fill=(1, 1, 1))
             ny_side.show_pdf_page(ny_side.rect, inn_dok, side_nr)
+            # Legg et semi-transparent hvitt rektangel over for å "fade" bakgrunnen
             fade_alpha = 1.0 - bakgrunn_opacity
-            ny_side.draw_rect(
-                ny_side.rect,
-                color=None,
-                fill=(1, 1, 1),
-                opacity=fade_alpha,
-            )
+            shape = ny_side.new_shape()
+            shape.draw_rect(ny_side.rect)
+            shape.finish(color=None, fill=(1, 1, 1), fill_opacity=fade_alpha)
+            shape.commit()
         else:
             ny_side.show_pdf_page(ny_side.rect, inn_dok, side_nr)
 
@@ -258,4 +257,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
