@@ -115,7 +115,11 @@ def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser
 
 def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
                            terskel, y_origin):
-    """Evaluer ett dokument mot fasit og tegn feilbilder hvis det finnes feil."""
+    """Evaluer ett dokument mot fasit og tegn feilbilder hvis det finnes feil.
+
+    Lagrer i undermapper: bom/ (manglende deteksjoner) og oversladd/ (over-sladding).
+    En side kan havne i begge mapper hvis den har begge typer feil.
+    """
     buf = io.StringIO()
     with redirect_stdout(buf):
         dok_eval = mal_overlapp(sladd_dok, fasit, mappe, terskel=terskel,
@@ -123,8 +127,9 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
     if not dok_eval:
         return
 
-    har_feil = dok_eval.get("bom_filer") or dok_eval.get("overflod_filer")
-    if not har_feil:
+    har_bom = bool(dok_eval.get("bom_filer"))
+    har_over = bool(dok_eval.get("overflod_filer"))
+    if not har_bom and not har_over:
         return
 
     bom_indekser = {
@@ -133,16 +138,27 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
         if d["resultat"] == "MANGLER"
     }
     oversladd = dok_eval.get("oversladd_bokser", None)
-    feil_sider = set()
-    for bf in dok_eval.get("bom_filer", []):
-        feil_sider.add((bf["fil"], bf["side"]))
-    for of in dok_eval.get("overflod_filer", []):
-        feil_sider.add((of["fil"], of["side"]))
-    sladd_f = {k: v for k, v in sladd_dok.items() if k in feil_sider}
-    csv_f = {k: v for k, v in csv_dok.items() if k in feil_sider}
-    tegn_og_lagre(sladd_f, fasit, mappe, png_mappe,
-                  y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_f,
-                  oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+
+    bom_sider = {(bf["fil"], bf["side"]) for bf in dok_eval.get("bom_filer", [])}
+    over_sider = {(of["fil"], of["side"]) for of in dok_eval.get("overflod_filer", [])}
+
+    if bom_sider:
+        bom_mappe = os.path.join(png_mappe, "bom")
+        os.makedirs(bom_mappe, exist_ok=True)
+        sladd_b = {k: v for k, v in sladd_dok.items() if k in bom_sider}
+        csv_b = {k: v for k, v in csv_dok.items() if k in bom_sider}
+        tegn_og_lagre(sladd_b, fasit, mappe, bom_mappe,
+                      y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_b,
+                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+
+    if over_sider:
+        over_mappe = os.path.join(png_mappe, "oversladd")
+        os.makedirs(over_mappe, exist_ok=True)
+        sladd_o = {k: v for k, v in sladd_dok.items() if k in over_sider}
+        csv_o = {k: v for k, v in csv_dok.items() if k in over_sider}
+        tegn_og_lagre(sladd_o, fasit, mappe, over_mappe,
+                      y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_o,
+                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
 
 def main():
@@ -454,17 +470,28 @@ def main():
             if d["resultat"] == "MANGLER"
         }
         oversladd = eval_resultat.get("oversladd_bokser", None)
-        feil_sider = set()
-        for bf in eval_resultat.get("bom_filer", []):
-            feil_sider.add((bf["fil"], bf["side"]))
-        for of in eval_resultat.get("overflod_filer", []):
-            feil_sider.add((of["fil"], of["side"]))
-        sladd_filtrert = {k: v for k, v in sladd_bokser.items() if k in feil_sider}
-        csv_filtrert = {k: v for k, v in csv_bokser.items() if k in feil_sider}
-        print(f"\n--kun-feil: tegner {len(sladd_filtrert)} side(r) med feil")
-        tegn_og_lagre(sladd_filtrert, fasit, args.mappe, args.png_mappe,
-                      y_origin=args.y_origin, kilder=csv_filtrert,
-                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+        bom_sider = {(bf["fil"], bf["side"]) for bf in eval_resultat.get("bom_filer", [])}
+        over_sider = {(of["fil"], of["side"]) for of in eval_resultat.get("overflod_filer", [])}
+        alle_feil_sider = bom_sider | over_sider
+        print(f"\n--kun-feil: tegner {len(alle_feil_sider)} side(r) med feil (bom/ og oversladd/)")
+
+        if bom_sider:
+            bom_mappe = os.path.join(args.png_mappe, "bom")
+            os.makedirs(bom_mappe, exist_ok=True)
+            sladd_b = {k: v for k, v in sladd_bokser.items() if k in bom_sider}
+            csv_b = {k: v for k, v in csv_bokser.items() if k in bom_sider}
+            tegn_og_lagre(sladd_b, fasit, args.mappe, bom_mappe,
+                          y_origin=args.y_origin, kilder=csv_b,
+                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+
+        if over_sider:
+            over_mappe = os.path.join(args.png_mappe, "oversladd")
+            os.makedirs(over_mappe, exist_ok=True)
+            sladd_o = {k: v for k, v in sladd_bokser.items() if k in over_sider}
+            csv_o = {k: v for k, v in csv_bokser.items() if k in over_sider}
+            tegn_og_lagre(sladd_o, fasit, args.mappe, over_mappe,
+                          y_origin=args.y_origin, kilder=csv_o,
+                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
 
     if args.sladd:
         sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
