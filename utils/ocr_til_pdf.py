@@ -199,36 +199,31 @@ def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.1
             x1 = x1_px * skala_x
             y1 = y1_px * skala_y
 
-            rect = fitz.Rect(x0, y0, x1, y1)
             boks_hoyde_pt = y1 - y0
+            boks_bredde_pt = x1 - x0
 
-            # Velg fontstørrelse som passer boksens høyde.
-            # insert_textbox bruker lineheight ≈ 1.2 × fontsize,
-            # så vi deler på 1.2 for å sikre at teksten passer.
-            fontstr = max(4, boks_hoyde_pt / 1.2)
-
-            if synlig:
-                rc = ny_side.insert_textbox(
-                    rect,
-                    tekst,
-                    fontsize=fontstr,
-                    fontname="helv",
-                    color=(0, 0, 0),
-                    align=fitz.TEXT_ALIGN_LEFT,
-                )
-                if rc < 0 and boks_hoyde_pt > 5:
-                    print(f"    ADVARSEL: tekst passet ikke i boks "
-                          f"({boks_hoyde_pt:.1f}pt, font={fontstr:.1f}): {tekst[:30]}")
+            # Velg fontstørrelse basert på BÅDE bokshøyde og tekstlengde.
+            # Helvetica har gjennomsnittlig tegnbredde ≈ 0.52 × fontsize.
+            font_fra_hoyde = boks_hoyde_pt * 0.85
+            if len(tekst) > 0:
+                font_fra_bredde = boks_bredde_pt / (len(tekst) * 0.52)
             else:
-                ny_side.insert_textbox(
-                    rect,
-                    tekst,
-                    fontsize=fontstr,
-                    fontname="helv",
-                    color=(0, 0, 0),
-                    align=fitz.TEXT_ALIGN_LEFT,
-                    render_mode=3,  # usynlig
-                )
+                font_fra_bredde = font_fra_hoyde
+            fontstr = max(4, min(font_fra_hoyde, font_fra_bredde))
+
+            # insert_text plasserer teksten direkte på baseline-punktet.
+            # Baseline ≈ 80 % ned fra toppen av boksen.
+            punkt = fitz.Point(x0, y0 + boks_hoyde_pt * 0.8)
+            render = 3 if not synlig else 0  # 0=synlig, 3=usynlig
+
+            ny_side.insert_text(
+                punkt,
+                tekst,
+                fontsize=fontstr,
+                fontname="helv",
+                color=(0, 0, 0),
+                render_mode=render,
+            )
 
     ut_dok.save(ut_pdf_sti)
     ut_dok.close()
