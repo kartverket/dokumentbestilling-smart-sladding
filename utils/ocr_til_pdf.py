@@ -2,7 +2,7 @@
 Kjør PaddleOCR på et PDF-dokument og lag en ny PDF
 med teksten plassert i riktige posisjoner.
 
-Standard: synlig tekst over originaldokumentet med 50% opacity,
+Standard: synlig tekst over originaldokumentet med 15% opacity,
 slik at man tydelig ser OCR-teksten oppå dokumentet.
 
 Bruker samme PaddleOCR-modeller som resten av prosjektet
@@ -103,10 +103,11 @@ def _hent_tekstbokser(res):
                 if not tekst.strip():
                     continue
                 pts = np.asarray(boks, dtype=float).reshape(-1)
-                x0, y0 = float(pts[0]), float(pts[1])
-                x1, y1 = float(pts[2]), float(pts[3])
-                # Sørg for min/max
-                bokser.append((tekst, min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+                # Polygon med 4 hjørner (8 verdier): x0,y0,x1,y1,x2,y2,x3,y3
+                x_coords = pts[0::2]
+                y_coords = pts[1::2]
+                bokser.append((tekst, float(x_coords.min()), float(y_coords.min()),
+                               float(x_coords.max()), float(y_coords.max())))
         if bokser:
             return bokser
 
@@ -128,7 +129,7 @@ def _hent_tekstbokser(res):
     return bokser
 
 
-def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.5, dpi=PDF_DPI):
+def lag_pdf_med_tekst(inn_pdf_sti, ut_pdf_sti, synlig=True, bakgrunn_opacity=0.15, dpi=PDF_DPI):
     """
     Les inn-PDF, kjør PaddleOCR per side, og skriv en ny PDF der teksten
     er plassert i posisjonene OCR fant den.
@@ -237,8 +238,8 @@ def main():
                    help="gjør OCR-teksten usynlig (søkbart lag uten visuell tekst)")
     p.add_argument("--dpi", type=int, default=PDF_DPI,
                    help=f"DPI for rendering av PDF-sider (default: {PDF_DPI})")
-    p.add_argument("--opacity", type=float, default=0.5,
-                   help="opacity for originaldokumentet i bakgrunnen (0.0-1.0, default: 0.5)")
+    p.add_argument("--opacity", type=float, default=0.15,
+                   help="opacity for originaldokumentet i bakgrunnen (0.0-1.0, default: 0.15)")
     args = p.parse_args()
 
     if not args.output:
@@ -257,5 +258,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 
