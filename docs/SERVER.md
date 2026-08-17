@@ -81,45 +81,50 @@ Flere dokumenttyper og årsfilter:
 ./lag_liste.sh uttrekk=4 docs=OB_MOB name=mob
 ```
 
-### Steg 2: Kjør validering med wrapper-skriptet
+### Steg 2: Kjør validering
+
+Det finnes to wrapper-script:
+
+| Script | Hva det kjører | Bruksområde |
+|--------|---------------|-------------|
+| `valider_yolo.sh` | Kun YOLO (uten OCR) | Rask testing av YOLO-vekter |
+| `valider_full.sh` | OCR + YOLO + matching (produksjonslogikk) | Validere full pipeline |
+
+#### Kun YOLO (`valider_yolo.sh`)
 
 ```bash
 # Valider prod-modellen på uttrekk 5, JOU-dokumenter
-./valider.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
+./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
 
 # Valider en trent modell
-./valider.sh modell=$SLADD_RUNS/uttrekk_4_jou_med_negative/weights/best.pt uttrekk=5 liste=jou
+./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_med_negative/weights/best.pt uttrekk=5 liste=jou
 
 # Valider en annen modell på et annet uttrekk/doctype
-./valider.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob
+./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob
 
 # Egendefinert navn på utmappen
-./valider.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou navn=prod_test
+./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou navn=prod_test
 ```
 
-Det er alt! Skriptet:
-- Bygger alle stier automatisk fra modellnavn, uttrekk-nr og doc_type
-- Sjekker at alle filer/mapper finnes før det starter
-- Viser en oppsummering av hva som kjøres
-- Navngir utmappen etter konvensjonen `{modell}_validert_pa_uttrekk_{nr}_{type}`
-
-### Full pipeline (YOLO + PaddleOCR)
-
-For å kjøre full pipeline (ikke bare YOLO), bruk `python -u $SLADD_RUN` direkte uten `--kun-yolo`:
+#### Full pipeline (`valider_full.sh`)
 
 ```bash
-python -u $SLADD_RUN \
-  --mappe $SLADD_UTTREKK/uttrekk_5/ \
-  --velg-fra-fil $SLADD_LISTER/uttrekk_5_jou.txt \
-  --yolo-vekter $SLADD_PRODVEKTER \
-  --csv --fasit --kun-feil \
-  --fasit-csv $SLADD_LABELS/uttrekk_5.csv \
-  --csv-ut $SLADD_VALIDERING/full_pipeline_uttrekk_5_jou/resultat.csv \
-  --png-mappe $SLADD_VALIDERING/full_pipeline_uttrekk_5_jou/feilbilder \
-  --resultat-mappe $SLADD_VALIDERING/full_pipeline_uttrekk_5_jou
+# Valider full produksjonslogikk (OCR + YOLO) på uttrekk 5
+./valider_full.sh uttrekk=5 liste=jou
+
+# Med egendefinert navn
+./valider_full.sh uttrekk=5 liste=jou navn=ocr-test
 ```
 
-OCR-cachen aktiveres automatisk. Første kjøring prosesserer alle dokumenter; påfølgende kjøringer med samme uttrekk hopper over PaddleOCR.
+OCR-cachen (`$SLADD_CACHE`) brukes automatisk. Første kjøring prosesserer alle dokumenter; påfølgende kjøringer med samme uttrekk hopper over PaddleOCR.
+
+#### Felles egenskaper
+
+Begge script:
+- Bygger alle stier automatisk fra uttrekk-nr og liste-navn
+- Sjekker at alle filer/mapper finnes før det starter
+- Viser en oppsummering av hva som kjøres
+- Kjører `--csv --fasit --kun-feil` (CSV-resultat, evaluering mot fasit, feilbilder)
 
 ---
 
@@ -206,12 +211,13 @@ rm -rf $SLADD_CACHE/uttrekk_5/ocr
 ## Filstruktur
 
 ```
-activate.sh      ← Source denne: aktiverer venv + laster variabler
-server.env       ← Globale stier (lastes av activate.sh)
-valider.sh       ← Snarvei for kun-YOLO-validering
-lag_liste.sh     ← Generer dokument-ID-lister fra metadata
-app/ocr_cache.py ← Per-dokument OCR-cache (les/skriv)
-train/Makefile   ← Treningspipeline
+activate.sh        ← Source denne: aktiverer venv + laster variabler
+server.env         ← Globale stier (lastes av activate.sh)
+valider_yolo.sh    ← Validering kun med YOLO
+valider_full.sh    ← Validering med full produksjonslogikk (OCR + YOLO)
+lag_liste.sh       ← Generer dokument-ID-lister fra metadata
+app/ocr_cache.py   ← Per-dokument OCR-cache (les/skriv)
+train/Makefile     ← Treningspipeline
 ```
 
 
