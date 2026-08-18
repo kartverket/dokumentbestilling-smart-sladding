@@ -194,8 +194,8 @@ def main():
                     lambda v: {"min_ratio": None, "maks_hoyde": v,
                                "maks_bredde": None, "maks_areal": None})
 
-    _sweep_en_param(fasit, pred, "MAKS_BREDDE_PT (alle dok, ikke bare e-tinglyst)",
-                    [50, 60, 70, 80, 90, 100, 120, 150],
+    _sweep_en_param(fasit, pred, "MAKS_BOKS_BREDDE_PT (universell, alle dok-typer)",
+                    [60, 80, 100, 120, 150, 200, 250],
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": v, "maks_areal": None})
 

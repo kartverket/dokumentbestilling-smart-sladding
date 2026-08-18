@@ -13,7 +13,7 @@ _APP = os.path.join(os.path.dirname(__file__), "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
-from config import MAKS_BREDDE_PT
+from config import MAKS_BREDDE_ELEKTRONISK_PT
 from csv_export import les_csv
 from evaluation import les_fasit, mal_overlapp
 from load_pdf import PDF_DPI, les_sider
@@ -173,9 +173,9 @@ def main():
     p.add_argument("--min-conf", type=float, default=None, metavar="CONF",
                    help="kast bokser som kun YOLO fant og som har conf under CONF "
                         "(paddle- og begge-bokser beholdes uansett)")
-    p.add_argument("--maks-bredde", type=float, nargs="?", const=MAKS_BREDDE_PT, default=None,
+    p.add_argument("--maks-bredde", type=float, nargs="?", const=MAKS_BREDDE_ELEKTRONISK_PT, default=None,
                    metavar="PT",
-                   help=f"kast bokser bredere enn PT punkter (uten verdi: {MAKS_BREDDE_PT} fra config)")
+                   help=f"kast bokser bredere enn PT punkter (uten verdi: {MAKS_BREDDE_ELEKTRONISK_PT} fra config)")
     args = p.parse_args()
 
     sladd_bokser = _les_boks_csv(args.csv, args.mappe, prod=args.prod)

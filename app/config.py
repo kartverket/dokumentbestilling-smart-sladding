@@ -1,14 +1,18 @@
 # ---- PDF-rendering -----------------------------------------
 PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, mer nøyaktig)
 
+# ---- Dimensjonsfiltre (gjelder alle kilder likt) ----------
+MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²)
+MIN_BOKS_RATIO     = 1.0       # bredde/høyde under dette er ikke FNR (fasit P01=1.69)
+MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde (fasit P99=33.6 pt)
+MAKS_BOKS_BREDDE_PT = 120      # absolutt maks bredde for alle dokumenter (fasit P99=73 pt)
+MAKS_BREDDE_ELEKTRONISK_PT = 50  # strengere maks bredde for elektronisk tinglyste
+
 # ---- YOLO --------------------------------------------------
 YOLO_CONF          = 0.12      # predict-terskel
 YOLO_CONF_UTEN_TEKST = 0.40   # krav når Paddle ikke leste noe i boksen
 YOLO_CONF_VERTIKAL = 0.90     # vertikale bokser (stående tekst)
 VERTIKAL_FAKTOR    = 1.3       # høyde > 1.3 × bredde regnes som vertikal
-MIN_BOKS_AREAL     = 965      # bokser med mindre areal regnes som støy
-MIN_BOKS_RATIO     = 1.0       # bredde/høyde under dette er ikke FNR (fasit P01=1.69)
-MAKS_BOKS_HOYDE_PT = 50        # bokser høyere enn dette (PDF-punkt) er feil-deteksjon (fasit P99=33.6)
 YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
 MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
 MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
@@ -24,7 +28,6 @@ SLADDE_SIFFER      = 5         # antall sifre som vises i sladde-boksen
 LUFT_X             = 0.35      # horisontal utvidelse (andel av sifferbredde)
 LUFT_Y             = 0.0       # vertikal utvidelse
 MAKS_HOYDE_FAKTOR  = 3.0       # sladde-høyde maks N × median sifferbredde
-MAKS_BREDDE_PT     = 50       # elektronisk tinglyst: bokser bredere enn dette (PDF-punkt) er feil-deteksjon
 
 # ---- Pipeline ----------------------------------------------
 DEDUP_OVERLAPP     = 0.5       # YOLO-boks regnes som "samme" når den dekker Paddle-boks så mye
