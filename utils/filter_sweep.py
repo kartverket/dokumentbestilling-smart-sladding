@@ -406,6 +406,13 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
     rader.sort(key=lambda x: sort_fn(x[:8]))
 
     # Vis topp 30 (med ov/rik-filter)
+    # Cache per-kilde conf-info
+    kilde_har_conf_map = {}
+    for k in kilde_liste:
+        rik_k = [p for p in riktige if p["kilde"] == k]
+        ov_k = [p for p in oversladdinger if p["kilde"] == k]
+        kilde_har_conf_map[k] = har_conf and any(p["conf"] is not None for p in rik_k + ov_k)
+
     n_vist = 0
     n_skjult = 0
     for rad in rader:
@@ -424,7 +431,7 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
             e_s = f"{min_e:g}" if min_e is not None else "–"
             h_s = f"{maks_h:g}" if maks_h is not None else "–"
             b_s = f"{maks_b:g}" if maks_b is not None else "–"
-            if har_conf:
+            if kilde_har_conf_map.get(kilde, False):
                 c_s = f"{c_t:g}" if c_t is not None else "–"
                 param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}/{c_s:>4}")
             else:
