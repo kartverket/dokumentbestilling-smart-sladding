@@ -1,12 +1,16 @@
 # ---- PDF-rendering -----------------------------------------
 PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, mer nøyaktig)
 
-# ---- Dimensjonsfiltre (gjelder alle kilder likt) ----------
-MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²)
-MIN_ELONGATION     = 1.5       # min max(w/h, h/w) — forkaster nesten-kvadratiske bokser (netto +17: 2 riktige, 19 oversladd fjernet)
-MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde (netto +18: 28 riktige, 46 oversladd fjernet)
-MAKS_BOKS_BREDDE_PT = 100      # absolutt maks bredde (netto +10: 9 riktige, 19 oversladd fjernet)
+# ---- Dimensjonsfiltre (gjelder paddle + yolo; «begge» er fritatt) ----------
+# «begge»-bokser bekreftet av begge modeller (98.1% presisjon) — filtreres ikke.
+# Høy-konfidens YOLO-bokser (conf ≥ YOLO_CONF_GEOMETRI_TERSKEL) er også fritatt.
+MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²) — gjelder alle
+MIN_ELONGATION     = 1.5       # min max(w/h, h/w) — forkaster nesten-kvadratiske bokser
+MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde i PDF-punkt
+MAKS_BOKS_BREDDE_PT = 120      # absolutt maks bredde (120 pt: netto +15, bedre ov/rik enn 100 pt)
 MAKS_BREDDE_ELEKTRONISK_PT = 50  # strengere maks bredde for elektronisk tinglyste
+
+YOLO_CONF_GEOMETRI_TERSKEL = 0.5  # YOLO-bokser med conf ≥ dette hopper over geometrifiltre
 
 # ---- YOLO --------------------------------------------------
 YOLO_CONF          = 0.12      # predict-terskel

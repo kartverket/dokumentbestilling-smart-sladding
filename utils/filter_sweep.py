@@ -447,7 +447,27 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
         print(f"  ({n_skjult} rader skjult med ov/rik ≤ {min_ov_rik:g})")
 
 
-# ── Hovedprogram ─────────────────────────────────────────────
+def _sweep_terskel(pred_liste, fasit, terskler):
+    """Viser hvordan baseline-statistikken endrer seg med overlapp-terskelen."""
+    print(f"\n{'─' * 95}")
+    print("Sweep: OVERLAPP-TERSKEL (baseline uten geometrifiltre)")
+    print(f"{'─' * 95}")
+    print(f"  {'Terskel':>8} │ {'Riktige':>8} {'Oversladd':>10} {'Uten fasit':>11} │"
+          f" {'Presisjon':>10} {'Tot. pred':>10}")
+    print(f"  {'─' * 8}─┼─{'─' * 30}─┼─{'─' * 20}")
+    for t in terskler:
+        # Nullstill riktig-flagg
+        for p in pred_liste:
+            p.pop("riktig", None)
+        n_rik, n_ov, n_uten = match_prediksjoner(pred_liste, fasit, t)
+        totalt = n_rik + n_ov
+        pres = n_rik / totalt * 100 if totalt else 0
+        markør = " ◀" if abs(t - 0.15) < 1e-9 else ""
+        print(f"  {t:>8.2f} │ {n_rik:>8} {n_ov:>10} {n_uten:>11} │"
+              f" {pres:>9.1f}% {totalt:>10}{markør}")
+
+
+
 
 def main():
     p = argparse.ArgumentParser(
@@ -539,16 +559,24 @@ def main():
     # ── Slå av terminal-output for sweep-tabeller ──
     tee._i_oppsummering = False
 
+    # ── Terskel-sweep (baseline) ──
+    _sweep_terskel(pred, fasit,
+                   [0.15, 0.25, 0.30, 0.35])
+
+    # Tilbakestill til valgt terskel etter terskel-sweep
+    for p in pred:
+        p.pop("riktig", None)
+    match_prediksjoner(pred, fasit, args.terskel)
+    riktige = [p for p in pred if p.get("riktig") is True]
+    oversladdinger = [p for p in pred if p.get("riktig") is False]
+
     # ── Enkeltparameter-sweeps ──
-    _sweep_en_param(riktige, oversladdinger,
-                    "MIN_BOKS_RATIO (w/h) — kun horisontal",
-                    [0.5, 0.7, 0.8, 1.0, 1.2, 1.5, 1.7, 2.0],
-                    lambda v: {"min_ratio": v, "maks_hoyde": None,
-                               "maks_bredde": None, "maks_areal": None})
+    # Merk: MIN_BOKS_RATIO (kun horisontal) er fjernet — overlapper med MIN_ELONGATION
+    # Merk: MAKS_AREAL_PT² er fjernet — dekkes av kombinasjonen høyde × bredde
 
     _sweep_en_param(riktige, oversladdinger,
                     "MIN_ELONGATION max(w/h, h/w) — begge retninger",
-                    [1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
+                    [1.1, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": None, "maks_areal": None,
                                "min_elongation": v})
@@ -565,12 +593,6 @@ def main():
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": v, "maks_areal": None})
 
-    _sweep_en_param(riktige, oversladdinger,
-                    "MAKS_AREAL_PT²",
-                    [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 5000],
-                    lambda v: {"min_ratio": None, "maks_hoyde": None,
-                               "maks_bredde": None, "maks_areal": v})
-
     # Confidence-terskel sweep (kun relevant om conf finnes)
     if any(p["conf"] is not None for p in pred):
         _sweep_en_param(riktige, oversladdinger,
@@ -582,7 +604,7 @@ def main():
                                    "min_elongation": 1.5, "conf_terskel": v})
 
     # ── Kombinasjons-sweep (samlet) ──
-    elong_verdier = [None, 1.5, 1.7, 2.0, 2.5, 3.0]
+    elong_verdier = [None, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0, 2.5, 3.0]
     hoyde_verdier = [None, 40, 50, 60, 80]
     bredde_verdier = [None, 80, 100, 120, 150]
     conf_verdier = [None, 0.5]

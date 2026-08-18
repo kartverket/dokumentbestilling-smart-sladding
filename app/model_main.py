@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import fitz
 import numpy as np
 
-from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
+from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 from orientering import finn_rotasjon, boks_tilbake
@@ -17,6 +17,14 @@ def _ta_tid(t, post):
     start = time.perf_counter()
     yield
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
+
+
+def _hopp_over_geometrifilter(kilde, conf):
+    """«begge»-bokser bekreftet av begge modeller → ingen geometrifilter.
+    Høy-konfidens YOLO-bokser → stol på modellen, ikke filtrer."""
+    if kilde == "begge":
+        return True
+    return conf is not None and conf >= YOLO_CONF_GEOMETRI_TERSKEL
 
 
 def _finn_bokser_kun_yolo(bilde_ocr):
@@ -43,12 +51,15 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, elektronisk_tinglyst=False):
             elif kilde := _godta_yolo_boks(tokens, yb, conf):
                 bokser.append([yb, kilde, round(conf, 3)])
 
-    # ── Dimensjonsfiltre (kildeagnostiske) ──────────────────────
+    # ── Dimensjonsfiltre (kildebevisste) ────────────────────────
+    # «begge» og høy-konfidens YOLO fritas — kun minimumsstørrelse gjelder alltid
     bokser = [par for par in bokser
-              if not er_for_liten(par[0])
-              and not har_feil_ratio(par[0])
-              and not er_for_hoy(par[0])
-              and not er_for_bred(par[0], elektronisk=elektronisk_tinglyst)]
+              if not er_for_liten(par[0]) and (
+                  _hopp_over_geometrifilter(par[1], par[2])
+                  or (not har_feil_ratio(par[0])
+                      and not er_for_hoy(par[0])
+                      and not er_for_bred(par[0], elektronisk=elektronisk_tinglyst))
+              )]
 
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
