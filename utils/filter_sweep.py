@@ -212,14 +212,15 @@ def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
               f" {netto:>+7d} {pres_etter:>14.1f}%")
 
 
-def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v):
+def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, sort_key="netto"):
     # Utgangs-presisjon
     totalt_foer = len(riktige) + len(oversladdinger)
     pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
 
     print(f"\n{'═' * 110}")
     print(f"KOMBINASJONS-SWEEP  (utgangspunkt: {len(riktige)} riktige + "
-          f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)")
+          f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)"
+          f"  [sortert etter: {sort_key}]")
     print(f"{'═' * 110}")
     print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
           f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
@@ -249,7 +250,15 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v):
         rader.append((netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
                       pres_etter, e_str, h_str, b_str))
 
-    rader.sort(key=lambda x: (-x[0], x[1]))
+    # Indeks-mapping: netto=0, rk_pct=1, ov_pct=2, n_rk=3, n_ov=4,
+    #                 rik_etter=5, ov_etter=6, pres_etter=7
+    sort_fns = {
+        "netto": lambda x: (-x[0], x[1]),
+        "ov.fj": lambda x: (-x[4], x[1]),
+        "rik.fj": lambda x: (x[3], -x[4]),
+        "pres": lambda x: (-x[7], -x[0]),
+    }
+    rader.sort(key=sort_fns.get(sort_key, sort_fns["netto"]))
 
     for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
          pres_etter, e_str, h_str, b_str) in rader:
@@ -270,6 +279,9 @@ def main():
                    help="Resultat-CSV fra modellen (pikselkoordinater)")
     p.add_argument("--terskel", type=float, default=0.15,
                    help="Overlapp-terskel for å klassifisere prediksjon som riktig (default: 0.15)")
+    p.add_argument("--sort", default="netto",
+                   choices=["netto", "ov.fj", "rik.fj", "pres"],
+                   help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
     # Bakoverkompatibilitet
     p.add_argument("--csv", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
@@ -351,7 +363,8 @@ def main():
     bredde_verdier = [None, 80, 100, 120]
 
     _sweep_kombinasjoner(riktige, oversladdinger,
-                         elong_verdier, hoyde_verdier, bredde_verdier)
+                         elong_verdier, hoyde_verdier, bredde_verdier,
+                         sort_key=args.sort)
 
 
 if __name__ == "__main__":
