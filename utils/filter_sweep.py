@@ -24,7 +24,9 @@ import argparse
 import csv
 import os
 import re
+import sys
 from collections import defaultdict
+from datetime import datetime
 from itertools import product
 
 SKALA = 300 / 72.0   # PDF-punkt → piksel ved 300 DPI
@@ -446,12 +448,42 @@ def main():
                    help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
     p.add_argument("--min-ov-rik", type=float, default=None,
                    help="Vis kun rader der ov.fj/rik.fj > denne verdien (f.eks. 1.0)")
+    p.add_argument("--ut", default=None, metavar="FIL",
+                   help="Skriv resultat til fil (default: auto-generert filnavn)")
     # Bakoverkompatibilitet
     p.add_argument("--csv", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
 
     if args.csv and not args.fasit_csv:
         args.fasit_csv = args.csv
+
+    # ── Output-fil ───────────────────────────────────────────
+    if args.ut is None:
+        tidsstempel = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        ut_fil = f"filter_sweep_{tidsstempel}.txt"
+    else:
+        ut_fil = args.ut
+
+    # Tee: skriv til fil + stdout for oppsummering
+    class _Tee:
+        """Skriver til fil, printer kun oppsummeringslinjer til terminal."""
+        def __init__(self, filobj, terminal):
+            self.fil = filobj
+            self.terminal = terminal
+            self._i_oppsummering = True  # start med oppsummering synlig
+
+        def write(self, tekst):
+            self.fil.write(tekst)
+            if self._i_oppsummering:
+                self.terminal.write(tekst)
+
+        def flush(self):
+            self.fil.flush()
+            self.terminal.flush()
+
+    fil = open(ut_fil, "w", encoding="utf-8")
+    tee = _Tee(fil, sys.stdout)
+    sys.stdout = tee
 
     # Last data
     fasit = les_fasit(args.fasit_csv)
@@ -488,6 +520,9 @@ def main():
         n_ov_k = sum(1 for p in oversladdinger if p["kilde"] == kilde)
         n_tot_k = pred_kilder[kilde]
         print(f"    {kilde:>8}: {n_ov_k:>5} / {n_tot_k:>5} ({n_ov_k/n_tot_k*100:.1f}%)")
+
+    # ── Slå av terminal-output for sweep-tabeller ──
+    tee._i_oppsummering = False
 
     # ── Enkeltparameter-sweeps ──
     _sweep_en_param(riktige, oversladdinger,
@@ -569,6 +604,12 @@ def main():
                             elong_verdier, hoyde_verdier, bredde_verdier,
                             conf_v=aktiv_conf,
                             sort_key=args.sort, min_ov_rik=args.min_ov_rik)
+
+    # ── Lukk output-fil og vis melding ──
+    sys.stdout = tee.terminal
+    fil.close()
+    filstr = os.path.getsize(ut_fil)
+    print(f"\n✓ Sweep-resultater skrevet til: {ut_fil} ({filstr // 1024} KB)")
 
 
 if __name__ == "__main__":
