@@ -224,8 +224,8 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, so
     print(f"{'═' * 110}")
     print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
           f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
-          f" {'netto':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
-    print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 35}")
+          f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
+    print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
 
     rader = []
     for min_e, maks_h, maks_b in product(elong_v, hoyde_v, bredde_v):
@@ -257,15 +257,17 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, so
         "ov.fj": lambda x: (-x[4], x[1]),
         "rik.fj": lambda x: (x[3], -x[4]),
         "pres": lambda x: (-x[7], -x[0]),
+        "ov/rik": lambda x: (-(x[4] / x[3] if x[3] > 0 else float('inf')), x[1]),
     }
     rader.sort(key=sort_fns.get(sort_key, sort_fns["netto"]))
 
     for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
          pres_etter, e_str, h_str, b_str) in rader:
         markør = " ◀" if rk_pct == 0 and netto > 0 else ""
+        ratio_str = f"{n_ov / n_rk:.1f}" if n_rk > 0 else "∞" if n_ov > 0 else "–"
         print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
               f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
-              f" {netto:>+7d} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
+              f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
 
 
 # ── Hovedprogram ─────────────────────────────────────────────
@@ -280,7 +282,7 @@ def main():
     p.add_argument("--terskel", type=float, default=0.15,
                    help="Overlapp-terskel for å klassifisere prediksjon som riktig (default: 0.15)")
     p.add_argument("--sort", default="netto",
-                   choices=["netto", "ov.fj", "rik.fj", "pres"],
+                   choices=["netto", "ov.fj", "rik.fj", "pres", "ov/rik"],
                    help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
     # Bakoverkompatibilitet
     p.add_argument("--csv", default=None, help=argparse.SUPPRESS)
