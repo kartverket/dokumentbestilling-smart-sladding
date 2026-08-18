@@ -325,15 +325,17 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
     if conf_v is None:
         conf_v = [None]
 
-    # Bygg resultater per kilde
+    # Bygg resultater per kilde (kun conf-sweep for kilder med conf-data)
     per_kilde_res = {}
     for kilde in kilder:
         rik_k = [p for p in riktige if p["kilde"] == kilde]
         ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
         if not rik_k and not ov_k:
             continue
+        kilde_har_conf = any(p["conf"] is not None for p in rik_k + ov_k)
+        kilde_conf = conf_v if kilde_har_conf else [None]
         resultater = []
-        for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
+        for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, kilde_conf):
             n_rk = _tell_filtrerte(rik_k, min_ratio=None, maks_hoyde=maks_h,
                                    maks_bredde=maks_b, maks_areal=None,
                                    min_elongation=min_e, conf_terskel=c_t)
@@ -361,12 +363,18 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
           f"  [sortert etter: {sort_key}]")
     print(f"{'═' * 130}")
 
-    # Overskrift
+    # Overskrift — vis conf-kolumn per kilde kun om den kilden har conf
     har_conf = any(c is not None for c in conf_v)
-    if har_conf:
-        kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b/c)" for k in kilde_liste)
-    else:
-        kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b)" for k in kilde_liste)
+    kilde_hdrs_list = []
+    for k in kilde_liste:
+        rik_k = [p for p in riktige if p["kilde"] == k]
+        ov_k = [p for p in oversladdinger if p["kilde"] == k]
+        k_har_conf = har_conf and any(p["conf"] is not None for p in rik_k + ov_k)
+        if k_har_conf:
+            kilde_hdrs_list.append(f"{k:>8} (e/h/b/c)")
+        else:
+            kilde_hdrs_list.append(f"{k:>8} (e/h/b)")
+    kilde_hdrs = "  │  ".join(kilde_hdrs_list)
     print(f"  {kilde_hdrs}  │ {'rik.fj':>7} {'ov.fj':>7} {'netto':>7}"
           f" {'ov/rik':>7} {'pres%':>7}")
     sep_len = len(kilde_liste) * 26 + 45
