@@ -180,6 +180,17 @@ def _tell_filtrerte(bokser, **kwargs):
     return sum(1 for b in bokser if _filtrert(b, **kwargs))
 
 
+# ── Sortering ────────────────────────────────────────────────
+
+SORT_FNS = {
+    "netto": lambda x: (-x[0], x[1]),
+    "ov.fj": lambda x: (-x[4], x[1]),
+    "rik.fj": lambda x: (x[3], -x[4]),
+    "pres": lambda x: (-x[7], -x[0]),
+    "ov/rik": lambda x: (-(x[4] / x[3] if x[3] > 0 else float('inf')), x[1]),
+}
+
+
 # ── Sweeps ───────────────────────────────────────────────────
 
 def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
@@ -212,16 +223,18 @@ def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
               f" {netto:>+7d} {pres_etter:>14.1f}%")
 
 
-def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, sort_key="netto"):
-    # Utgangs-presisjon
+def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v,
+                         sort_key="netto", tittel=None):
+    """Sweep alle kombinasjoner av elongation/høyde/bredde."""
     totalt_foer = len(riktige) + len(oversladdinger)
     pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
 
-    print(f"\n{'═' * 110}")
-    print(f"KOMBINASJONS-SWEEP  (utgangspunkt: {len(riktige)} riktige + "
+    overskrift = tittel or "KOMBINASJONS-SWEEP"
+    print(f"\n{'═' * 120}")
+    print(f"{overskrift}  (utgangspunkt: {len(riktige)} riktige + "
           f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)"
           f"  [sortert etter: {sort_key}]")
-    print(f"{'═' * 110}")
+    print(f"{'═' * 120}")
     print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
           f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
           f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
@@ -250,16 +263,7 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, so
         rader.append((netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
                       pres_etter, e_str, h_str, b_str))
 
-    # Indeks-mapping: netto=0, rk_pct=1, ov_pct=2, n_rk=3, n_ov=4,
-    #                 rik_etter=5, ov_etter=6, pres_etter=7
-    sort_fns = {
-        "netto": lambda x: (-x[0], x[1]),
-        "ov.fj": lambda x: (-x[4], x[1]),
-        "rik.fj": lambda x: (x[3], -x[4]),
-        "pres": lambda x: (-x[7], -x[0]),
-        "ov/rik": lambda x: (-(x[4] / x[3] if x[3] > 0 else float('inf')), x[1]),
-    }
-    rader.sort(key=sort_fns.get(sort_key, sort_fns["netto"]))
+    rader.sort(key=SORT_FNS.get(sort_key, SORT_FNS["netto"]))
 
     for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
          pres_etter, e_str, h_str, b_str) in rader:
@@ -268,6 +272,96 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v, so
         print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
               f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
               f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
+
+
+def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredde_v,
+                        sort_key="netto"):
+    """Sweep med uavhengige filterparametre per kilde.
+
+    Finner topp-kandidater per kilde, deretter kombinerer på tvers
+    for å finne optimal konfigurasjon med ulike filtre per kilde."""
+
+    # Bygg resultater per kilde
+    per_kilde_res = {}
+    for kilde in kilder:
+        rik_k = [p for p in riktige if p["kilde"] == kilde]
+        ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
+        if not rik_k and not ov_k:
+            continue
+        resultater = []
+        for min_e, maks_h, maks_b in product(elong_v, hoyde_v, bredde_v):
+            n_rk = _tell_filtrerte(rik_k, min_ratio=None, maks_hoyde=maks_h,
+                                   maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+            n_ov = _tell_filtrerte(ov_k, min_ratio=None, maks_hoyde=maks_h,
+                                   maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+            resultater.append((min_e, maks_h, maks_b, n_rk, n_ov))
+        # Sortér: maks netto (ov-rik) med minimalt riktige-tap
+        resultater.sort(key=lambda x: (-(x[4] - x[3]), x[3]))
+        per_kilde_res[kilde] = resultater[:8]
+
+    if len(per_kilde_res) < 2:
+        return
+
+    kilde_liste = sorted(per_kilde_res.keys())
+    kandidat_lister = [per_kilde_res[k] for k in kilde_liste]
+
+    totalt_foer = len(riktige) + len(oversladdinger)
+    pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
+
+    print(f"\n{'═' * 130}")
+    print(f"KRYSS-KILDE SWEEP  (uavhengige parametre per kilde)")
+    print(f"  Utgangspunkt: {len(riktige)} riktige + {len(oversladdinger)} oversladd"
+          f" = {totalt_foer} pred, presisjon {pres_foer:.1f}%"
+          f"  [sortert etter: {sort_key}]")
+    print(f"{'═' * 130}")
+
+    # Overskrift
+    kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b)" for k in kilde_liste)
+    print(f"  {kilde_hdrs}  │ {'rik.fj':>7} {'ov.fj':>7} {'netto':>7}"
+          f" {'ov/rik':>7} {'pres%':>7}")
+    sep_len = len(kilde_liste) * 22 + 45
+    print(f"  {'─' * sep_len}")
+
+    rader = []
+    for kombo in product(*kandidat_lister):
+        tot_rk = 0
+        tot_ov = 0
+        params = []
+        for i, kilde in enumerate(kilde_liste):
+            min_e, maks_h, maks_b, n_rk_k, n_ov_k = kombo[i]
+            tot_rk += n_rk_k
+            tot_ov += n_ov_k
+            params.append((kilde, min_e, maks_h, maks_b))
+
+        netto = tot_ov - tot_rk
+        rk_pct = tot_rk / len(riktige) * 100 if riktige else 0
+        rik_etter = len(riktige) - tot_rk
+        ov_etter = len(oversladdinger) - tot_ov
+        totalt_etter = rik_etter + ov_etter
+        pres_etter = rik_etter / totalt_etter * 100 if totalt_etter > 0 else 0
+
+        rader.append((netto, rk_pct, 0, tot_rk, tot_ov, rik_etter, ov_etter,
+                      pres_etter, params))
+
+    # Bruk samme sort-logikk (indeks 0-7 matcher SORT_FNS)
+    sort_fn = SORT_FNS.get(sort_key, SORT_FNS["netto"])
+    rader.sort(key=lambda x: sort_fn(x[:8]))
+
+    # Vis topp 30
+    for rad in rader[:30]:
+        netto, rk_pct, _, tot_rk, tot_ov, rik_etter, ov_etter, pres_etter, params = rad
+        ratio_str = f"{tot_ov / tot_rk:.1f}" if tot_rk > 0 else "∞" if tot_ov > 0 else "–"
+        param_strs = []
+        for kilde, min_e, maks_h, maks_b in params:
+            e_s = f"{min_e:g}" if min_e is not None else "–"
+            h_s = f"{maks_h:g}" if maks_h is not None else "–"
+            b_s = f"{maks_b:g}" if maks_b is not None else "–"
+            param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}")
+        kilde_info = "  │  ".join(
+            f"{k:>8} {ps}" for (k, _, _, _), ps in zip(params, param_strs))
+        markør = " ◀" if rk_pct == 0 and netto > 0 else ""
+        print(f"  {kilde_info}  │ {tot_rk:>7} {tot_ov:>7} {netto:>+7d}"
+              f" {ratio_str:>7} {pres_etter:>6.1f}%{markør}")
 
 
 # ── Hovedprogram ─────────────────────────────────────────────
@@ -359,7 +453,7 @@ def main():
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": None, "maks_areal": v})
 
-    # ── Kombinasjons-sweep ──
+    # ── Kombinasjons-sweep (samlet) ──
     elong_verdier = [None, 1.5, 2.0, 2.5]
     hoyde_verdier = [None, 40, 50, 60]
     bredde_verdier = [None, 80, 100, 120]
@@ -368,7 +462,24 @@ def main():
                          elong_verdier, hoyde_verdier, bredde_verdier,
                          sort_key=args.sort)
 
+    # ── Per-kilde kombinasjons-sweep ──
+    kilder = sorted(set(p["kilde"] for p in pred))
+    if len(kilder) > 1:
+        for kilde in kilder:
+            rik_k = [p for p in riktige if p["kilde"] == kilde]
+            ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
+            if not rik_k and not ov_k:
+                continue
+            _sweep_kombinasjoner(rik_k, ov_k,
+                                 elong_verdier, hoyde_verdier, bredde_verdier,
+                                 sort_key=args.sort,
+                                 tittel=f"PER KILDE: {kilde.upper()}")
+
+        # ── Kryssvalidert sweep: uavhengige parametre per kilde ──
+        _sweep_kryss_kilder(riktige, oversladdinger, kilder,
+                            elong_verdier, hoyde_verdier, bredde_verdier,
+                            sort_key=args.sort)
+
 
 if __name__ == "__main__":
     main()
-
