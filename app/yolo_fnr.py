@@ -5,9 +5,11 @@ import numpy as np
 from ultralytics import YOLO
 
 from config import (
-    YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,MIN_BOKS_AREAL)
+    YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
+    MIN_BOKS_AREAL, MIN_BOKS_RATIO, MAKS_BOKS_HOYDE_PT, PDF_DPI)
 
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
+MAKS_BOKS_HOYDE_PX = MAKS_BOKS_HOYDE_PT * PDF_DPI / 72.0
 
 _modell = None
 _vekter_sti = YOLO_VEKTER
@@ -73,6 +75,19 @@ def er_vertikal(boks):
 def er_for_liten(boks):
     x0, y0, x1, y1 = boks[:4]
     return (x1 - x0) * (y1 - y0) < MIN_BOKS_AREAL
+
+
+def er_for_hoy(boks):
+    x0, y0, x1, y1 = boks[:4]
+    return (y1 - y0) > MAKS_BOKS_HOYDE_PX
+
+
+def har_feil_ratio(boks):
+    x0, y0, x1, y1 = boks[:4]
+    w, h = x1 - x0, y1 - y0
+    if h <= 0:
+        return True
+    return (w / h) < MIN_BOKS_RATIO
 
 
 def overlapp_andel_boks(a, b):

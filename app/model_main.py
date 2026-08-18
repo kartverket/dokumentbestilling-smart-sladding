@@ -8,7 +8,7 @@ from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens, er_for_bred
 from orientering import finn_rotasjon, boks_tilbake
-from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten
+from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten, er_for_hoy, har_feil_ratio
 from ocr_cache import les_cache, skriv_cache
 
 
@@ -23,7 +23,7 @@ def _finn_bokser_kun_yolo(bilde_ocr):
     bokser = []
     for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
         yb = (x0, y0, x1, y1)
-        if not er_for_liten(yb):
+        if not er_for_liten(yb) and not er_for_hoy(yb) and not har_feil_ratio(yb):
             bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3)])
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
@@ -44,6 +44,12 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, elektronisk_tinglyst=False):
 
     # fjern for smaa bokser uansett kilde (paddle/yolo/begge)
     bokser = [par for par in bokser if not er_for_liten(par[0])]
+
+    # fjern bokser med feil proporsjoner (høyere enn brede = ikke FNR)
+    bokser = [par for par in bokser if not har_feil_ratio(par[0])]
+
+    # fjern bokser som er urimelig høye (absolutt tak)
+    bokser = [par for par in bokser if not er_for_hoy(par[0])]
 
     # uvanlig brede bokser er feil-deteksjon for elektroniske, ikke FNR
     if elektronisk_tinglyst:
