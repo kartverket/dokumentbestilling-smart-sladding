@@ -6,7 +6,7 @@ from ultralytics import YOLO
 
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
-    MIN_BOKS_AREAL, MAKS_BOKS_HOYDE_PT, MAKS_BOKS_BREDDE_PT,
+    MIN_BOKS_AREAL, MIN_ELONGATION, MAKS_BOKS_HOYDE_PT, MAKS_BOKS_BREDDE_PT,
     MAKS_BREDDE_ELEKTRONISK_PT, PDF_DPI)
 
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
@@ -78,6 +78,16 @@ def er_vertikal(boks):
 def er_for_liten(boks):
     x0, y0, x1, y1 = boks[:4]
     return (x1 - x0) * (y1 - y0) < MIN_BOKS_AREAL
+
+
+def har_feil_ratio(boks):
+    """Forkaster nesten-kvadratiske bokser (elongation < MIN_ELONGATION)."""
+    x0, y0, x1, y1 = boks[:4]
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        return True
+    elongation = max(w / h, h / w)
+    return elongation < MIN_ELONGATION
 
 
 def er_for_hoy(boks):

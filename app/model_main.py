@@ -8,7 +8,7 @@ from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 from orientering import finn_rotasjon, boks_tilbake
-from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten, er_for_hoy, er_for_bred
+from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten, har_feil_ratio, er_for_hoy, er_for_bred
 from ocr_cache import les_cache, skriv_cache
 
 
