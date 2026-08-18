@@ -149,6 +149,13 @@ def match_prediksjoner(pred_liste, fasit, terskel=0.15):
         else:
             n_oversladd += 1
 
+    # Sider uten fasit = ingen FNR der, alt er oversladding
+    for p in pred_liste:
+        if p["riktig"] is None:
+            p["riktig"] = False
+            n_oversladd += 1
+            n_uten_fasit += 1
+
     return n_riktig, n_oversladd, n_uten_fasit
 
 
@@ -287,15 +294,14 @@ def main():
     # Splitt i grupper
     riktige = [p for p in pred if p.get("riktig") is True]
     oversladdinger = [p for p in pred if p.get("riktig") is False]
-    uten_fasit = [p for p in pred if p.get("riktig") is None]
 
     totalt = len(riktige) + len(oversladdinger)
     pres = len(riktige) / totalt * 100 if totalt else 0
     print(f"\nResultat:")
     print(f"  Riktige prediksjoner (treffer fasit):   {len(riktige)}")
     print(f"  Oversladdinger (ingen fasit-treff):     {len(oversladdinger)}")
-    print(f"  Uten fasit (kan ikke vurderes):         {len(uten_fasit)}")
-    print(f"  Presisjon (riktige / vurderte):         {pres:.1f}%")
+    print(f"    herav på sider uten fasit:            {n_uten}")
+    print(f"  Presisjon (riktige / totalt):           {pres:.1f}%")
 
     # Vis oversladdinger per kilde
     print(f"\n  Oversladdinger per kilde:")
