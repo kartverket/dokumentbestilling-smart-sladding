@@ -7,11 +7,17 @@ Sweeper deretter filterkonfigurasjoner og måler:
   - Riktige fjernet   = recall-tap
   - Oversladdinger fjernet = oversladding-reduksjon
 
+Filtrering baseres på geometriske egenskaper (elongation, høyde, bredde, areal)
+og kan gated av YOLO-confidence: prediksjoner med conf ≥ conf_terskel beholdes
+uansett geometri (vi stoler på høy-confidence-deteksjoner).
+
 Kjør:
-    python utils/filter_sweep.py \
-        --fasit-csv /path/to/labels.csv \
-        --res-csv /path/to/resultat.csv \
-        --terskel 0.15
+    python utils/filter_sweep.py \\
+        --fasit-csv /path/to/labels.csv \\
+        --res-csv /path/to/resultat.csv \\
+        --terskel 0.15 \\
+        --sort ov/rik \\
+        --min-ov-rik 2.0
 """
 
 import argparse
@@ -162,7 +168,11 @@ def match_prediksjoner(pred_liste, fasit, terskel=0.15):
 
 # ── Filtrering ───────────────────────────────────────────────
 
-def _filtrert(p, min_ratio, maks_hoyde, maks_bredde, maks_areal, min_elongation=None):
+def _filtrert(p, min_ratio, maks_hoyde, maks_bredde, maks_areal,
+              min_elongation=None, conf_terskel=None):
+    # Høy confidence → stol på prediksjonen, ikke filtrer
+    if conf_terskel is not None and p["conf"] is not None and p["conf"] >= conf_terskel:
+        return False
     if min_ratio is not None and p["ratio"] < min_ratio:
         return True
     if min_elongation is not None and p["elongation"] < min_elongation:
@@ -224,28 +234,41 @@ def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
 
 
 def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v,
-                         sort_key="netto", tittel=None):
-    """Sweep alle kombinasjoner av elongation/høyde/bredde."""
+                         conf_v=None, sort_key="netto", tittel=None, min_ov_rik=None):
+    """Sweep alle kombinasjoner av elongation/høyde/bredde (og evt. conf_terskel)."""
     totalt_foer = len(riktige) + len(oversladdinger)
     pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
 
+    if conf_v is None:
+        conf_v = [None]
+
     overskrift = tittel or "KOMBINASJONS-SWEEP"
-    print(f"\n{'═' * 120}")
+    filter_info = f"  [filter: ov/rik > {min_ov_rik:g}]" if min_ov_rik else ""
+    print(f"\n{'═' * 130}")
     print(f"{overskrift}  (utgangspunkt: {len(riktige)} riktige + "
           f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)"
-          f"  [sortert etter: {sort_key}]")
-    print(f"{'═' * 120}")
-    print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
-          f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
-          f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
-    print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
+          f"  [sortert etter: {sort_key}]{filter_info}")
+    print(f"{'═' * 130}")
+    har_conf = any(c is not None for c in conf_v)
+    if har_conf:
+        print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} {'conf≥':>6} │"
+              f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
+              f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
+        print(f"  {'─' * 28}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
+    else:
+        print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
+              f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
+              f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
+        print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
 
     rader = []
-    for min_e, maks_h, maks_b in product(elong_v, hoyde_v, bredde_v):
+    for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
         n_rk = _tell_filtrerte(riktige, min_ratio=None, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+                               maks_bredde=maks_b, maks_areal=None,
+                               min_elongation=min_e, conf_terskel=c_t)
         n_ov = _tell_filtrerte(oversladdinger, min_ratio=None, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+                               maks_bredde=maks_b, maks_areal=None,
+                               min_elongation=min_e, conf_terskel=c_t)
 
         rk_pct = n_rk / len(riktige) * 100 if riktige else 0
         ov_pct = n_ov / len(oversladdinger) * 100 if oversladdinger else 0
@@ -259,27 +282,46 @@ def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v,
         e_str = f"{min_e:g}" if min_e is not None else "av"
         h_str = f"{maks_h:g}" if maks_h is not None else "av"
         b_str = f"{maks_b:g}" if maks_b is not None else "av"
+        c_str = f"{c_t:g}" if c_t is not None else "av"
 
         rader.append((netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-                      pres_etter, e_str, h_str, b_str))
+                      pres_etter, e_str, h_str, b_str, c_str))
 
     rader.sort(key=SORT_FNS.get(sort_key, SORT_FNS["netto"]))
 
+    n_skjult = 0
     for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-         pres_etter, e_str, h_str, b_str) in rader:
+         pres_etter, e_str, h_str, b_str, c_str) in rader:
+        # Filtrer på ov/rik-ratio
+        if min_ov_rik is not None:
+            ov_rik_val = (n_ov / n_rk) if n_rk > 0 else float('inf') if n_ov > 0 else 0
+            if ov_rik_val <= min_ov_rik:
+                n_skjult += 1
+                continue
         markør = " ◀" if rk_pct == 0 and netto > 0 else ""
         ratio_str = f"{n_ov / n_rk:.1f}" if n_rk > 0 else "∞" if n_ov > 0 else "–"
-        print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
-              f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
-              f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
+        if har_conf:
+            print(f"  {e_str:>6} {h_str:>6} {b_str:>7} {c_str:>6} │"
+                  f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
+                  f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
+        else:
+            print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
+                  f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
+                  f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
+
+    if n_skjult:
+        print(f"  ({n_skjult} rader skjult med ov/rik ≤ {min_ov_rik:g})")
 
 
 def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredde_v,
-                        sort_key="netto"):
+                        conf_v=None, sort_key="netto", min_ov_rik=None):
     """Sweep med uavhengige filterparametre per kilde.
 
     Finner topp-kandidater per kilde, deretter kombinerer på tvers
     for å finne optimal konfigurasjon med ulike filtre per kilde."""
+
+    if conf_v is None:
+        conf_v = [None]
 
     # Bygg resultater per kilde
     per_kilde_res = {}
@@ -289,14 +331,16 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
         if not rik_k and not ov_k:
             continue
         resultater = []
-        for min_e, maks_h, maks_b in product(elong_v, hoyde_v, bredde_v):
+        for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
             n_rk = _tell_filtrerte(rik_k, min_ratio=None, maks_hoyde=maks_h,
-                                   maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+                                   maks_bredde=maks_b, maks_areal=None,
+                                   min_elongation=min_e, conf_terskel=c_t)
             n_ov = _tell_filtrerte(ov_k, min_ratio=None, maks_hoyde=maks_h,
-                                   maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
-            resultater.append((min_e, maks_h, maks_b, n_rk, n_ov))
+                                   maks_bredde=maks_b, maks_areal=None,
+                                   min_elongation=min_e, conf_terskel=c_t)
+            resultater.append((min_e, maks_h, maks_b, c_t, n_rk, n_ov))
         # Sortér: maks netto (ov-rik) med minimalt riktige-tap
-        resultater.sort(key=lambda x: (-(x[4] - x[3]), x[3]))
+        resultater.sort(key=lambda x: (-(x[5] - x[4]), x[4]))
         per_kilde_res[kilde] = resultater[:8]
 
     if len(per_kilde_res) < 2:
@@ -316,10 +360,14 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
     print(f"{'═' * 130}")
 
     # Overskrift
-    kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b)" for k in kilde_liste)
+    har_conf = any(c is not None for c in conf_v)
+    if har_conf:
+        kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b/c)" for k in kilde_liste)
+    else:
+        kilde_hdrs = "  │  ".join(f"{k:>8} (e/h/b)" for k in kilde_liste)
     print(f"  {kilde_hdrs}  │ {'rik.fj':>7} {'ov.fj':>7} {'netto':>7}"
           f" {'ov/rik':>7} {'pres%':>7}")
-    sep_len = len(kilde_liste) * 22 + 45
+    sep_len = len(kilde_liste) * 26 + 45
     print(f"  {'─' * sep_len}")
 
     rader = []
@@ -328,10 +376,10 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
         tot_ov = 0
         params = []
         for i, kilde in enumerate(kilde_liste):
-            min_e, maks_h, maks_b, n_rk_k, n_ov_k = kombo[i]
+            min_e, maks_h, maks_b, c_t, n_rk_k, n_ov_k = kombo[i]
             tot_rk += n_rk_k
             tot_ov += n_ov_k
-            params.append((kilde, min_e, maks_h, maks_b))
+            params.append((kilde, min_e, maks_h, maks_b, c_t))
 
         netto = tot_ov - tot_rk
         rk_pct = tot_rk / len(riktige) * 100 if riktige else 0
@@ -347,21 +395,39 @@ def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredd
     sort_fn = SORT_FNS.get(sort_key, SORT_FNS["netto"])
     rader.sort(key=lambda x: sort_fn(x[:8]))
 
-    # Vis topp 30
-    for rad in rader[:30]:
+    # Vis topp 30 (med ov/rik-filter)
+    n_vist = 0
+    n_skjult = 0
+    for rad in rader:
+        if n_vist >= 30:
+            break
         netto, rk_pct, _, tot_rk, tot_ov, rik_etter, ov_etter, pres_etter, params = rad
+        # Filtrer på ov/rik-ratio
+        if min_ov_rik is not None:
+            ov_rik_val = (tot_ov / tot_rk) if tot_rk > 0 else float('inf') if tot_ov > 0 else 0
+            if ov_rik_val <= min_ov_rik:
+                n_skjult += 1
+                continue
         ratio_str = f"{tot_ov / tot_rk:.1f}" if tot_rk > 0 else "∞" if tot_ov > 0 else "–"
         param_strs = []
-        for kilde, min_e, maks_h, maks_b in params:
+        for kilde, min_e, maks_h, maks_b, c_t in params:
             e_s = f"{min_e:g}" if min_e is not None else "–"
             h_s = f"{maks_h:g}" if maks_h is not None else "–"
             b_s = f"{maks_b:g}" if maks_b is not None else "–"
-            param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}")
+            if har_conf:
+                c_s = f"{c_t:g}" if c_t is not None else "–"
+                param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}/{c_s:>4}")
+            else:
+                param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}")
         kilde_info = "  │  ".join(
-            f"{k:>8} {ps}" for (k, _, _, _), ps in zip(params, param_strs))
+            f"{k:>8} {ps}" for (k, _, _, _, _), ps in zip(params, param_strs))
         markør = " ◀" if rk_pct == 0 and netto > 0 else ""
         print(f"  {kilde_info}  │ {tot_rk:>7} {tot_ov:>7} {netto:>+7d}"
               f" {ratio_str:>7} {pres_etter:>6.1f}%{markør}")
+        n_vist += 1
+
+    if n_skjult:
+        print(f"  ({n_skjult} rader skjult med ov/rik ≤ {min_ov_rik:g})")
 
 
 # ── Hovedprogram ─────────────────────────────────────────────
@@ -378,6 +444,8 @@ def main():
     p.add_argument("--sort", default="netto",
                    choices=["netto", "ov.fj", "rik.fj", "pres", "ov/rik"],
                    help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
+    p.add_argument("--min-ov-rik", type=float, default=None,
+                   help="Vis kun rader der ov.fj/rik.fj > denne verdien (f.eks. 1.0)")
     # Bakoverkompatibilitet
     p.add_argument("--csv", default=None, help=argparse.SUPPRESS)
     args = p.parse_args()
@@ -453,14 +521,30 @@ def main():
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": None, "maks_areal": v})
 
+    # Confidence-terskel sweep (kun relevant om conf finnes)
+    if any(p["conf"] is not None for p in pred):
+        _sweep_en_param(riktige, oversladdinger,
+                        "CONF_TERSKEL (conf≥V → behold uansett geometri, "
+                        "kombinert med e=1.5/h=50/b=120)",
+                        [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                        lambda v: {"min_ratio": None, "maks_hoyde": 50,
+                                   "maks_bredde": 120, "maks_areal": None,
+                                   "min_elongation": 1.5, "conf_terskel": v})
+
     # ── Kombinasjons-sweep (samlet) ──
-    elong_verdier = [None, 1.5, 2.0, 2.5]
-    hoyde_verdier = [None, 40, 50, 60]
-    bredde_verdier = [None, 80, 100, 120]
+    elong_verdier = [None, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]
+    hoyde_verdier = [None, 30, 35, 40, 45, 50, 60, 80]
+    bredde_verdier = [None, 60, 80, 100, 120, 150, 200]
+    conf_verdier = [None, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+    # Sjekk om det finnes conf-verdier i dataene
+    har_conf_data = any(p["conf"] is not None for p in pred)
+    aktiv_conf = conf_verdier if har_conf_data else [None]
 
     _sweep_kombinasjoner(riktige, oversladdinger,
                          elong_verdier, hoyde_verdier, bredde_verdier,
-                         sort_key=args.sort)
+                         conf_v=aktiv_conf,
+                         sort_key=args.sort, min_ov_rik=args.min_ov_rik)
 
     # ── Per-kilde kombinasjons-sweep ──
     kilder = sorted(set(p["kilde"] for p in pred))
@@ -470,15 +554,21 @@ def main():
             ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
             if not rik_k and not ov_k:
                 continue
+            # Kun conf-sweep for kilder som har conf
+            kilde_har_conf = any(p["conf"] is not None for p in rik_k + ov_k)
+            kilde_conf = conf_verdier if kilde_har_conf else [None]
             _sweep_kombinasjoner(rik_k, ov_k,
                                  elong_verdier, hoyde_verdier, bredde_verdier,
+                                 conf_v=kilde_conf,
                                  sort_key=args.sort,
-                                 tittel=f"PER KILDE: {kilde.upper()}")
+                                 tittel=f"PER KILDE: {kilde.upper()}",
+                                 min_ov_rik=args.min_ov_rik)
 
         # ── Kryssvalidert sweep: uavhengige parametre per kilde ──
         _sweep_kryss_kilder(riktige, oversladdinger, kilder,
                             elong_verdier, hoyde_verdier, bredde_verdier,
-                            sort_key=args.sort)
+                            conf_v=aktiv_conf,
+                            sort_key=args.sort, min_ov_rik=args.min_ov_rik)
 
 
 if __name__ == "__main__":

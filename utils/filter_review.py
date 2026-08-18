@@ -17,6 +17,13 @@ Kjør enkelt-konfigurasjon:
         --mappe /sti/til/pdfer \\
         --elongation 1.5
 
+Kjør med ulike parametre per kilde:
+    python utils/filter_review.py \\
+        --fasit-csv labels.csv \\
+        --res-csv resultat.csv \\
+        --mappe /sti/til/pdfer \\
+        --per-kilde "yolo:e=2.5,h=40,b=80" "paddle:e=1.5,h=60,b=120"
+
 Kjør alle konfigurasjoner (sweep):
     python utils/filter_review.py \\
         --fasit-csv labels.csv \\
@@ -194,8 +201,11 @@ def match_prediksjoner(pred_liste, fasit, terskel=0.15):
 # ── Filtrering ────────────────────────────────────────────────
 
 def _filter_grunner(p, min_elongation=None, maks_hoyde=None,
-                    maks_bredde=None, maks_areal=None):
+                    maks_bredde=None, maks_areal=None, conf_terskel=None):
     """Returnerer liste av grunner til at boksen filtreres (tom = beholdt)."""
+    # Høy confidence → stol på prediksjonen, ikke filtrer
+    if conf_terskel is not None and p.get("conf") is not None and p["conf"] >= conf_terskel:
+        return []
     grunner = []
     if min_elongation is not None and p["elongation"] < min_elongation:
         grunner.append(f"elong {p['elongation']:.1f} < {min_elongation:g}")
@@ -210,6 +220,93 @@ def _filter_grunner(p, min_elongation=None, maks_hoyde=None,
 
 def _er_filtrert(p, **kwargs):
     return len(_filter_grunner(p, **kwargs)) > 0
+
+
+def _parse_per_kilde(spec_list):
+    """Parser per-kilde filterstrenger.
+
+    Format: "kilde:e=V,h=V,b=V,a=V,c=V"
+    Eksempel: "yolo:e=2.5,h=40,b=80,c=0.7"
+
+    Returnerer dict: kilde -> {min_elongation, maks_hoyde, maks_bredde, maks_areal, conf_terskel}
+    """
+    resultat = {}
+    param_map = {
+        "e": "min_elongation",
+        "h": "maks_hoyde",
+        "b": "maks_bredde",
+        "a": "maks_areal",
+        "c": "conf_terskel",
+    }
+    for spec in spec_list:
+        if ":" not in spec:
+            raise ValueError(f"Ugyldig per-kilde-format: {spec!r} "
+                             f"(forventet 'kilde:e=V,h=V,...')")
+        kilde, param_str = spec.split(":", 1)
+        kilde = kilde.strip().lower()
+        kwargs = {}
+        for del_ in param_str.split(","):
+            del_ = del_.strip()
+            if not del_:
+                continue
+            if "=" not in del_:
+                raise ValueError(f"Ugyldig parameter: {del_!r} i {spec!r}")
+            nøkkel, verdi = del_.split("=", 1)
+            nøkkel = nøkkel.strip().lower()
+            if nøkkel not in param_map:
+                raise ValueError(f"Ukjent parameter {nøkkel!r} i {spec!r}. "
+                                 f"Gyldige: {', '.join(param_map.keys())}")
+            kwargs[param_map[nøkkel]] = float(verdi)
+        resultat[kilde] = kwargs
+    return resultat
+
+
+def _filter_grunner_per_kilde(p, per_kilde_kwargs):
+    """Filtrer en prediksjon basert på kilde-spesifikke parametre."""
+    kilde = p.get("kilde", "ukjent").lower()
+    kwargs = per_kilde_kwargs.get(kilde)
+    if kwargs is None:
+        # Ingen filter for denne kilden — behold
+        return []
+    return _filter_grunner(p, **kwargs)
+
+
+def _filter_etikett_per_kilde(per_kilde_kwargs):
+    """Lag lesbar etikett for per-kilde-konfigurasjon."""
+    deler = []
+    for kilde, kwargs in sorted(per_kilde_kwargs.items()):
+        param_deler = []
+        if kwargs.get("min_elongation") is not None:
+            param_deler.append(f"e≥{kwargs['min_elongation']:g}")
+        if kwargs.get("maks_hoyde") is not None:
+            param_deler.append(f"h≤{kwargs['maks_hoyde']:g}")
+        if kwargs.get("maks_bredde") is not None:
+            param_deler.append(f"b≤{kwargs['maks_bredde']:g}")
+        if kwargs.get("maks_areal") is not None:
+            param_deler.append(f"a≤{kwargs['maks_areal']:g}")
+        if kwargs.get("conf_terskel") is not None:
+            param_deler.append(f"c≥{kwargs['conf_terskel']:g}→behold")
+        deler.append(f"{kilde}({', '.join(param_deler)})")
+    return " + ".join(deler)
+
+
+def _filter_mappenavn_per_kilde(per_kilde_kwargs):
+    """Lag filnavn-vennlig mappenavn for per-kilde-konfigurasjon."""
+    deler = []
+    for kilde, kwargs in sorted(per_kilde_kwargs.items()):
+        param_deler = []
+        if kwargs.get("min_elongation") is not None:
+            param_deler.append(f"e{kwargs['min_elongation']:g}")
+        if kwargs.get("maks_hoyde") is not None:
+            param_deler.append(f"h{kwargs['maks_hoyde']:g}")
+        if kwargs.get("maks_bredde") is not None:
+            param_deler.append(f"b{kwargs['maks_bredde']:g}")
+        if kwargs.get("maks_areal") is not None:
+            param_deler.append(f"a{kwargs['maks_areal']:g}")
+        if kwargs.get("conf_terskel") is not None:
+            param_deler.append(f"c{kwargs['conf_terskel']:g}")
+        deler.append(f"{kilde}_{'_'.join(param_deler)}")
+    return "__".join(deler)
 
 
 # ── Rendering ─────────────────────────────────────────────────
@@ -259,8 +356,8 @@ def _filter_mappenavn(kwargs):
 
 # ── Hovedlogikk ───────────────────────────────────────────────
 
-def generer_bilder(pred, fasit, mappe, ut_mappe, filter_kwargs,
-                   kun_riktige=False, velg=None):
+def generer_bilder(pred, fasit, mappe, ut_mappe, filter_kwargs=None,
+                   per_kilde_kwargs=None, kun_riktige=False, velg=None):
     """Generer gjennomgangsbilder for bokser fjernet av angitt filter.
 
     Args:
@@ -269,13 +366,20 @@ def generer_bilder(pred, fasit, mappe, ut_mappe, filter_kwargs,
         mappe: Sti til PDF-dokumentene.
         ut_mappe: Sti for PNG-output.
         filter_kwargs: Dict med filterparametre (min_elongation, maks_hoyde, ...).
+        per_kilde_kwargs: Dict kilde -> {filterparametre} for uavhengige filtre per kilde.
         kun_riktige: Vis kun sider der riktige bokser fjernes.
         velg: Set med filnavn å begrense til (eller None for alle).
     """
 
     # Finn fjernede bokser med grunner
-    for p in pred:
-        p["_grunner"] = _filter_grunner(p, **filter_kwargs)
+    if per_kilde_kwargs:
+        etikett = _filter_etikett_per_kilde(per_kilde_kwargs)
+        for p in pred:
+            p["_grunner"] = _filter_grunner_per_kilde(p, per_kilde_kwargs)
+    else:
+        etikett = _filter_etikett(filter_kwargs or {})
+        for p in pred:
+            p["_grunner"] = _filter_grunner(p, **(filter_kwargs or {}))
 
     fjernet = [p for p in pred if p["_grunner"]]
     beholdt = [p for p in pred if not p["_grunner"]]
@@ -283,7 +387,6 @@ def generer_bilder(pred, fasit, mappe, ut_mappe, filter_kwargs,
     rik_fj = [p for p in fjernet if p["riktig"]]
     ov_fj = [p for p in fjernet if not p["riktig"]]
 
-    etikett = _filter_etikett(filter_kwargs)
     print(f"\nFilter: {etikett}")
     print(f"  Fjernet totalt:      {len(fjernet)}")
     print(f"    Riktige fjernet:   {len(rik_fj)} (recall-tap)")
@@ -482,6 +585,11 @@ def main():
 
     p.add_argument("--sweep", action="store_true",
                    help="Generer bilder for et sett forhåndsdefinerte konfigurasjoner")
+    p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
+                   help="Uavhengige filtre per kilde. Format: "
+                        "\"kilde:e=V,h=V,b=V,a=V\" "
+                        "(e=elongation, h=maks_hoyde, b=maks_bredde, a=maks_areal). "
+                        "Eksempel: --per-kilde \"yolo:e=2.5,h=40\" \"paddle:e=1.5,h=60,b=120\"")
     p.add_argument("--kun-riktige", action="store_true",
                    help="Vis kun sider der riktige bokser fjernes (fokus på recall-tap)")
     p.add_argument("--velg", nargs="+", metavar="PDF",
@@ -513,11 +621,18 @@ def main():
           f"(herav {n_uten} på sider uten fasit), Presisjon: {pres:.1f}%")
 
     # ── Generer bilder ────────────────────────────────────────
-    if args.sweep:
+    if args.per_kilde:
+        per_kilde_kwargs = _parse_per_kilde(args.per_kilde)
+        mappenavn = _filter_mappenavn_per_kilde(per_kilde_kwargs)
+        ut = os.path.join(args.ut_mappe, mappenavn)
+        generer_bilder(pred, fasit, args.mappe, ut,
+                       per_kilde_kwargs=per_kilde_kwargs,
+                       kun_riktige=args.kun_riktige, velg=args.velg)
+    elif args.sweep:
         for kwargs in SWEEP_CONFIGS:
             mappenavn = _filter_mappenavn(kwargs)
             ut = os.path.join(args.ut_mappe, mappenavn)
-            generer_bilder(pred, fasit, args.mappe, ut, kwargs,
+            generer_bilder(pred, fasit, args.mappe, ut, filter_kwargs=kwargs,
                            kun_riktige=args.kun_riktige, velg=args.velg)
     else:
         kwargs = {}
@@ -532,9 +647,9 @@ def main():
 
         if not kwargs:
             p.error("Oppgi minst ett filter (--elongation, --maks-hoyde, "
-                    "--maks-bredde, --maks-areal) eller bruk --sweep")
+                    "--maks-bredde, --maks-areal), --per-kilde, eller --sweep")
 
-        generer_bilder(pred, fasit, args.mappe, args.ut_mappe, kwargs,
+        generer_bilder(pred, fasit, args.mappe, args.ut_mappe, filter_kwargs=kwargs,
                        kun_riktige=args.kun_riktige, velg=args.velg)
 
     print("\nFerdig!")
