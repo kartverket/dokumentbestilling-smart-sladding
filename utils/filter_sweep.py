@@ -483,6 +483,8 @@ def main():
                    help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
     p.add_argument("--min-ov-rik", type=float, default=None,
                    help="Vis kun rader der ov.fj/rik.fj > denne verdien (f.eks. 1.0)")
+    p.add_argument("--maks-rik-pst", type=float, default=None,
+                   help="Skjul rader der mer enn denne %% av riktige fjernes (f.eks. 0.5)")
     p.add_argument("--ut", default=None, metavar="FIL",
                    help="Skriv resultat til fil (default: auto-generert filnavn)")
     # Bakoverkompatibilitet
@@ -616,7 +618,8 @@ def main():
     _sweep_kombinasjoner(riktige, oversladdinger,
                          elong_verdier, hoyde_verdier, bredde_verdier,
                          conf_v=aktiv_conf,
-                         sort_key=args.sort, min_ov_rik=args.min_ov_rik)
+                         sort_key=args.sort, min_ov_rik=args.min_ov_rik,
+                         maks_rik_pst=args.maks_rik_pst)
 
     # ── Per-kilde kombinasjons-sweep ──
     kilder = sorted(set(p["kilde"] for p in pred))
@@ -634,13 +637,15 @@ def main():
                                  conf_v=kilde_conf,
                                  sort_key=args.sort,
                                  tittel=f"PER KILDE: {kilde.upper()}",
-                                 min_ov_rik=args.min_ov_rik)
+                                 min_ov_rik=args.min_ov_rik,
+                                 maks_rik_pst=args.maks_rik_pst)
 
         # ── Kryssvalidert sweep: uavhengige parametre per kilde ──
         _sweep_kryss_kilder(riktige, oversladdinger, kilder,
                             elong_verdier, hoyde_verdier, bredde_verdier,
                             conf_v=aktiv_conf,
-                            sort_key=args.sort, min_ov_rik=args.min_ov_rik)
+                            sort_key=args.sort, min_ov_rik=args.min_ov_rik,
+                            maks_rik_pst=args.maks_rik_pst)
 
     # ── Lukk output-fil og vis melding ──
     sys.stdout = tee.terminal
