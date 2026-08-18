@@ -6,7 +6,7 @@ from ultralytics import YOLO
 
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
-    MIN_BOKS_AREAL, MIN_BOKS_RATIO, MAKS_BOKS_HOYDE_PT, MAKS_BOKS_BREDDE_PT,
+    MIN_BOKS_AREAL, MAKS_BOKS_HOYDE_PT, MAKS_BOKS_BREDDE_PT,
     MAKS_BREDDE_ELEKTRONISK_PT, PDF_DPI)
 
 YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
@@ -90,13 +90,6 @@ def er_for_bred(boks, elektronisk=False):
     grense = MAKS_BREDDE_ELEKTRONISK_PX if elektronisk else MAKS_BOKS_BREDDE_PX
     return (x1 - x0) > grense
 
-
-def har_feil_ratio(boks):
-    x0, y0, x1, y1 = boks[:4]
-    w, h = x1 - x0, y1 - y0
-    if h <= 0:
-        return True
-    return (w / h) < MIN_BOKS_RATIO
 
 
 def overlapp_andel_boks(a, b):

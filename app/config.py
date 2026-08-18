@@ -3,9 +3,8 @@ PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, m
 
 # ---- Dimensjonsfiltre (gjelder alle kilder likt) ----------
 MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²)
-MIN_BOKS_RATIO     = 1.0       # bredde/høyde under dette er ikke FNR (fasit P01=1.69)
-MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde (fasit P99=33.6 pt)
-MAKS_BOKS_BREDDE_PT = 100      # absolutt maks bredde for alle dokumenter (fasit P99=73 pt, uttrekk_5: 3 mistet ved 100)
+MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde (netto +18: 28 riktige, 46 oversladd fjernet)
+MAKS_BOKS_BREDDE_PT = 100      # absolutt maks bredde (netto +10: 9 riktige, 19 oversladd fjernet)
 MAKS_BREDDE_ELEKTRONISK_PT = 50  # strengere maks bredde for elektronisk tinglyste
 
 # ---- YOLO --------------------------------------------------

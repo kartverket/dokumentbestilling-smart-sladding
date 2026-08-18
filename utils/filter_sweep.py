@@ -90,12 +90,14 @@ def les_prediksjoner(sti):
             h_pt = abs(y1 - y0) / SKALA
             if w_pt <= 0 or h_pt <= 0:
                 continue
+            ratio = w_pt / h_pt if h_pt > 0 else 0
             pred.append({
                 "navn": navn, "side": side, "dok_nr": _dok_nr(navn),
                 "bw": bw, "bh": bh,
                 "norm": norm,
                 "w": w_pt, "h": h_pt,
-                "ratio": w_pt / h_pt if h_pt > 0 else 0,
+                "ratio": ratio,
+                "elongation": max(ratio, 1/ratio) if ratio > 0 else 0,
                 "areal": w_pt * h_pt,
                 "kilde": kilde, "conf": conf,
             })
@@ -154,15 +156,16 @@ def match_prediksjoner(pred_liste, fasit, terskel=0.15):
         if p["riktig"] is None:
             p["riktig"] = False
             n_oversladd += 1
-            n_uten_fasit += 1
 
     return n_riktig, n_oversladd, n_uten_fasit
 
 
 # ── Filtrering ───────────────────────────────────────────────
 
-def _filtrert(p, min_ratio, maks_hoyde, maks_bredde, maks_areal):
+def _filtrert(p, min_ratio, maks_hoyde, maks_bredde, maks_areal, min_elongation=None):
     if min_ratio is not None and p["ratio"] < min_ratio:
+        return True
+    if min_elongation is not None and p["elongation"] < min_elongation:
         return True
     if maks_hoyde is not None and p["h"] > maks_hoyde:
         return True
@@ -209,7 +212,7 @@ def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
               f" {netto:>+7d} {pres_etter:>14.1f}%")
 
 
-def _sweep_kombinasjoner(riktige, oversladdinger, ratio_v, hoyde_v, bredde_v):
+def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v):
     # Utgangs-presisjon
     totalt_foer = len(riktige) + len(oversladdinger)
     pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
@@ -218,17 +221,17 @@ def _sweep_kombinasjoner(riktige, oversladdinger, ratio_v, hoyde_v, bredde_v):
     print(f"KOMBINASJONS-SWEEP  (utgangspunkt: {len(riktige)} riktige + "
           f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)")
     print(f"{'═' * 110}")
-    print(f"  {'ratio':>6} {'hoyde':>6} {'bredde':>7} │"
+    print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
           f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
           f" {'netto':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
     print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 35}")
 
     rader = []
-    for min_r, maks_h, maks_b in product(ratio_v, hoyde_v, bredde_v):
-        n_rk = _tell_filtrerte(riktige, min_ratio=min_r, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None)
-        n_ov = _tell_filtrerte(oversladdinger, min_ratio=min_r, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None)
+    for min_e, maks_h, maks_b in product(elong_v, hoyde_v, bredde_v):
+        n_rk = _tell_filtrerte(riktige, min_ratio=None, maks_hoyde=maks_h,
+                               maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
+        n_ov = _tell_filtrerte(oversladdinger, min_ratio=None, maks_hoyde=maks_h,
+                               maks_bredde=maks_b, maks_areal=None, min_elongation=min_e)
 
         rk_pct = n_rk / len(riktige) * 100 if riktige else 0
         ov_pct = n_ov / len(oversladdinger) * 100 if oversladdinger else 0
@@ -239,19 +242,19 @@ def _sweep_kombinasjoner(riktige, oversladdinger, ratio_v, hoyde_v, bredde_v):
         totalt_etter = rik_etter + ov_etter
         pres_etter = rik_etter / totalt_etter * 100 if totalt_etter > 0 else 0
 
-        r_str = f"{min_r:g}" if min_r is not None else "av"
+        e_str = f"{min_e:g}" if min_e is not None else "av"
         h_str = f"{maks_h:g}" if maks_h is not None else "av"
         b_str = f"{maks_b:g}" if maks_b is not None else "av"
 
         rader.append((netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-                      pres_etter, r_str, h_str, b_str))
+                      pres_etter, e_str, h_str, b_str))
 
     rader.sort(key=lambda x: (-x[0], x[1]))
 
     for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-         pres_etter, r_str, h_str, b_str) in rader:
+         pres_etter, e_str, h_str, b_str) in rader:
         markør = " ◀" if rk_pct == 0 and netto > 0 else ""
-        print(f"  {r_str:>6} {h_str:>6} {b_str:>7} │"
+        print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
               f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
               f" {netto:>+7d} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
 
@@ -312,10 +315,17 @@ def main():
 
     # ── Enkeltparameter-sweeps ──
     _sweep_en_param(riktige, oversladdinger,
-                    "MIN_BOKS_RATIO (w/h)",
+                    "MIN_BOKS_RATIO (w/h) — kun horisontal",
                     [0.5, 0.7, 0.8, 1.0, 1.2, 1.5, 1.7, 2.0],
                     lambda v: {"min_ratio": v, "maks_hoyde": None,
                                "maks_bredde": None, "maks_areal": None})
+
+    _sweep_en_param(riktige, oversladdinger,
+                    "MIN_ELONGATION max(w/h, h/w) — begge retninger",
+                    [1.2, 1.5, 1.7, 2.0, 2.5, 3.0],
+                    lambda v: {"min_ratio": None, "maks_hoyde": None,
+                               "maks_bredde": None, "maks_areal": None,
+                               "min_elongation": v})
 
     _sweep_en_param(riktige, oversladdinger,
                     "MAKS_BOKS_HOYDE_PT",
@@ -336,12 +346,12 @@ def main():
                                "maks_bredde": None, "maks_areal": v})
 
     # ── Kombinasjons-sweep ──
-    ratio_verdier = [None, 0.8, 1.0, 1.2]
+    elong_verdier = [None, 1.5, 2.0, 2.5]
     hoyde_verdier = [None, 40, 50, 60]
     bredde_verdier = [None, 80, 100, 120]
 
     _sweep_kombinasjoner(riktige, oversladdinger,
-                         ratio_verdier, hoyde_verdier, bredde_verdier)
+                         elong_verdier, hoyde_verdier, bredde_verdier)
 
 
 if __name__ == "__main__":
