@@ -548,7 +548,7 @@ def main():
 
     _sweep_en_param(riktige, oversladdinger,
                     "MIN_ELONGATION max(w/h, h/w) — begge retninger",
-                    [1.2, 1.5, 1.7, 2.0, 2.5, 3.0],
+                    [1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
                     lambda v: {"min_ratio": None, "maks_hoyde": None,
                                "maks_bredde": None, "maks_areal": None,
                                "min_elongation": v})
@@ -582,10 +582,10 @@ def main():
                                    "min_elongation": 1.5, "conf_terskel": v})
 
     # ── Kombinasjons-sweep (samlet) ──
-    elong_verdier = [None, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]
-    hoyde_verdier = [None, 30, 35, 40, 45, 50, 60, 80]
-    bredde_verdier = [None, 60, 80, 100, 120, 150, 200]
-    conf_verdier = [None, 0.5, 0.6, 0.7, 0.8, 0.9]
+    elong_verdier = [None, 1.5, 1.7, 2.0, 2.5, 3.0]
+    hoyde_verdier = [None, 40, 50, 60, 80]
+    bredde_verdier = [None, 80, 100, 120, 150]
+    conf_verdier = [None, 0.5]
 
     # Sjekk om det finnes conf-verdier i dataene
     har_conf_data = any(p["conf"] is not None for p in pred)
