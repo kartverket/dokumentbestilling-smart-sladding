@@ -1,541 +1,436 @@
 """
-Overlapp-basert evaluering av filterkonfigurasjoner.
+Fasit-sentrisk evaluering av filterkonfigurasjoner.
 
-Matcher prediksjoner mot fasit via overlapp for å klassifisere hver
-prediksjon som RIKTIG (treffer fasit) eller OVERSLADD (ingen treff).
-Sweeper deretter filterkonfigurasjoner og måler:
-  - Riktige fjernet   = recall-tap
-  - Oversladdinger fjernet = oversladding-reduksjon
+Måler hver konfigurasjon på det som faktisk betyr noe:
 
-Filtrering baseres på geometriske egenskaper (elongation, høyde, bredde, areal)
-og kan gated av YOLO-confidence: prediksjoner med conf ≥ conf_terskel beholdes
-uansett geometri (vi stoler på høy-confidence-deteksjoner).
+    tapt    = fasit-bokser som mister ALL dekning etter filtrering
+              (én prediksjon fjernet mens en annen fortsatt dekker samme
+              fasit-boks koster ingenting — feltet er fremdeles sladdet)
+    ov.fj   = rene oversladdinger (BOM) fjernet
+    red.fj  = dekkende prediksjoner fjernet uten tap — gratis gevinst
+    recall% = andel fasit-bokser fortsatt dekket
+
+Pareto-fronten koker de hundrevis av kombinasjonene ned til de få som ikke er
+dominert av en annen: for hvert nivå av `tapt`, konfigurasjonen som fjerner
+flest oversladdinger. Det er hele avveiningskurven, uten støyen.
+
+Med --holdout velges konfigurasjonen på ett sett dokumenter og måles på et
+annet. Uten det er «beste av 500 konfigurasjoner» stort sett overtilpasning.
 
 Kjør:
     python utils/filter_sweep.py \\
         --fasit-csv /path/to/labels.csv \\
         --res-csv /path/to/resultat.csv \\
-        --terskel 0.15 \\
-        --sort ov/rik \\
-        --min-ov-rik 2.0
+        --kostnad 20 --holdout 0.3 --ut /tmp/sweep.txt
 """
 
 import argparse
-import csv
 import os
-import re
 import sys
-from collections import defaultdict
+from collections import namedtuple
 from datetime import datetime
 from itertools import product
 
-SKALA = 300 / 72.0   # PDF-punkt → piksel ved 300 DPI
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from filter_felles import (STD_SLURV_FAKTOR, STD_TERSKEL, baseline,
+                           bygg_datasett, evaluer, lag_filter,
+                           lag_filter_per_kilde, les_fasit, les_prediksjoner,
+                           pareto_front, skriv_oppsummering, splitt_dokumenter)
+
+# En sweep-rad: måling, kort etikett, og spesifikasjonen som gjenskaper
+# filteret. spec = {None: kwargs} for et globalt filter, ellers {kilde: kwargs}.
+Rad = namedtuple("Rad", "m etikett spec")
 
 
-# ── Hjelpefunksjoner ─────────────────────────────────────────
-
-def _dok_nr(navn):
-    m = re.match(r"0*(\d+)", os.path.basename(navn))
-    return int(m.group(1)) if m else None
-
-
-def _overlap(a, b):
-    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
-    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
-    return (ix1 - ix0) * (iy1 - iy0) if (ix1 > ix0 and iy1 > iy0) else 0.0
-
-
-def _areal(a):
-    return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
-
-
-# ── Datainnlesing ────────────────────────────────────────────
-
-def les_fasit(sti):
-    """Leser fasit-labels (ACCEPTED + manuell, ekskluderer REJECTED).
-    Returnerer dict: (dok_nr, side) -> [(norm_x0, norm_y0, norm_x1, norm_y1), ...]
-    Normalisering gjøres ved matching-tid fordi vi trenger sidestørrelse."""
-    fasit = defaultdict(list)
-    with open(sti, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
-                continue
-            try:
-                nr = int(r["fil_revisjon_id"])
-                side = int(r["sidetall"])
-                x, y = float(r["x"]), float(r["y"])
-                w, h = float(r["width"]), float(r["height"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            # Sortér koordinater (håndterer negative w/h)
-            x0, x1 = sorted((x, x + w))
-            y0, y1 = sorted((y, y + h))
-            fasit[(nr, side)].append((x0, y0, x1, y1))
-    return fasit
-
-
-def les_prediksjoner(sti):
-    """Leser resultat-CSV med pikselkoordinater.
-    Returnerer liste av dicts med normaliserte koordinater og dimensjoner i pt."""
-    pred = []
-    with open(sti, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            try:
-                navn = r["navn"]
-                side = int(r["side"])
-                bw, bh = int(r["bilde_bredde"]), int(r["bilde_hoyde"])
-                x0, y0 = float(r["x0"]), float(r["y0"])
-                x1, y1 = float(r["x1"]), float(r["y1"])
-                kilde = r.get("kilde", "ukjent")
-                conf_s = r.get("conf", "")
-                conf = float(conf_s) if conf_s else None
-            except (TypeError, ValueError, KeyError):
-                continue
-            # Normalisér til [0,1] for overlapp-matching
-            norm = (x0 / bw, y0 / bh, x1 / bw, y1 / bh)
-            # Dimensjoner i PDF-punkt for filtrering
-            w_pt = abs(x1 - x0) / SKALA
-            h_pt = abs(y1 - y0) / SKALA
-            if w_pt <= 0 or h_pt <= 0:
-                continue
-            ratio = w_pt / h_pt if h_pt > 0 else 0
-            pred.append({
-                "navn": navn, "side": side, "dok_nr": _dok_nr(navn),
-                "bw": bw, "bh": bh,
-                "norm": norm,
-                "w": w_pt, "h": h_pt,
-                "ratio": ratio,
-                "elongation": max(ratio, 1/ratio) if ratio > 0 else 0,
-                "areal": w_pt * h_pt,
-                "kilde": kilde, "conf": conf,
-            })
-    return pred
-
-
-# ── Matching ─────────────────────────────────────────────────
-
-def match_prediksjoner(pred_liste, fasit, terskel=0.15):
-    """Matcher prediksjoner mot fasit via normalisert overlapp.
-    Legger til 'riktig'-nøkkel på hver prediksjon."""
-
-    # Normaliser fasit til [0,1] med estimert sidestørrelse
-    # Grupper prediksjoner for å finne sidestørrelse per (dok_nr, side)
-    side_str = {}
-    for p in pred_liste:
-        key = (p["dok_nr"], p["side"])
-        if key not in side_str:
-            # Estimér sidestørrelse i punkt fra piksel / skala
-            side_str[key] = (p["bw"] / SKALA, p["bh"] / SKALA)
-
-    # Forhåndsnormaliser fasit
-    fasit_norm = {}
-    for (nr, si), bokser in fasit.items():
-        pw, ph = side_str.get((nr, si), (595, 842))  # fallback A4
-        fasit_norm[(nr, si)] = [(x0/pw, y0/ph, x1/pw, y1/ph) for (x0,y0,x1,y1) in bokser]
-
-    # Match
-    n_riktig = n_oversladd = n_uten_fasit = 0
-    for p in pred_liste:
-        key = (p["dok_nr"], p["side"])
-        fbokser = fasit_norm.get(key, [])
-        if not fbokser:
-            # Ingen fasit for denne siden — kan ikke vurdere
-            p["riktig"] = None
-            n_uten_fasit += 1
-            continue
-
-        pn = p["norm"]
-        best_dek = 0.0
-        for fb in fbokser:
-            ov = _overlap(pn, fb)
-            fa = _areal(fb)
-            dek = ov / fa if fa > 0 else 0.0
-            if dek > best_dek:
-                best_dek = dek
-
-        p["riktig"] = best_dek >= terskel
-        if p["riktig"]:
-            n_riktig += 1
-        else:
-            n_oversladd += 1
-
-    # Sider uten fasit = ingen FNR der, alt er oversladding
-    for p in pred_liste:
-        if p["riktig"] is None:
-            p["riktig"] = False
-            n_oversladd += 1
-
-    return n_riktig, n_oversladd, n_uten_fasit
-
-
-# ── Filtrering ───────────────────────────────────────────────
-
-def _filtrert(p, min_ratio, maks_hoyde, maks_bredde, maks_areal,
-              min_elongation=None, conf_terskel=None):
-    # Høy confidence → stol på prediksjonen, ikke filtrer
-    if conf_terskel is not None and p["conf"] is not None and p["conf"] >= conf_terskel:
-        return False
-    if min_ratio is not None and p["ratio"] < min_ratio:
-        return True
-    if min_elongation is not None and p["elongation"] < min_elongation:
-        return True
-    if maks_hoyde is not None and p["h"] > maks_hoyde:
-        return True
-    if maks_bredde is not None and p["w"] > maks_bredde:
-        return True
-    if maks_areal is not None and p["areal"] > maks_areal:
-        return True
-    return False
-
-
-def _tell_filtrerte(bokser, **kwargs):
-    return sum(1 for b in bokser if _filtrert(b, **kwargs))
+def lag_predikat(spec):
+    if None in spec:
+        return lag_filter(**spec[None])
+    return lag_filter_per_kilde(spec)
 
 
 # ── Sortering ────────────────────────────────────────────────
 
 SORT_FNS = {
-    "netto": lambda x: (-x[0], x[1]),
-    "ov.fj": lambda x: (-x[4], x[1]),
-    "rik.fj": lambda x: (x[3], -x[4]),
-    "pres": lambda x: (-x[7], -x[0]),
-    "ov/rik": lambda x: (-(x[4] / x[3] if x[3] > 0 else float('inf')), x[1]),
+    "netto":   lambda m: (-m.netto, m.tapt),
+    "ov.fj":   lambda m: (-m.ov_fj, m.tapt),
+    "tapt":    lambda m: (m.tapt, -m.ov_fj),
+    "recall":  lambda m: (-m.recall_etter, -m.ov_fj),
+    "pres":    lambda m: (-m.pres_etter, -m.netto),
+    "ov/tapt": lambda m: (-m.ov_per_tapt, m.tapt),
 }
+SORT_ALIAS = {"rik.fj": "tapt", "ov/rik": "ov/tapt"}
+
+
+def _sort_fn(navn):
+    return SORT_FNS[SORT_ALIAS.get(navn, navn)]
+
+
+# ── Tabellformat ─────────────────────────────────────────────
+
+HODE_MAAL = (f" {'tapt':>6} {'tapt%':>7} │ {'ov.fj':>7} {'ov%':>6} │"
+             f" {'red.fj':>7} │ {'netto':>9} {'ov/tapt':>8} │"
+             f" {'recall%':>8} {'pres%':>7}")
+
+
+def _maal_celler(m):
+    ov_tapt = f"{m.ov_per_tapt:.1f}" if m.tapt else ("∞" if m.ov_fj else "–")
+    return (f" {m.tapt:>6} {m.tapt_pst:>6.2f}% │ {m.ov_fj:>7} {m.ov_pst:>5.1f}% │"
+            f" {m.red_fj:>7} │ {m.netto:>+9.0f} {ov_tapt:>8} │"
+            f" {m.recall_etter:>7.2f}% {m.pres_etter:>6.1f}%")
+
+
+def _g(v):
+    return f"{v:g}" if v is not None else "av"
+
+
+def _skjules(m, maks_tapt, maks_tapt_pst, min_ov_tapt):
+    return ((maks_tapt is not None and m.tapt > maks_tapt)
+            or (maks_tapt_pst is not None and m.tapt_pst > maks_tapt_pst)
+            or (min_ov_tapt is not None and m.ov_per_tapt <= min_ov_tapt))
+
+
+def _skjult_tekst(n, maks_tapt, maks_tapt_pst, min_ov_tapt):
+    krav = []
+    if maks_tapt is not None:
+        krav.append(f"tapt > {maks_tapt:g}")
+    if maks_tapt_pst is not None:
+        krav.append(f"tapt > {maks_tapt_pst:g}%")
+    if min_ov_tapt is not None:
+        krav.append(f"ov/tapt ≤ {min_ov_tapt:g}")
+    return f"  ({n} rader skjult: {' eller '.join(krav)})"
+
+
+def review_kommando(spec):
+    """Gjenskaper filteret som argumenter til filter_review.py."""
+    def _par(kw):
+        return ",".join(f"{kort}={kw[navn]:g}" for kort, navn in
+                        (("e", "min_elongation"), ("h", "maks_hoyde"),
+                         ("b", "maks_bredde"), ("a", "maks_areal"),
+                         ("c", "conf_terskel"))
+                        if kw.get(navn) is not None)
+    if None in spec:
+        flagg = {"min_elongation": "--elongation", "maks_hoyde": "--maks-hoyde",
+                 "maks_bredde": "--maks-bredde", "maks_areal": "--maks-areal",
+                 "conf_terskel": "--conf"}
+        kw = spec[None]
+        biter = [f"{f} {kw[n]:g}" for n, f in flagg.items()
+                 if kw.get(n) is not None]
+        return " ".join(biter) or "(ingen filter)"
+    biter = [f'"{k}:{_par(kw)}"' for k, kw in sorted(spec.items()) if _par(kw)]
+    return ("--per-kilde " + " ".join(biter)) if biter else "(ingen filter)"
 
 
 # ── Sweeps ───────────────────────────────────────────────────
 
-def _sweep_en_param(riktige, oversladdinger, navn, verdier, filter_fn):
-    print(f"\n{'─' * 95}")
+def _sweep_en_param(ds, navn, verdier, filter_fn, kostnad):
+    print(f"\n{'─' * 118}")
     print(f"Sweep: {navn}")
-    print(f"{'─' * 95}")
-    print(f"  {'Verdi':>8} │ {'Riktige':>8} {'fjernet':>8} {'%':>7} │"
-          f" {'Oversladd':>9} {'fjernet':>8} {'%':>7} │"
-          f" {'Netto':>7} {'Presisjon etter':>16}")
-    print(f"  {'─' * 8}─┼─{'─' * 24}─┼─{'─' * 25}─┼─{'─' * 24}")
-
+    print(f"{'─' * 118}")
+    print(f"  {'Verdi':>8} │{HODE_MAAL}")
+    print(f"  {'─' * 8}─┼{'─' * 106}")
     for v in verdier:
-        kwargs = filter_fn(v)
-        n_rik_fj = _tell_filtrerte(riktige, **kwargs)
-        n_ov_fj = _tell_filtrerte(oversladdinger, **kwargs)
-
-        r_pct = n_rik_fj / len(riktige) * 100 if riktige else 0
-        o_pct = n_ov_fj / len(oversladdinger) * 100 if oversladdinger else 0
-        netto = n_ov_fj - n_rik_fj
-
-        # Presisjon etter filtrering
-        rik_etter = len(riktige) - n_rik_fj
-        ov_etter = len(oversladdinger) - n_ov_fj
-        totalt_etter = rik_etter + ov_etter
-        pres_etter = rik_etter / totalt_etter * 100 if totalt_etter > 0 else 0
-
-        v_str = f"{v:g}" if v is not None else "av"
-        print(f"  {v_str:>8} │ {len(riktige):>5} {n_rik_fj:>7} {r_pct:>6.2f}% │"
-              f" {len(oversladdinger):>6} {n_ov_fj:>7} {o_pct:>6.1f}% │"
-              f" {netto:>+7d} {pres_etter:>14.1f}%")
+        m = evaluer(ds, lag_filter(**filter_fn(v)), kostnad=kostnad)
+        print(f"  {_g(v):>8} │{_maal_celler(m)}")
 
 
-def _sweep_kombinasjoner(riktige, oversladdinger, elong_v, hoyde_v, bredde_v,
-                         conf_v=None, sort_key="netto", tittel=None,
-                         min_ov_rik=None, maks_rik_pst=None):
-    """Sweep alle kombinasjoner av elongation/høyde/bredde (og evt. conf_terskel)."""
-    totalt_foer = len(riktige) + len(oversladdinger)
-    pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
+def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
+                         sort_key, tittel=None, kun_kilde=None,
+                         maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None,
+                         csv_rader=None, maks_rader=None):
+    """Sweeper alle kombinasjoner. kun_kilde: filtrer bare den kilden,
+    men mål effekten globalt (dekning kommer fra alle kilder samlet)."""
+    kandidater = ds.per_kilde[kun_kilde] if kun_kilde else None
 
-    if conf_v is None:
-        conf_v = [None]
-
-    overskrift = tittel or "KOMBINASJONS-SWEEP"
     filter_info = ""
-    if min_ov_rik:
-        filter_info += f"  [filter: ov/rik > {min_ov_rik:g}]"
-    if maks_rik_pst is not None:
-        filter_info += f"  [filter: rik.fj ≤ {maks_rik_pst:g}%]"
-    print(f"\n{'═' * 130}")
-    print(f"{overskrift}  (utgangspunkt: {len(riktige)} riktige + "
-          f"{len(oversladdinger)} oversladd = {totalt_foer} pred, presisjon {pres_foer:.1f}%)"
-          f"  [sortert etter: {sort_key}]{filter_info}")
-    print(f"{'═' * 130}")
+    if maks_tapt is not None:
+        filter_info += f"  [tapt ≤ {maks_tapt:g}]"
+    if maks_tapt_pst is not None:
+        filter_info += f"  [tapt ≤ {maks_tapt_pst:g}%]"
+    if min_ov_tapt is not None:
+        filter_info += f"  [ov/tapt > {min_ov_tapt:g}]"
+
+    print(f"\n{'═' * 145}")
+    print(f"{tittel or 'KOMBINASJONS-SWEEP'}"
+          f"   (utgangspunkt: {ds.dekket_foer} dekkede fasit-bokser, "
+          f"{ds.n_bom} oversladdinger, {len(ds.pred)} prediksjoner)"
+          f"  [sortert: {sort_key}, kostnad {kostnad:g}]{filter_info}")
+    if kun_kilde:
+        print(f"  Filteret gjelder KUN kilde '{kun_kilde}' "
+              f"({len(kandidater)} prediksjoner); øvrige kilder beholdes urørt.")
+    print(f"{'═' * 145}")
+
     har_conf = any(c is not None for c in conf_v)
-    if har_conf:
-        print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} {'conf≥':>6} │"
-              f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
-              f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
-        print(f"  {'─' * 28}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
-    else:
-        print(f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │"
-              f" {'rik.fj':>7} {'%':>6} │ {'ov.fj':>7} {'%':>6} │"
-              f" {'netto':>7} {'ov/rik':>7} {'rik etter':>10} {'ov etter':>9} {'pres%':>7}")
-        print(f"  {'─' * 21}─┼─{'─' * 14}─┼─{'─' * 14}─┼─{'─' * 42}")
+    param_hode = (f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} {'conf≥':>6} │"
+                  if har_conf else
+                  f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │")
+    print(param_hode + HODE_MAAL)
+    print(f"  {'─' * (len(param_hode) - 4)}┼{'─' * 106}")
 
     rader = []
     for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
-        n_rk = _tell_filtrerte(riktige, min_ratio=None, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None,
-                               min_elongation=min_e, conf_terskel=c_t)
-        n_ov = _tell_filtrerte(oversladdinger, min_ratio=None, maks_hoyde=maks_h,
-                               maks_bredde=maks_b, maks_areal=None,
-                               min_elongation=min_e, conf_terskel=c_t)
+        kw = {"min_elongation": min_e, "maks_hoyde": maks_h,
+              "maks_bredde": maks_b, "conf_terskel": c_t}
+        m = evaluer(ds, lag_filter(**kw), kostnad=kostnad, kandidater=kandidater)
+        etikett = (f"{_g(min_e)}/{_g(maks_h)}/{_g(maks_b)}/{_g(c_t)}"
+                   + (f" [{kun_kilde}]" if kun_kilde else ""))
+        rader.append(Rad(m, etikett, {kun_kilde: kw} if kun_kilde else {None: kw}))
+        if csv_rader is not None:
+            csv_rader.append({
+                "omfang": kun_kilde or "alle",
+                "elong": min_e, "hoyde": maks_h, "bredde": maks_b, "conf": c_t,
+                "tapt": m.tapt, "tapt_pst": round(m.tapt_pst, 4),
+                "ov_fj": m.ov_fj, "ov_pst": round(m.ov_pst, 3),
+                "red_fj": m.red_fj, "slurv_fj": m.slurv_fj,
+                "kritisk_fj": m.kritisk_fj, "n_fj": m.n_fj,
+                "ov_areal_fj_pt2": round(m.ov_areal_fj),
+                "netto": round(m.netto, 2),
+                "recall_etter": round(m.recall_etter, 4),
+                "pres_etter": round(m.pres_etter, 3),
+            })
 
-        rk_pct = n_rk / len(riktige) * 100 if riktige else 0
-        ov_pct = n_ov / len(oversladdinger) * 100 if oversladdinger else 0
-        netto = n_ov - n_rk
+    rader.sort(key=lambda r: _sort_fn(sort_key)(r.m))
 
-        rik_etter = len(riktige) - n_rk
-        ov_etter = len(oversladdinger) - n_ov
-        totalt_etter = rik_etter + ov_etter
-        pres_etter = rik_etter / totalt_etter * 100 if totalt_etter > 0 else 0
-
-        e_str = f"{min_e:g}" if min_e is not None else "av"
-        h_str = f"{maks_h:g}" if maks_h is not None else "av"
-        b_str = f"{maks_b:g}" if maks_b is not None else "av"
-        c_str = f"{c_t:g}" if c_t is not None else "av"
-
-        rader.append((netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-                      pres_etter, e_str, h_str, b_str, c_str))
-
-    rader.sort(key=SORT_FNS.get(sort_key, SORT_FNS["netto"]))
-
-    n_skjult = 0
-    for (netto, rk_pct, ov_pct, n_rk, n_ov, rik_etter, ov_etter,
-         pres_etter, e_str, h_str, b_str, c_str) in rader:
-        # Filtrer på ov/rik-ratio
-        if min_ov_rik is not None:
-            ov_rik_val = (n_ov / n_rk) if n_rk > 0 else float('inf') if n_ov > 0 else 0
-            if ov_rik_val <= min_ov_rik:
-                n_skjult += 1
-                continue
-        # Filtrer på maks % riktige fjernet
-        if maks_rik_pst is not None and rk_pct > maks_rik_pst:
-            n_skjult += 1
-            continue
-        markør = " ◀" if rk_pct == 0 and netto > 0 else ""
-        ratio_str = f"{n_ov / n_rk:.1f}" if n_rk > 0 else "∞" if n_ov > 0 else "–"
-        if har_conf:
-            print(f"  {e_str:>6} {h_str:>6} {b_str:>7} {c_str:>6} │"
-                  f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
-                  f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
-        else:
-            print(f"  {e_str:>6} {h_str:>6} {b_str:>7} │"
-                  f" {n_rk:>7} {rk_pct:>5.2f}% │ {n_ov:>7} {ov_pct:>5.1f}% │"
-                  f" {netto:>+7d} {ratio_str:>7} {rik_etter:>10} {ov_etter:>9} {pres_etter:>6.1f}%{markør}")
-
-    if n_skjult:
-        filters = []
-        if min_ov_rik is not None:
-            filters.append(f"ov/rik ≤ {min_ov_rik:g}")
-        if maks_rik_pst is not None:
-            filters.append(f"rik.fj > {maks_rik_pst:g}%")
-        print(f"  ({n_skjult} rader skjult: {' eller '.join(filters)})")
-
-
-def _sweep_kryss_kilder(riktige, oversladdinger, kilder, elong_v, hoyde_v, bredde_v,
-                        conf_v=None, sort_key="netto", min_ov_rik=None,
-                        maks_rik_pst=None):
-    """Sweep med uavhengige filterparametre per kilde.
-
-    Finner topp-kandidater per kilde, deretter kombinerer på tvers
-    for å finne optimal konfigurasjon med ulike filtre per kilde."""
-
-    if conf_v is None:
-        conf_v = [None]
-
-    # Bygg resultater per kilde (kun conf-sweep for kilder med conf-data)
-    per_kilde_res = {}
-    for kilde in kilder:
-        rik_k = [p for p in riktige if p["kilde"] == kilde]
-        ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
-        if not rik_k and not ov_k:
-            continue
-        kilde_har_conf = any(p["conf"] is not None for p in rik_k + ov_k)
-        kilde_conf = conf_v if kilde_har_conf else [None]
-        resultater = []
-        for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, kilde_conf):
-            n_rk = _tell_filtrerte(rik_k, min_ratio=None, maks_hoyde=maks_h,
-                                   maks_bredde=maks_b, maks_areal=None,
-                                   min_elongation=min_e, conf_terskel=c_t)
-            n_ov = _tell_filtrerte(ov_k, min_ratio=None, maks_hoyde=maks_h,
-                                   maks_bredde=maks_b, maks_areal=None,
-                                   min_elongation=min_e, conf_terskel=c_t)
-            resultater.append((min_e, maks_h, maks_b, c_t, n_rk, n_ov))
-        # Sortér: maks netto (ov-rik) med minimalt riktige-tap
-        resultater.sort(key=lambda x: (-(x[5] - x[4]), x[4]))
-        per_kilde_res[kilde] = resultater[:8]
-
-    if len(per_kilde_res) < 2:
-        return
-
-    kilde_liste = sorted(per_kilde_res.keys())
-    kandidat_lister = [per_kilde_res[k] for k in kilde_liste]
-
-    totalt_foer = len(riktige) + len(oversladdinger)
-    pres_foer = len(riktige) / totalt_foer * 100 if totalt_foer else 0
-
-    print(f"\n{'═' * 130}")
-    print(f"KRYSS-KILDE SWEEP  (uavhengige parametre per kilde)")
-    print(f"  Utgangspunkt: {len(riktige)} riktige + {len(oversladdinger)} oversladd"
-          f" = {totalt_foer} pred, presisjon {pres_foer:.1f}%"
-          f"  [sortert etter: {sort_key}]")
-    print(f"{'═' * 130}")
-
-    # Overskrift — vis conf-kolumn per kilde kun om den kilden har conf
-    har_conf = any(c is not None for c in conf_v)
-    kilde_hdrs_list = []
-    for k in kilde_liste:
-        rik_k = [p for p in riktige if p["kilde"] == k]
-        ov_k = [p for p in oversladdinger if p["kilde"] == k]
-        k_har_conf = har_conf and any(p["conf"] is not None for p in rik_k + ov_k)
-        if k_har_conf:
-            kilde_hdrs_list.append(f"{k:>8} (e/h/b/c)")
-        else:
-            kilde_hdrs_list.append(f"{k:>8} (e/h/b)")
-    kilde_hdrs = "  │  ".join(kilde_hdrs_list)
-    print(f"  {kilde_hdrs}  │ {'rik.fj':>7} {'ov.fj':>7} {'netto':>7}"
-          f" {'ov/rik':>7} {'pres%':>7}")
-    sep_len = len(kilde_liste) * 26 + 45
-    print(f"  {'─' * sep_len}")
-
-    rader = []
-    for kombo in product(*kandidat_lister):
-        tot_rk = 0
-        tot_ov = 0
-        params = []
-        for i, kilde in enumerate(kilde_liste):
-            min_e, maks_h, maks_b, c_t, n_rk_k, n_ov_k = kombo[i]
-            tot_rk += n_rk_k
-            tot_ov += n_ov_k
-            params.append((kilde, min_e, maks_h, maks_b, c_t))
-
-        netto = tot_ov - tot_rk
-        rk_pct = tot_rk / len(riktige) * 100 if riktige else 0
-        rik_etter = len(riktige) - tot_rk
-        ov_etter = len(oversladdinger) - tot_ov
-        totalt_etter = rik_etter + ov_etter
-        pres_etter = rik_etter / totalt_etter * 100 if totalt_etter > 0 else 0
-
-        rader.append((netto, rk_pct, 0, tot_rk, tot_ov, rik_etter, ov_etter,
-                      pres_etter, params))
-
-    # Bruk samme sort-logikk (indeks 0-7 matcher SORT_FNS)
-    sort_fn = SORT_FNS.get(sort_key, SORT_FNS["netto"])
-    rader.sort(key=lambda x: sort_fn(x[:8]))
-
-    # Vis topp 30 (med ov/rik-filter)
-    # Cache per-kilde conf-info
-    kilde_har_conf_map = {}
-    for k in kilde_liste:
-        rik_k = [p for p in riktige if p["kilde"] == k]
-        ov_k = [p for p in oversladdinger if p["kilde"] == k]
-        kilde_har_conf_map[k] = har_conf and any(p["conf"] is not None for p in rik_k + ov_k)
-
-    n_vist = 0
-    n_skjult = 0
+    n_skjult = n_vist = 0
     for rad in rader:
-        if n_vist >= 30:
-            break
-        netto, rk_pct, _, tot_rk, tot_ov, rik_etter, ov_etter, pres_etter, params = rad
-        # Filtrer på ov/rik-ratio
-        if min_ov_rik is not None:
-            ov_rik_val = (tot_ov / tot_rk) if tot_rk > 0 else float('inf') if tot_ov > 0 else 0
-            if ov_rik_val <= min_ov_rik:
-                n_skjult += 1
-                continue
-        # Filtrer på maks % riktige fjernet
-        if maks_rik_pst is not None and rk_pct > maks_rik_pst:
+        if _skjules(rad.m, maks_tapt, maks_tapt_pst, min_ov_tapt):
             n_skjult += 1
             continue
-        ratio_str = f"{tot_ov / tot_rk:.1f}" if tot_rk > 0 else "∞" if tot_ov > 0 else "–"
-        param_strs = []
-        for kilde, min_e, maks_h, maks_b, c_t in params:
-            e_s = f"{min_e:g}" if min_e is not None else "–"
-            h_s = f"{maks_h:g}" if maks_h is not None else "–"
-            b_s = f"{maks_b:g}" if maks_b is not None else "–"
-            if kilde_har_conf_map.get(kilde, False):
-                c_s = f"{c_t:g}" if c_t is not None else "–"
-                param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}/{c_s:>4}")
-            else:
-                param_strs.append(f"{e_s:>4}/{h_s:>3}/{b_s:>4}")
-        kilde_info = "  │  ".join(
-            f"{k:>8} {ps}" for (k, _, _, _, _), ps in zip(params, param_strs))
-        markør = " ◀" if rk_pct == 0 and netto > 0 else ""
-        print(f"  {kilde_info}  │ {tot_rk:>7} {tot_ov:>7} {netto:>+7d}"
-              f" {ratio_str:>7} {pres_etter:>6.1f}%{markør}")
+        if maks_rader is not None and n_vist >= maks_rader:
+            continue
+        e, h, b, c = (rad.spec[kun_kilde if kun_kilde else None][n] for n in
+                      ("min_elongation", "maks_hoyde", "maks_bredde",
+                       "conf_terskel"))
+        params = (f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} {_g(c):>6} │"
+                  if har_conf else f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} │")
+        markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
+        print(params + _maal_celler(rad.m) + markør)
         n_vist += 1
 
     if n_skjult:
-        filters = []
-        if min_ov_rik is not None:
-            filters.append(f"ov/rik ≤ {min_ov_rik:g}")
-        if maks_rik_pst is not None:
-            filters.append(f"rik.fj > {maks_rik_pst:g}%")
-        print(f"  ({n_skjult} rader skjult: {' eller '.join(filters)})")
+        print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
+    return rader
 
 
-def _sweep_terskel(pred_liste, fasit, terskler):
-    """Viser hvordan baseline-statistikken endrer seg med overlapp-terskelen."""
-    print(f"\n{'─' * 95}")
-    print("Sweep: OVERLAPP-TERSKEL (baseline uten geometrifiltre)")
-    print(f"{'─' * 95}")
-    print(f"  {'Terskel':>8} │ {'Riktige':>8} {'Oversladd':>10} {'Uten fasit':>11} │"
-          f" {'Presisjon':>10} {'Tot. pred':>10}")
-    print(f"  {'─' * 8}─┼─{'─' * 30}─┼─{'─' * 20}")
+def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
+                        maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None):
+    """Kombinerer de beste kandidatene per kilde og måler globalt.
+
+    Kandidatene beskjæres med SAMME objektiv som sluttabellen sorteres på —
+    ellers kan optimum være beskåret bort før kryssproduktet.
+    """
+    kilder = sorted(per_kilde_rader)
+    if len(kilder) < 2:
+        return []
+
+    sort_fn = _sort_fn(sort_key)
+    kandidater = []
+    for k in kilder:
+        beste = sorted(per_kilde_rader[k], key=lambda r: sort_fn(r.m))[:maks_kand]
+        kandidater.append([(k, r.spec[k]) for r in beste])
+
+    print(f"\n{'═' * 145}")
+    print("KRYSS-KILDE SWEEP  (uavhengige parametre per kilde, målt globalt)")
+    print(f"  Utgangspunkt: {ds.dekket_foer} dekkede fasit-bokser, "
+          f"{ds.n_bom} oversladdinger"
+          f"  [sortert: {sort_key}, kostnad {kostnad:g}, "
+          f"topp {maks_kand} kandidater per kilde]")
+    print(f"{'═' * 145}")
+
+    kolonne = max(24, max(len(k) for k in kilder) + 18)
+    hode = "  " + "  │  ".join(f"{k + ' (e/h/b/c)':>{kolonne}}" for k in kilder)
+    print(hode + "  │" + HODE_MAAL)
+    print(f"  {'─' * (len(hode) + 106)}")
+
+    rader = []
+    for kombo in product(*kandidater):
+        spec = {k: kw for (k, kw) in kombo}
+        m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
+        etikett = "  ".join(
+            f"{k} {_g(kw['min_elongation'])}/{_g(kw['maks_hoyde'])}/"
+            f"{_g(kw['maks_bredde'])}/{_g(kw['conf_terskel'])}"
+            for k, kw in sorted(spec.items()))
+        rader.append(Rad(m, etikett, spec))
+
+    rader.sort(key=lambda r: sort_fn(r.m))
+
+    n_vist = n_skjult = 0
+    for rad in rader:
+        if n_vist >= 30:
+            break
+        if _skjules(rad.m, maks_tapt, maks_tapt_pst, min_ov_tapt):
+            n_skjult += 1
+            continue
+        celler = "  │  ".join(
+            f"{f'{k} ' + '/'.join(_g(kw[n]) for n in ('min_elongation', 'maks_hoyde', 'maks_bredde', 'conf_terskel')):>{kolonne}}"
+            for k, kw in sorted(rad.spec.items()))
+        markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
+        print("  " + celler + "  │" + _maal_celler(rad.m) + markør)
+        n_vist += 1
+
+    if n_skjult:
+        print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
+    return rader
+
+
+def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor, inkluder_ulabelte):
+    """Viser hvordan utgangspunktet endrer seg med overlapp-terskelen."""
+    print(f"\n{'─' * 118}")
+    print("Sweep: OVERLAPP-TERSKEL (utgangspunkt uten geometrifiltre)")
+    print(f"{'─' * 118}")
+    print(f"  {'Terskel':>8} │ {'TREFF':>8} {'SLURV':>8} {'BOM':>8} │"
+          f" {'dekket':>8} {'udekket':>8} {'recall%':>8} {'pres%':>7} "
+          f"{'dekkere/boks':>13}")
+    print(f"  {'─' * 8}─┼─{'─' * 88}")
     for t in terskler:
-        # Nullstill riktig-flagg
-        for p in pred_liste:
-            p.pop("riktig", None)
-        n_rik, n_ov, n_uten = match_prediksjoner(pred_liste, fasit, t)
-        totalt = n_rik + n_ov
-        pres = n_rik / totalt * 100 if totalt else 0
-        markør = " ◀" if abs(t - 0.15) < 1e-9 else ""
-        print(f"  {t:>8.2f} │ {n_rik:>8} {n_ov:>10} {n_uten:>11} │"
-              f" {pres:>9.1f}% {totalt:>10}{markør}")
+        d = bygg_datasett(fasit, pred, terskel=t, slurv_faktor=slurv_faktor,
+                          inkluder_ulabelte=inkluder_ulabelte)
+        b = baseline(d)
+        snitt = sum(d.dekning_foer) / d.dekket_foer if d.dekket_foer else 0
+        markør = " ◀" if abs(t - valgt) < 1e-9 else ""
+        print(f"  {t:>8.2f} │ {d.n_treff:>8} {d.n_slurv:>8} {d.n_bom:>8} │"
+              f" {d.dekket_foer:>8} {d.n_fasit - d.dekket_foer:>8}"
+              f" {b.recall_etter:>7.2f}% {b.pres_etter:>6.1f}% {snitt:>13.2f}"
+              f"{markør}")
 
 
+# ── Pareto-front ─────────────────────────────────────────────
 
+def _pareto_tabell(rader, kostnad, ds_test=None, tittel="PARETO-FRONT",
+                   maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None):
+    """Viser de ikke-dominerte konfigurasjonene: for hvert nivå av `tapt`,
+    den som fjerner flest oversladdinger. Med ds_test måles hver av dem også
+    på holdout-settet, slik at overtilpasning blir synlig."""
+    front = pareto_front(rader, maal=lambda r: (r.m.tapt, r.m.ov_fj))
+    front = [r for r in front
+             if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
+    if not front:
+        return []
+
+    bredde = max(28, max(len(r.etikett) for r in front) + 2)
+    print(f"\n{'═' * 145}")
+    print(f"{tittel}   ({len(front)} ikke-dominerte av {len(rader)} "
+          f"konfigurasjoner)   [kostnad {kostnad:g}]")
+    if ds_test is not None:
+        print("  Venstre blokk = trening (der konfigurasjonen ble valgt), "
+              "høyre = holdout (uavhengige dokumenter).")
+        print("  Δ er holdout minus trening i prosentpoeng — store negative "
+              "Δov% eller positive Δtapt% betyr overtilpasning.")
+    print(f"{'═' * 145}")
+
+    if ds_test is None:
+        print(f"  {'konfigurasjon':<{bredde}}│{HODE_MAAL}")
+        print(f"  {'─' * bredde}┼{'─' * 106}")
+        for r in front:
+            print(f"  {r.etikett:<{bredde}}│{_maal_celler(r.m)}")
+        return front
+
+    print(f"  {'konfigurasjon':<{bredde}}│"
+          f" {'tapt':>5} {'tapt%':>7} {'ov.fj':>7} {'ov%':>6} {'netto':>8} │"
+          f" {'tapt':>5} {'tapt%':>7} {'ov.fj':>7} {'ov%':>6} {'netto':>8} │"
+          f" {'Δtapt%':>7} {'Δov%':>7}")
+    print(f"  {' ' * bredde}│{'  trening'.ljust(38)} │"
+          f"{'  holdout'.ljust(38)} │")
+    print(f"  {'─' * bredde}┼{'─' * 39}┼{'─' * 39}┼{'─' * 17}")
+
+    resultat = []
+    for r in front:
+        t = evaluer(ds_test, lag_predikat(r.spec), kostnad=kostnad)
+        print(f"  {r.etikett:<{bredde}}│"
+              f" {r.m.tapt:>5} {r.m.tapt_pst:>6.2f}% {r.m.ov_fj:>7} "
+              f"{r.m.ov_pst:>5.1f}% {r.m.netto:>+8.0f} │"
+              f" {t.tapt:>5} {t.tapt_pst:>6.2f}% {t.ov_fj:>7} "
+              f"{t.ov_pst:>5.1f}% {t.netto:>+8.0f} │"
+              f" {t.tapt_pst - r.m.tapt_pst:>+6.2f}p {t.ov_pst - r.m.ov_pst:>+6.1f}p")
+        resultat.append((r, t))
+    return resultat
+
+
+def _anbefaling(front, kostnad, ds_test=None):
+    """Peker ut konfigurasjonen med best netto på fronten."""
+    if not front:
+        return
+    if ds_test is not None:
+        beste = max(front, key=lambda rt: rt[1].netto)   # velg på holdout
+        r, t = beste
+        print(f"\n  Beste netto på HOLDOUT (kostnad {kostnad:g}): {r.etikett}")
+        print(f"    trening: tapt {r.m.tapt} ({r.m.tapt_pst:.2f}%), "
+              f"ov.fj {r.m.ov_fj} ({r.m.ov_pst:.1f}%), recall {r.m.recall_etter:.2f}%")
+        print(f"    holdout: tapt {t.tapt} ({t.tapt_pst:.2f}%), "
+              f"ov.fj {t.ov_fj} ({t.ov_pst:.1f}%), recall {t.recall_etter:.2f}%")
+        spec = r.spec
+    else:
+        r = max(front, key=lambda r: r.m.netto)
+        print(f"\n  Beste netto på fronten (kostnad {kostnad:g}): {r.etikett}")
+        print(f"    tapt {r.m.tapt} ({r.m.tapt_pst:.2f}%), "
+              f"ov.fj {r.m.ov_fj} ({r.m.ov_pst:.1f}%), "
+              f"red.fj {r.m.red_fj}, recall {r.m.recall_etter:.2f}%")
+        spec = r.spec
+    print(f"    filter_review.py ... {review_kommando(spec)}")
+
+
+# ── Hovedprogram ─────────────────────────────────────────────
 
 def main():
     p = argparse.ArgumentParser(
-        description="Overlapp-basert evaluering av filterkonfigurasjoner")
+        description="Fasit-sentrisk evaluering av filterkonfigurasjoner")
     p.add_argument("--fasit-csv", required=True,
                    help="Labels-CSV (ACCEPTED + manuell = fasit, REJECTED ekskluderes)")
     p.add_argument("--res-csv", required=True,
                    help="Resultat-CSV fra modellen (pikselkoordinater)")
-    p.add_argument("--terskel", type=float, default=0.15,
-                   help="Overlapp-terskel for å klassifisere prediksjon som riktig (default: 0.15)")
+    p.add_argument("--terskel", type=float, default=STD_TERSKEL,
+                   help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
+    p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
+                   help="Pred-areal > faktor × dekket fasit-areal ⇒ SLURV "
+                        f"(default: {STD_SLURV_FAKTOR})")
+    p.add_argument("--inkluder-ulabelte", action="store_true",
+                   help="Ta med prediksjoner på dokumenter som ikke finnes i "
+                        "fasit-CSV-en (default: ekskluderes, siden de ellers "
+                        "blåser opp oversladdingstallene)")
+    p.add_argument("--kostnad", type=float, default=1.0,
+                   help="Hvor mange fjernede oversladdinger én tapt fasit-boks "
+                        "er verdt. netto = ov.fj − kostnad × tapt (default: 1)")
+    p.add_argument("--holdout", type=float, default=None, metavar="ANDEL",
+                   help="Hold av denne andelen av DOKUMENTENE til uavhengig "
+                        "måling (f.eks. 0.3). Sweepen kjøres på resten, og "
+                        "Pareto-fronten måles på begge.")
+    p.add_argument("--seed", type=int, default=42,
+                   help="Seed for holdout-splitten (default: 42)")
     p.add_argument("--sort", default="netto",
-                   choices=["netto", "ov.fj", "rik.fj", "pres", "ov/rik"],
-                   help="Sorteringskolonne for kombinasjons-sweep (default: netto)")
-    p.add_argument("--min-ov-rik", type=float, default=None,
-                   help="Vis kun rader der ov.fj/rik.fj > denne verdien (f.eks. 1.0)")
-    p.add_argument("--maks-rik-pst", type=float, default=None,
-                   help="Skjul rader der mer enn denne %% av riktige fjernes (f.eks. 0.5)")
+                   choices=sorted(set(SORT_FNS) | set(SORT_ALIAS)),
+                   help="Sorteringskolonne (default: netto)")
+    p.add_argument("--maks-tapt", type=float, default=None,
+                   help="Skjul rader der flere enn N fasit-bokser går tapt")
+    p.add_argument("--maks-tapt-pst", "--maks-rik-pst", type=float, default=None,
+                   dest="maks_tapt_pst",
+                   help="Skjul rader der mer enn denne %% av dekkede fasit-bokser tapes")
+    p.add_argument("--min-ov-tapt", "--min-ov-rik", type=float, default=None,
+                   dest="min_ov_tapt",
+                   help="Vis kun rader der ov.fj/tapt > denne verdien")
+    p.add_argument("--maks-rader", type=int, default=None,
+                   help="Maks antall rader per tabell")
     p.add_argument("--ut", default=None, metavar="FIL",
-                   help="Skriv resultat til fil (default: auto-generert filnavn)")
-    # Bakoverkompatibilitet
-    p.add_argument("--csv", default=None, help=argparse.SUPPRESS)
+                   help="Skriv rapport til fil (default: auto-generert filnavn)")
+    p.add_argument("--ut-csv", default=None, metavar="FIL",
+                   help="Skriv alle sweep-rader til CSV for videre analyse")
     args = p.parse_args()
 
-    if args.csv and not args.fasit_csv:
-        args.fasit_csv = args.csv
+    if args.holdout is not None and not 0 < args.holdout < 1:
+        p.error("--holdout må være mellom 0 og 1 (f.eks. 0.3)")
 
-    # ── Output-fil ───────────────────────────────────────────
-    if args.ut is None:
-        tidsstempel = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-        ut_fil = f"filter_sweep_{tidsstempel}.txt"
-    else:
-        ut_fil = args.ut
+    ut_fil = args.ut or (
+        f"filter_sweep_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.txt")
 
-    # Tee: skriv til fil + stdout for oppsummering
     class _Tee:
-        """Skriver til fil, printer kun oppsummeringslinjer til terminal."""
+        """Skriver alt til fil, men kun utvalgte deler til terminalen."""
+
         def __init__(self, filobj, terminal):
-            self.fil = filobj
-            self.terminal = terminal
-            self._i_oppsummering = True  # start med oppsummering synlig
+            self.fil, self.terminal = filobj, terminal
+            self.til_terminal = True
 
         def write(self, tekst):
             self.fil.write(tekst)
-            if self._i_oppsummering:
+            if self.til_terminal:
                 self.terminal.write(tekst)
 
         def flush(self):
@@ -545,137 +440,124 @@ def main():
     fil = open(ut_fil, "w", encoding="utf-8")
     tee = _Tee(fil, sys.stdout)
     sys.stdout = tee
+    try:
+        fasit = les_fasit(args.fasit_csv)
+        pred = les_prediksjoner(args.res_csv)
+        ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
+                                slurv_faktor=args.slurv_faktor,
+                                inkluder_ulabelte=args.inkluder_ulabelte)
 
-    # Last data
-    fasit = les_fasit(args.fasit_csv)
-    pred = les_prediksjoner(args.res_csv)
+        print(f"Overlapp-terskel {args.terskel:.0%}, "
+              f"slurv-faktor {args.slurv_faktor:g}, "
+              f"kostnad {args.kostnad:g}\n")
+        skriv_oppsummering(ds_full)
 
-    n_fasit_bokser = sum(len(v) for v in fasit.values())
-    print(f"Fasit:        {n_fasit_bokser} bokser i {len(fasit)} (dok, side)-grupper")
-    print(f"Prediksjoner: {len(pred)} bokser")
-    pred_kilder = {}
-    for b in pred:
-        pred_kilder[b["kilde"]] = pred_kilder.get(b["kilde"], 0) + 1
-    for k, n in sorted(pred_kilder.items()):
-        print(f"  {k}: {n}")
+        ds_test = None
+        if args.holdout is not None:
+            ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
+            n_dok_tren = len({p["dok_nr"] for p in ds.pred})
+            n_dok_test = len({p["dok_nr"] for p in ds_test.pred})
+            print(f"\n  Holdout-splitt (seed {args.seed}, andel "
+                  f"{args.holdout:g}, delt på dokument):")
+            print(f"    trening: {n_dok_tren:>6} dok, {len(ds.pred):>7} pred, "
+                  f"{ds.dekket_foer:>6} dekkede fasit-bokser, "
+                  f"{ds.n_bom:>6} oversladdinger")
+            print(f"    holdout: {n_dok_test:>6} dok, {len(ds_test.pred):>7} pred, "
+                  f"{ds_test.dekket_foer:>6} dekkede fasit-bokser, "
+                  f"{ds_test.n_bom:>6} oversladdinger")
+        else:
+            ds = ds_full
+            print("\n  (ingen holdout — bruk --holdout 0.3 for å se om den "
+                  "valgte konfigurasjonen holder på uavhengige dokumenter)")
 
-    # Match prediksjoner mot fasit
-    print(f"\nMatcher med overlapp-terskel {args.terskel:.0%} ...")
-    n_riktig, n_oversladd, n_uten = match_prediksjoner(pred, fasit, args.terskel)
+        tee.til_terminal = False
 
-    # Splitt i grupper
-    riktige = [p for p in pred if p.get("riktig") is True]
-    oversladdinger = [p for p in pred if p.get("riktig") is False]
+        _sweep_terskel(fasit, pred, [0.15, 0.25, 0.30, 0.35], args.terskel,
+                       args.slurv_faktor, args.inkluder_ulabelte)
+        # bygg_datasett muterer prediksjonene — bygg opp igjen med valgt terskel
+        ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
+                                slurv_faktor=args.slurv_faktor,
+                                inkluder_ulabelte=args.inkluder_ulabelte)
+        if args.holdout is not None:
+            ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
+        else:
+            ds = ds_full
 
-    totalt = len(riktige) + len(oversladdinger)
-    pres = len(riktige) / totalt * 100 if totalt else 0
-    print(f"\nResultat:")
-    print(f"  Riktige prediksjoner (treffer fasit):   {len(riktige)}")
-    print(f"  Oversladdinger (ingen fasit-treff):     {len(oversladdinger)}")
-    print(f"    herav på sider uten fasit:            {n_uten}")
-    print(f"  Presisjon (riktige / totalt):           {pres:.1f}%")
+        _sweep_en_param(ds, "MIN_ELONGATION max(w/h, h/w)",
+                        [1.1, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
+                        lambda v: {"min_elongation": v}, args.kostnad)
+        _sweep_en_param(ds, "MAKS_BOKS_HOYDE_PT",
+                        [25, 30, 35, 40, 45, 50, 60, 80, 100],
+                        lambda v: {"maks_hoyde": v}, args.kostnad)
+        _sweep_en_param(ds, "MAKS_BOKS_BREDDE_PT",
+                        [60, 80, 100, 120, 150, 200, 250],
+                        lambda v: {"maks_bredde": v}, args.kostnad)
 
-    # Vis oversladdinger per kilde
-    print(f"\n  Oversladdinger per kilde:")
-    for kilde in sorted(pred_kilder):
-        n_ov_k = sum(1 for p in oversladdinger if p["kilde"] == kilde)
-        n_tot_k = pred_kilder[kilde]
-        print(f"    {kilde:>8}: {n_ov_k:>5} / {n_tot_k:>5} ({n_ov_k/n_tot_k*100:.1f}%)")
+        har_conf = any(x["conf"] is not None for x in ds.pred)
+        if har_conf:
+            _sweep_en_param(
+                ds, "CONF_TERSKEL (conf≥V beholdes uansett geometri; "
+                    "kombinert med e=1.5/h=50/b=120)",
+                [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                lambda v: {"min_elongation": 1.5, "maks_hoyde": 50,
+                           "maks_bredde": 120, "conf_terskel": v},
+                args.kostnad)
 
-    # ── Slå av terminal-output for sweep-tabeller ──
-    tee._i_oppsummering = False
+        elong_v = [None, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0, 2.5, 3.0]
+        hoyde_v = [None, 40, 50, 60, 80]
+        bredde_v = [None, 80, 100, 120, 150]
+        conf_v = [None, 0.5] if har_conf else [None]
 
-    # ── Terskel-sweep (baseline) ──
-    _sweep_terskel(pred, fasit,
-                   [0.15, 0.25, 0.30, 0.35])
+        csv_rader = [] if args.ut_csv else None
+        grenser = dict(maks_tapt=args.maks_tapt,
+                       maks_tapt_pst=args.maks_tapt_pst,
+                       min_ov_tapt=args.min_ov_tapt)
+        felles = dict(kostnad=args.kostnad, sort_key=args.sort,
+                      csv_rader=csv_rader, maks_rader=args.maks_rader,
+                      **grenser)
 
-    # Tilbakestill til valgt terskel etter terskel-sweep
-    for p in pred:
-        p.pop("riktig", None)
-    match_prediksjoner(pred, fasit, args.terskel)
-    riktige = [p for p in pred if p.get("riktig") is True]
-    oversladdinger = [p for p in pred if p.get("riktig") is False]
+        alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
+                                          conf_v, **felles)
 
-    # ── Enkeltparameter-sweeps ──
-    # Merk: MIN_BOKS_RATIO (kun horisontal) er fjernet — overlapper med MIN_ELONGATION
-    # Merk: MAKS_AREAL_PT² er fjernet — dekkes av kombinasjonen høyde × bredde
+        kilder = ds.kilder()
+        kryss_rader = []
+        if len(kilder) > 1:
+            per_kilde_rader = {}
+            for kilde in kilder:
+                k_conf = ([None, 0.5]
+                          if any(x["conf"] is not None for x in ds.per_kilde[kilde])
+                          else [None])
+                per_kilde_rader[kilde] = _sweep_kombinasjoner(
+                    ds, elong_v, hoyde_v, bredde_v, k_conf,
+                    tittel=f"PER KILDE: {kilde.upper()}", kun_kilde=kilde,
+                    **felles)
+                alle_rader += per_kilde_rader[kilde]
+            kryss_rader = _sweep_kryss_kilder(
+                ds, per_kilde_rader, args.kostnad, args.sort, **grenser)
 
-    _sweep_en_param(riktige, oversladdinger,
-                    "MIN_ELONGATION max(w/h, h/w) — begge retninger",
-                    [1.1, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
-                    lambda v: {"min_ratio": None, "maks_hoyde": None,
-                               "maks_bredde": None, "maks_areal": None,
-                               "min_elongation": v})
+        # ── Pareto-fronter: det eneste avsnittet som også går til terminalen
+        tee.til_terminal = True
+        front = _pareto_tabell(
+            alle_rader + kryss_rader, args.kostnad, ds_test=ds_test,
+            tittel="PARETO-FRONT — alle konfigurasjoner (felles, per kilde "
+                   "og kryss-kilde)", **grenser)
+        _anbefaling(front, args.kostnad, ds_test=ds_test)
+        tee.til_terminal = False
 
-    _sweep_en_param(riktige, oversladdinger,
-                    "MAKS_BOKS_HOYDE_PT",
-                    [25, 30, 35, 40, 45, 50, 60, 80, 100],
-                    lambda v: {"min_ratio": None, "maks_hoyde": v,
-                               "maks_bredde": None, "maks_areal": None})
+        if args.ut_csv and csv_rader:
+            import csv as _csv
+            with open(args.ut_csv, "w", newline="", encoding="utf-8") as f:
+                w = _csv.DictWriter(f, fieldnames=list(csv_rader[0]))
+                w.writeheader()
+                w.writerows(csv_rader)
+    finally:
+        sys.stdout = tee.terminal
+        fil.close()
 
-    _sweep_en_param(riktige, oversladdinger,
-                    "MAKS_BOKS_BREDDE_PT (universell)",
-                    [60, 80, 100, 120, 150, 200, 250],
-                    lambda v: {"min_ratio": None, "maks_hoyde": None,
-                               "maks_bredde": v, "maks_areal": None})
-
-    # Confidence-terskel sweep (kun relevant om conf finnes)
-    if any(p["conf"] is not None for p in pred):
-        _sweep_en_param(riktige, oversladdinger,
-                        "CONF_TERSKEL (conf≥V → behold uansett geometri, "
-                        "kombinert med e=1.5/h=50/b=120)",
-                        [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-                        lambda v: {"min_ratio": None, "maks_hoyde": 50,
-                                   "maks_bredde": 120, "maks_areal": None,
-                                   "min_elongation": 1.5, "conf_terskel": v})
-
-    # ── Kombinasjons-sweep (samlet) ──
-    elong_verdier = [None, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0, 2.5, 3.0]
-    hoyde_verdier = [None, 40, 50, 60, 80]
-    bredde_verdier = [None, 80, 100, 120, 150]
-    conf_verdier = [None, 0.5]
-
-    # Sjekk om det finnes conf-verdier i dataene
-    har_conf_data = any(p["conf"] is not None for p in pred)
-    aktiv_conf = conf_verdier if har_conf_data else [None]
-
-    _sweep_kombinasjoner(riktige, oversladdinger,
-                         elong_verdier, hoyde_verdier, bredde_verdier,
-                         conf_v=aktiv_conf,
-                         sort_key=args.sort, min_ov_rik=args.min_ov_rik,
-                         maks_rik_pst=args.maks_rik_pst)
-
-    # ── Per-kilde kombinasjons-sweep ──
-    kilder = sorted(set(p["kilde"] for p in pred))
-    if len(kilder) > 1:
-        for kilde in kilder:
-            rik_k = [p for p in riktige if p["kilde"] == kilde]
-            ov_k = [p for p in oversladdinger if p["kilde"] == kilde]
-            if not rik_k and not ov_k:
-                continue
-            # Kun conf-sweep for kilder som har conf
-            kilde_har_conf = any(p["conf"] is not None for p in rik_k + ov_k)
-            kilde_conf = conf_verdier if kilde_har_conf else [None]
-            _sweep_kombinasjoner(rik_k, ov_k,
-                                 elong_verdier, hoyde_verdier, bredde_verdier,
-                                 conf_v=kilde_conf,
-                                 sort_key=args.sort,
-                                 tittel=f"PER KILDE: {kilde.upper()}",
-                                 min_ov_rik=args.min_ov_rik,
-                                 maks_rik_pst=args.maks_rik_pst)
-
-        # ── Kryssvalidert sweep: uavhengige parametre per kilde ──
-        _sweep_kryss_kilder(riktige, oversladdinger, kilder,
-                            elong_verdier, hoyde_verdier, bredde_verdier,
-                            conf_v=aktiv_conf,
-                            sort_key=args.sort, min_ov_rik=args.min_ov_rik,
-                            maks_rik_pst=args.maks_rik_pst)
-
-    # ── Lukk output-fil og vis melding ──
-    sys.stdout = tee.terminal
-    fil.close()
-    filstr = os.path.getsize(ut_fil)
-    print(f"\n✓ Sweep-resultater skrevet til: {ut_fil} ({filstr // 1024} KB)")
+    print(f"\n✓ Rapport skrevet til: {ut_fil} "
+          f"({os.path.getsize(ut_fil) // 1024} KB)")
+    if args.ut_csv:
+        print(f"✓ Sweep-rader skrevet til: {args.ut_csv}")
 
 
 if __name__ == "__main__":
