@@ -27,7 +27,8 @@ from csv_export import initialiser_csv, append_csv
 from evaluation import mal_overlapp, les_fasit, _dok_nr
 from visualization import tegn_og_lagre
 from redaction import sladd_alle
-from yolo_fnr import sett_vekter
+from yolo_fnr import sett_vekter, aktive_vekter
+from yolo_cache import cache_mappe_for_vekter
 from load_pdf import PDF_DPI
 import traceback
 from save_result import lagre_resultat
@@ -211,17 +212,28 @@ def main():
                         "Sett til eksplisitt sti for å overstyre.")
     p.add_argument("--no-ocr-cache", action="store_true",
                    help="deaktiver OCR-cache helt")
+    p.add_argument("--yolo-cache", default=None,
+                   help="basemappe for per-dokument YOLO-cache (rå bokser per modell). "
+                        "Vektfilens hash legges til som undermappe, så hver modell får "
+                        "sin egen cache. Standard: $SLADD_CACHE/<uttrekk-navn>/yolo/ "
+                        "utledet fra --mappe. Sett til eksplisitt sti for å overstyre.")
+    p.add_argument("--no-yolo-cache", action="store_true",
+                   help="deaktiver YOLO-cache helt")
     args = p.parse_args()
 
-    # ── Utled OCR-cache-sti ──────────────────────────────────────
+    # ── Utled cache-stier ────────────────────────────────────────
     if args.no_ocr_cache:
         args.ocr_cache = None
-    elif args.ocr_cache is None:
-        # Auto-utled fra SLADD_CACHE + mappenavnet til uttrekket
-        cache_base = os.environ.get("SLADD_CACHE")
-        if cache_base:
-            uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
+    if args.no_yolo_cache:
+        args.yolo_cache = None
+    # Auto-utled fra SLADD_CACHE + mappenavnet til uttrekket
+    cache_base = os.environ.get("SLADD_CACHE")
+    if cache_base:
+        uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
+        if args.ocr_cache is None and not args.no_ocr_cache:
             args.ocr_cache = os.path.join(cache_base, uttrekk_navn, "ocr")
+        if args.yolo_cache is None and not args.no_yolo_cache:
+            args.yolo_cache = os.path.join(cache_base, uttrekk_navn, "yolo")
 
     # ── Tidlig validering av inputfiler ─────────────────────────
     if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
@@ -242,6 +254,17 @@ def main():
         return
 
     sett_vekter(args.yolo_vekter)
+
+    # Én cache-mappe per modell: vektfilens hash blir undermappe, slik at en ny
+    # modell aldri leser en annen modells bokser.
+    if args.elektronisk_tinglyst:
+        args.yolo_cache = None          # elektronisk tinglyst kjører uten YOLO
+    if args.yolo_cache:
+        if os.path.isfile(aktive_vekter()):
+            args.yolo_cache = cache_mappe_for_vekter(args.yolo_cache, aktive_vekter())
+        else:
+            print(f"ADVARSEL: fant ikke vektfil {aktive_vekter()} - YOLO-cache deaktivert")
+            args.yolo_cache = None
 
     # ── Opprett utdata-mapper automatisk ─────────────────────────
     utdata_mapper = [m for m in [
@@ -277,12 +300,20 @@ def main():
         print("Ingen filer aa behandle - sjekk --mappe / --velg / --antall.")
         return
 
+    def _antall_cachet(mappe):
+        return sum(1 for f in filer
+                   if os.path.isfile(os.path.join(mappe,
+                       os.path.splitext(os.path.basename(f))[0] + ".json")))
+
     if args.ocr_cache:
         os.makedirs(args.ocr_cache, exist_ok=True)
-        n_cachet = sum(1 for f in filer
-                       if os.path.isfile(os.path.join(args.ocr_cache,
-                           os.path.splitext(os.path.basename(f))[0] + ".json")))
-        print(f"OCR-cache: {args.ocr_cache} ({n_cachet}/{len(filer)} dokumenter cachet)")
+        print(f"OCR-cache:  {args.ocr_cache} "
+              f"({_antall_cachet(args.ocr_cache)}/{len(filer)} dokumenter cachet)")
+
+    if args.yolo_cache:
+        os.makedirs(args.yolo_cache, exist_ok=True)
+        print(f"YOLO-cache: {args.yolo_cache} "
+              f"({_antall_cachet(args.yolo_cache)}/{len(filer)} dokumenter cachet)")
 
     # Resume: hopp over allerede prosesserte filer
     hoppet_over = 0
@@ -350,7 +381,8 @@ def main():
             resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
                                               elektronisk_tinglyst=args.elektronisk_tinglyst,
                                               kun_yolo=args.kun_yolo,
-                                              cache_mappe=args.ocr_cache)
+                                              cache_mappe=args.ocr_cache,
+                                              yolo_cache_mappe=args.yolo_cache)
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()

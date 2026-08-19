@@ -39,6 +39,14 @@ YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
 MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
 MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
 
+# Konfidens-gulv YOLO-cachen skrives med (utils/run.py --yolo-cache). Må ligge
+# under alle terskler man vil kunne endre uten å invalidere cachen: bokser
+# lagres ned til gulvet og filtreres mot YOLO_CONF ved lesing. Merk at et lavere
+# gulv sender flere kandidater inn i NMS enn en ren predict på YOLO_CONF gjør;
+# boksene som overlever YOLO_CONF blir de samme, siden NMS alltid undertrykker
+# med en høyere-skårende boks.
+YOLO_CACHE_CONF_GULV = 0.05
+
 # ---- Paddle OCR --------------------------------------------
 MODELL_SETT        = "v6"      # "v5" eller "v6"
 DET_SIDE_LEN       = 2048      # deteksjon: maks sidelengde i piksler

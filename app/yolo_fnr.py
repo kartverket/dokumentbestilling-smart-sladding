@@ -23,6 +23,10 @@ def sett_vekter(sti):
         _modell = None          # tving ny lasting hvis modellen alt er lastet
 
 
+def aktive_vekter():
+    return _vekter_sti
+
+
 def _hent_modell():
     global _modell
     if _modell is None:
@@ -33,9 +37,11 @@ def _hent_modell():
     return _modell
 
 
-def finn_yolo_bokser(bilde):
+def finn_yolo_bokser(bilde, conf=None):
+    """Kjør YOLO paa ett bilde. conf=None gir predict-terskelen YOLO_CONF."""
     bgr = np.ascontiguousarray(bilde[:, :, ::-1])    # RGB (PyMuPDF) -> BGR (ultralytics)
-    res = _hent_modell().predict(bgr, conf=YOLO_CONF, imgsz=YOLO_IMGSZ, verbose=False)
+    res = _hent_modell().predict(bgr, conf=YOLO_CONF if conf is None else conf,
+                                 imgsz=YOLO_IMGSZ, verbose=False)
     ut = []
     for boks in res[0].boxes:
         x0, y0, x1, y1 = boks.xyxy[0].tolist()
