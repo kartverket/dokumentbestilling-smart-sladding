@@ -385,7 +385,10 @@ def _diff_kriterier(fasit, pred, spek_a, spek_b, slurv_faktor,
         if ka in klasser and kb in klasser:
             kryss[(ka, kb)] += 1
     print(f"\n  PREDIKSJONER — klasse under A (rad) vs B (kolonne):")
-    print(f"    {'A \\ B':<10}" + "".join(f"{k:>10}" for k in klasser) + f"{'sum':>10}")
+    # Literalen holdes utenfor f-strengen: Python < 3.12 tillater ikke
+    # backslash inne i uttrykksdelen av en f-string.
+    hode = "A \\ B"
+    print(f"    {hode:<10}" + "".join(f"{k:>10}" for k in klasser) + f"{'sum':>10}")
     for ka in klasser:
         rad = [kryss[(ka, kb)] for kb in klasser]
         print(f"    {ka:<10}" + "".join(f"{v:>10}" for v in rad) + f"{sum(rad):>10}")
