@@ -521,7 +521,7 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
 
 
 def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
-                   utsnitt_margin=60.0, velg=None):
+                   utsnitt_margin=60.0, velg=None, ds=None):
     """Anvender filteret DIREKTE på saksbehandlernes sladdinger.
 
     Hver fasit-boks er en sladding et menneske faktisk gjorde, altså per
@@ -593,21 +593,69 @@ def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
 
     for felt, tittel in (("_grunn", "regel (en boks kan bryte flere)"),
                          ("ml_status", "ml_status"), ("type", "type")):
-        fordeling = defaultdict(int)
+        fordeling, nevner = defaultdict(int), defaultdict(int)
         for r in forkastet:
             if felt == "_grunn":
                 for g in r["_grunner"]:
                     fordeling[re.sub(r"[\d.]+", "N", g, count=1)] += 1
             else:
                 fordeling[r[felt]] += 1
+        if felt != "_grunn":
+            for r in rader:
+                nevner[r[felt]] += 1
         if len(fordeling) > 1 or felt == "_grunn":
             print(f"\n  Gruppert etter {tittel}:")
             for k, v in sorted(fordeling.items(), key=lambda kv: -kv[1]):
-                print(f"    {v:>6}  {k}")
+                tot = nevner.get(k)
+                andel = f"  av {tot} = {v / tot * 100:.3f}%" if tot else ""
+                print(f"    {v:>6}  {k}{andel}")
+
+    # ── Krysstabell: forkastet form vs. faktisk mistet dekning ──
+    # En fasit-boks med ulovlig form betyr ingenting hvis modellens EGEN boks
+    # for samme felt har lovlig form og overlever filteret. Det er forskjellen
+    # mellom «mennesket tegnet stygt» og «vi mister sladdingen».
+    if ds is not None:
+        m = evaluer(ds, lag_filter(**filter_kwargs), samle_tapte=True)
+        tapte = set(m.tapte_bokser or ())
+        i_scope = {}
+        for j, fb in enumerate(ds.fasit_bokser):
+            i_scope[(fb["dok_nr"], fb["side"],
+                     round(fb["boks"][0], 1), round(fb["boks"][1], 1))] = j
+        ute = form_og_tapt = form_men_dekket = 0
+        for r in forkastet:
+            j = i_scope.get((r["dok_nr"], r["side"],
+                             round(r["boks"][0], 1), round(r["boks"][1], 1)))
+            if j is None:
+                r["_status"] = "utenfor_scope"
+                ute += 1
+            elif j in tapte:
+                r["_status"] = "MISTET_DEKNING"
+                form_og_tapt += 1
+            else:
+                r["_status"] = "fortsatt_dekket"
+                form_men_dekket += 1
+        i_scope_forkastet = form_og_tapt + form_men_dekket
+        print("")
+        print("  Kryssjekk mot modellens egne bokser "
+              f"({len(ds.fasit_bokser)} labels på kjørte dokumenter):")
+        print(f"    Ulovlig form OG mistet dekning:  {form_og_tapt:>5}"
+              "   ← reell risiko")
+        print(f"    Ulovlig form, men fortsatt dekket: {form_men_dekket:>3}"
+              "   ← artefakt: modellens boks har lovlig form")
+        if ute:
+            print(f"    Utenfor scope (dokument ikke kjørt):{ute:>5}"
+                  "   ← kan ikke vurderes")
+        if i_scope_forkastet:
+            print(f"    Andel artefakt av vurderbare: "
+                  f"{form_men_dekket / i_scope_forkastet * 100:.0f}%")
+        print(f"    Totalt mistet dekning under samme filter: {m.tapt}")
 
     # ── Manifest ──
     os.makedirs(ut_mappe, exist_ok=True)
-    forkastet.sort(key=lambda r: ("; ".join(r["_grunner"]), r["dok_nr"], r["side"]))
+    rang = {"MISTET_DEKNING": 0, "": 1, "utenfor_scope": 2, "fortsatt_dekket": 3}
+    forkastet.sort(key=lambda r: (rang.get(r.get("_status", ""), 1),
+                                  "; ".join(r["_grunner"]),
+                                  r["dok_nr"], r["side"]))
     manifest = []
     for nr, r in enumerate(forkastet, 1):
         x0, y0, x1, y1 = r["boks"]
@@ -620,6 +668,7 @@ def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
             "langside_pt": round(r["langside"], 1),
             "bredde_pt": round(r["w"], 1), "hoyde_pt": round(r["h"], 1),
             "areal_px": round(r["areal_px"]),
+            "status": r.get("_status", ""),
             "x0": round(x0, 1), "y0": round(y0, 1),
             "utsnitt": f"{nr:04d}_{r['dok_nr']}_side{r['side']}.png",
             "vurdering": "",
@@ -800,9 +849,18 @@ def main():
         if not kw_alle:
             p.error("--mot-fasit krever minst ett filter "
                     "(--elongation, --maks-elongation, --min-kortside, ...)")
+        ds_kryss = None
+        if args.res_csv:
+            kjorte = (les_kjorte_dok(args.kjorte_liste)
+                      if args.kjorte_liste else None)
+            ds_kryss = bygg_datasett(
+                les_fasit(args.fasit_csv), les_prediksjoner(args.res_csv),
+                terskel=args.terskel, slurv_faktor=args.slurv_faktor,
+                inkluder_ulabelte=args.inkluder_ulabelte, kjorte_dok=kjorte)
         test_mot_fasit(args.fasit_csv, args.mappe, args.ut_mappe, kw_alle,
                        maks_sider=args.maks_sider,
-                       utsnitt_margin=args.utsnitt_margin, velg=args.velg)
+                       utsnitt_margin=args.utsnitt_margin, velg=args.velg,
+                       ds=ds_kryss)
         print("\nFerdig!")
         return
 

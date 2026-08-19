@@ -1,16 +1,27 @@
 # ---- PDF-rendering -----------------------------------------
 PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, mer nøyaktig)
 
-# ---- Dimensjonsfiltre (gjelder paddle + yolo; «begge» er fritatt) ----------
-# «begge»-bokser bekreftet av begge modeller (98.1% presisjon) — filtreres ikke.
-# Høy-konfidens YOLO-bokser (conf ≥ YOLO_CONF_GEOMETRI_TERSKEL) er også fritatt.
+# ---- Dimensjonsfiltre ------------------------------------------------------
+# Grensene er UNIVERSELLE: de gjelder alle bokser uansett kilde (paddle, yolo,
+# begge) og uansett konfidens. Ingen unntak.
+#
+# Grensene er orienteringsuavhengige: en sladding av 5 sifre kan stå loddrett,
+# og da er «høyde» den lange siden. Tidligere MAKS_BOKS_HOYDE_PT/…_BREDDE_PT
+# målte høyde og bredde hver for seg og forkastet derfor stående sladdinger
+# systematisk — 30 av 34 feilaktige fjerninger i gjennomgangen av uttrekk 4.
+#
+# Verdiene er utledet fra 41 manuelt gjennomgåtte tap på uttrekk 4
+# (utils/filter_sweep.py + filter_review.py). Resultat med disse: 64 fjernede
+# oversladdinger, 7 tapte fasit-bokser, alle 7 bekreftet som bokser som ikke
+# skulle vært sladdet. Holdout-validert på uavhengige dokumenter.
 MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²) — gjelder alle
-MIN_ELONGATION     = 1.5       # min max(w/h, h/w) — forkaster nesten-kvadratiske bokser
-MAKS_BOKS_HOYDE_PT = 50        # absolutt maks høyde i PDF-punkt
-MAKS_BOKS_BREDDE_PT = 120      # absolutt maks bredde (120 pt: netto +15, bedre ov/rik enn 100 pt)
-MAKS_BREDDE_ELEKTRONISK_PT = 50  # strengere maks bredde for elektronisk tinglyste
+MIN_ELONGATION     = 1.44      # min max(w/h, h/w) — forkaster nesten-kvadratiske bokser
+                               # (1.5 tok 3 ekte sladdinger på 1.47-1.49)
+MAKS_ELONGATION    = 9         # maks max(w/h, h/w) — bokser 3-4x bredere enn feltet
+MIN_KORTSIDE_PT    = 6         # min korteste side i punkt — for tynn til å være tekst
 
-YOLO_CONF_GEOMETRI_TERSKEL = 0.5  # YOLO-bokser med conf ≥ dette hopper over geometrifiltre
+# Kun default for --maks-bredde i utils/tegn.py; ikke del av filterstien.
+MAKS_BREDDE_ELEKTRONISK_PT = 50
 
 # ---- YOLO --------------------------------------------------
 YOLO_CONF          = 0.12      # predict-terskel

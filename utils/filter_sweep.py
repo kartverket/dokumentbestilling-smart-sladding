@@ -233,6 +233,7 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
 
 
 def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
+                        felt=STD_FELT,
                         maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None):
     """Kombinerer de beste kandidatene per kilde og måler globalt.
 
@@ -254,7 +255,7 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
         spec = {k: kw for (k, kw) in kombo}
         m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
         etikett = "  ".join(
-            f"{k} " + "/".join(_g(kw.get(n)) for n in STD_FELT)
+            f"{k} " + "/".join(_g(kw.get(n)) for n in felt)
             for k, kw in sorted(spec.items()))
         rader.append(Rad(m, etikett, spec))
 
@@ -264,8 +265,10 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
           f"[kostnad {kostnad:g}, topp {maks_kand} kandidater per kilde]")
     print(f"{'═' * 145}")
 
-    kolonne = max(24, max(len(k) for k in kilder) + 18)
-    hode = "  " + "  │  ".join(f"{k + ' (e/h/b/c)':>{kolonne}}" for k in kilder)
+    akse_navn = "/".join(n.split("_")[-1][:4] for n in felt)
+    kolonne = max(24, max(len(k) for k in kilder) + len(akse_navn) + 6)
+    hode = "  " + "  │  ".join(f"{k + f' ({akse_navn})':>{kolonne}}"
+                               for k in kilder)
     print(hode + "  │" + HODE_MAAL)
     print(f"  {'─' * (len(hode) + 106)}")
 
@@ -273,7 +276,7 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
                 if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
     for rad in pareto_front(aktuelle)[:15]:
         celler = "  │  ".join(
-            f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in STD_FELT):>{kolonne}}"
+            f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in felt):>{kolonne}}"
             for k, kw in sorted(rad.spec.items()))
         print("  " + celler + "  │" + _maal_celler(rad.m))
     n_skjult = len(rader) - len(aktuelle)
@@ -667,16 +670,36 @@ def main():
         alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
                                           conf_v, **felles)
 
+        STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",
+                       "conf_terskel")
         stoy_rader = _sweep_kombinasjoner(
             ds, [None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
             [None, 6, 8, 10, 12, 15], conf_v,
-            felt=("min_kortside", "min_langside", "maks_elongation",
-                  "conf_terskel"),
-            hoder=("k.min", "l.min", "e.maks", "conf≥"),
+            felt=STOY_FELT_G, hoder=("k.min", "l.min", "e.maks", "conf≥"),
             tittel="STØYFILTRE — for små eller for tynne til å være 5 sifre",
             **felles)
 
+        STOY_FELT = ("min_kortside", "min_langside", "maks_elongation",
+                     "conf_terskel")
+        STOY_HODER = ("k.min", "l.min", "e.maks", "conf≥")
+        STOY_AKSER = ([None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
+                      [None, 6, 8, 10, 12, 15])
+
         kilder = ds.kilder()
+        # Per kilde på støy-aksene: paddle-bokser er tette 5-siffer-bokser med
+        # smalt formområde, yolo-bokser er rå deteksjoner. Terskler som er
+        # gratis for én kilde kan koste for en annen.
+        stoy_per_kilde = {}
+        for kilde in kilder:
+            k_conf = ([None, 0.5]
+                      if any(x["conf"] is not None for x in ds.per_kilde[kilde])
+                      else [None])
+            stoy_per_kilde[kilde] = _sweep_kombinasjoner(
+                ds, *STOY_AKSER, k_conf, felt=STOY_FELT, hoder=STOY_HODER,
+                tittel=f"STØYFILTRE PER KILDE: {kilde.upper()}",
+                kun_kilde=kilde, **felles)
+            alle_rader += stoy_per_kilde[kilde]
+
         kryss_rader = []
         if len(kilder) > 1:
             per_kilde_rader = {}
@@ -691,6 +714,9 @@ def main():
                 alle_rader += per_kilde_rader[kilde]
             kryss_rader = _sweep_kryss_kilder(
                 ds, per_kilde_rader, args.kostnad, args.sort, **grenser)
+            kryss_rader += _sweep_kryss_kilder(
+                ds, stoy_per_kilde, args.kostnad, args.sort,
+                felt=STOY_FELT, **grenser)
 
         # ── Pareto-fronter: det eneste avsnittet som også går til terminalen
         tee.til_terminal = True
