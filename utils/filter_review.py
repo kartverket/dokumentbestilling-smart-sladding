@@ -26,6 +26,7 @@ Kjør:
 """
 
 import argparse
+import csv
 import os
 import sys
 from collections import defaultdict
@@ -46,6 +47,7 @@ TAPT_FASIT         = (230, 0, 200, 255)     # magenta = fasit-boks uten dekning
 KRITISK_FJERNET    = (220, 30, 30, 230)     # rød     = eneste dekker, fjernet
 REDUNDANT_FJERNET  = (235, 150, 20, 230)    # oransje = dekkende, men erstattet
 OVERSLADD_FJERNET  = (30, 180, 30, 220)     # grønn   = oversladding fjernet
+BOM                = (255, 90, 0, 235)      # oransje = treffer ingen fasit-boks
 BEHOLDT            = (160, 160, 160, 100)   # grå     = beholdt
 FASIT              = (30, 80, 220, 140)     # blå     = fasit, fortsatt dekket
 
@@ -68,8 +70,10 @@ def _tegn_tekst(tegner, r, tekst, farge, over=True):
 
 def _etikett(kwargs):
     deler = []
-    for nøkkel, mal in (("min_elongation", "e≥{:g}"), ("maks_hoyde", "h≤{:g}"),
-                        ("maks_bredde", "b≤{:g}"), ("maks_areal", "a≤{:g}"),
+    for nøkkel, mal in (("min_elongation", "e≥{:g}"), ("maks_elongation", "e≤{:g}"),
+                        ("maks_hoyde", "h≤{:g}"), ("min_hoyde", "h≥{:g}"),
+                        ("maks_bredde", "b≤{:g}"), ("min_bredde", "b≥{:g}"),
+                        ("maks_areal", "a≤{:g}"), ("min_areal_px", "apx≥{:g}"),
                         ("conf_terskel", "c≥{:g}→behold")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
@@ -82,8 +86,10 @@ def _etikett_per_kilde(per_kilde):
 
 def _mappenavn(kwargs):
     deler = []
-    for nøkkel, kort in (("min_elongation", "e"), ("maks_hoyde", "h"),
-                         ("maks_bredde", "b"), ("maks_areal", "a"),
+    for nøkkel, kort in (("min_elongation", "e"), ("maks_elongation", "eM"),
+                         ("maks_hoyde", "h"), ("min_hoyde", "hm"),
+                         ("maks_bredde", "b"), ("min_bredde", "bm"),
+                         ("maks_areal", "a"), ("min_areal_px", "apx"),
                          ("conf_terskel", "c")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
@@ -103,7 +109,8 @@ def _render_side(dok, si):
 
 
 def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
-                   kun_tapt=False, velg=None, maks_sider=None):
+                   kun_tapt=False, velg=None, maks_sider=None,
+                   utsnitt_margin=60.0):
     """Tegner fjernede bokser på original-PDF-ene, gruppert etter alvorlighet."""
     if per_kilde:
         etikett = _etikett_per_kilde(per_kilde)
@@ -145,6 +152,70 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
             p["_kat"] = "kritisk"
         else:
             p["_kat"] = "redundant"
+
+    # ── Manifest over hver tapt fasit-boks, for manuell gjennomgang ──
+    fjernet_for = defaultdict(list)
+    for p in ds.pred:
+        if p["_kat"] in ("kritisk",):
+            for j in p["dekker"]:
+                if j in tapte:
+                    fjernet_for[j].append(p)
+
+    navn_per_dok = {}
+    for p in ds.pred:
+        navn_per_dok.setdefault(p["dok_nr"], p["navn"])
+
+    manifest = []
+    for j in sorted(tapte):
+        fb = ds.fasit_bokser[j]
+        fx0, fy0, fx1, fy1 = fb["boks"]
+        for p in fjernet_for.get(j, [{}]):
+            manifest.append({
+                "fil": navn_per_dok.get(fb["dok_nr"], f"{fb['dok_nr']}"),
+                "side": fb["side"],
+                "fasit_x0": round(fx0, 1), "fasit_y0": round(fy0, 1),
+                "fasit_bredde_pt": round(fx1 - fx0, 1),
+                "fasit_hoyde_pt": round(fy1 - fy0, 1),
+                "dekkere_foer": ds.dekning_foer[j],
+                "kilde": p.get("kilde", ""),
+                "conf": p.get("conf") if p.get("conf") is not None else "",
+                "pred_bredde_pt": round(p["w"], 1) if p else "",
+                "pred_hoyde_pt": round(p["h"], 1) if p else "",
+                "elongation": round(p["elongation"], 2) if p else "",
+                "grunn": "; ".join(p.get("_grunner", ())),
+                "_j": j,
+                "vurdering": "",
+            })
+    # Grupper like årsaker sammen — gjør gjennomgangen raskere
+    manifest.sort(key=lambda r: (r["grunn"], r["fil"], r["side"]))
+    utsnitt_navn = {}
+    for nr, rad in enumerate(manifest, 1):
+        rad["nr"] = nr
+        base = os.path.splitext(os.path.basename(rad["fil"]))[0]
+        rad["utsnitt"] = f"{nr:04d}_{base}_side{rad['side']}.png"
+        utsnitt_navn.setdefault(rad["_j"], []).append(rad["utsnitt"])
+
+    if manifest:
+        os.makedirs(ut_mappe, exist_ok=True)
+        manifest_sti = os.path.join(ut_mappe, "tapt.csv")
+        felt = ["nr", "fil", "side", "grunn", "kilde", "conf", "elongation",
+                "pred_bredde_pt", "pred_hoyde_pt", "fasit_bredde_pt",
+                "fasit_hoyde_pt", "dekkere_foer", "fasit_x0", "fasit_y0",
+                "utsnitt", "vurdering"]
+        with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=felt, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(manifest)
+        print(f"  Manifest over tapte bokser: {manifest_sti}")
+        print(f"    {len(manifest)} rader for {len(tapte)} tapte bokser"
+              + ("  (en boks kan ha flere fjernede dekkere)"
+                 if len(manifest) != len(tapte) else ""))
+        per_grunn = defaultdict(int)
+        for rad in manifest:
+            per_grunn[rad["grunn"]] += 1
+        print("  Tap gruppert etter regel som utløste fjerningen:")
+        for grunn, n in sorted(per_grunn.items(), key=lambda kv: -kv[1]):
+            print(f"    {n:>5}  {grunn}")
 
     # Alvorlighet per side: (antall tapte fasit-bokser, antall kritiske bokser)
     tapt_per_side = defaultdict(int)
@@ -189,9 +260,10 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
     per_side = defaultdict(list)
     for p in ds.pred:
         per_side[(p["navn"], p["side"])].append(p)
-    fasit_per_side = defaultdict(list)
+    fasit_indekser_per_side = defaultdict(list)
     for j, fb in enumerate(ds.fasit_bokser):
-        fasit_per_side[(fb["dok_nr"], fb["side"])].append(j)
+        fasit_indekser_per_side[(fb["dok_nr"], fb["side"])].append(j)
+    fasit_per_side = fasit_indekser_per_side
 
     per_fil = defaultdict(list)
     for (_, _, _, navn, si) in aktuelle:
@@ -271,6 +343,26 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
                                 font=_font_liten())
 
             bilde = Image.alpha_composite(base, overlay).convert("RGB")
+
+            # Utsnitt rundt hver tapt fasit-boks på denne siden
+            if utsnitt_margin:
+                mrg = utsnitt_margin * SKALA
+                for j in fasit_indekser_per_side.get((dok_nr(navn), si), ()):
+                    if j not in tapte:
+                        continue
+                    fx0, fy0, fx1, fy1 = ds.fasit_bokser[j]["boks"]
+                    boks = (max(0, int(fx0 * SKALA * sx - mrg)),
+                            max(0, int(fy0 * SKALA * sy - mrg)),
+                            min(bilde.width, int(fx1 * SKALA * sx + mrg)),
+                            min(bilde.height, int(fy1 * SKALA * sy + mrg)))
+                    if boks[2] <= boks[0] or boks[3] <= boks[1]:
+                        continue
+                    ut = os.path.join(mapper["tapt"], "utsnitt")
+                    os.makedirs(ut, exist_ok=True)
+                    for filnavn_u in utsnitt_navn.get(j, ()):
+                        bilde.crop(boks).save(os.path.join(ut, filnavn_u))
+                        telling["utsnitt"] += 1
+
             filnavn = f"{os.path.splitext(navn)[0]}_side{si}.png"
             if "kritisk" in har:
                 bilde.save(os.path.join(mapper["tapt"], filnavn))
@@ -293,6 +385,126 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
     for navn in ("tapt", "redundant_fjernet", "oversladd_fjernet"):
         if telling[navn]:
             print(f"    {telling[navn]:>5} side(r) i {navn}/")
+    if telling["utsnitt"]:
+        print(f"    {telling['utsnitt']:>5} utsnitt i tapt/utsnitt/ "
+              f"— én per tapt boks, samme rekkefølge som tapt.csv")
+
+
+def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
+    """Tegner ALLE BOM-prediksjoner, uavhengig av filter.
+
+    En BOM-boks treffer ingen fasit-boks, men fasit er menneskeskapt: den kan
+    like godt være et fødselsnummer saksbehandleren bommet på som en reell
+    oversladding. Det skillet kan ikke leses ut av geometrien — det må ses.
+
+    Sidene sorteres slik at 'begge'-bokser kommer først: der begge modellene
+    er enige om at det står et fødselsnummer, er sannsynligheten for at fasit
+    er feil størst.
+    """
+    bom = [p for p in ds.pred if p["klasse"] == "BOM"]
+    print(f"\nTRIAGE av BOM-bokser (treffer ingen fasit-boks)")
+    print(f"  Totalt: {len(bom)}")
+    per_kilde = defaultdict(int)
+    for p in bom:
+        per_kilde[p["kilde"]] += 1
+    for k in sorted(per_kilde):
+        print(f"    {k:>8}: {per_kilde[k]:>5}")
+    if not bom:
+        return
+
+    prioritet = {"begge": 0, "yolo": 1, "paddle": 2}
+    sider = defaultdict(list)
+    for p in bom:
+        sider[(p["navn"], p["side"])].append(p)
+
+    if velg:
+        velg_sett = {os.path.basename(v) for v in velg}
+        sider = {k: v for k, v in sider.items()
+                 if os.path.basename(k[0]) in velg_sett}
+
+    rangert = sorted(
+        sider.items(),
+        key=lambda kv: (min(prioritet.get(p["kilde"], 9) for p in kv[1]),
+                        -len(kv[1]), kv[0]))
+    if maks_sider:
+        rangert = rangert[:maks_sider]
+
+    per_side = defaultdict(list)
+    for p in ds.pred:
+        per_side[(p["navn"], p["side"])].append(p)
+    fasit_per_side = defaultdict(list)
+    for fb in ds.fasit_bokser:
+        fasit_per_side[(fb["dok_nr"], fb["side"])].append(fb)
+
+    per_fil = defaultdict(list)
+    for (navn, si), _ in rangert:
+        per_fil[navn].append(si)
+
+    telling = defaultdict(int)
+    n_tegnet = 0
+    for navn in sorted(per_fil):
+        sti = os.path.join(mappe, navn)
+        if not os.path.isfile(sti):
+            print(f"  ⚠ Finner ikke {sti}, hopper over")
+            continue
+        try:
+            dok = fitz.open(sti)
+        except Exception as e:
+            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            continue
+
+        for si in sorted(per_fil[navn]):
+            if not 1 <= si <= len(dok):
+                continue
+            side_pred = per_side[(navn, si)]
+            bilde = _render_side(dok, si)
+            base = bilde.convert("RGBA")
+            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            tegner = ImageDraw.Draw(overlay)
+            sx = bilde.width / side_pred[0]["bw"]
+            sy = bilde.height / side_pred[0]["bh"]
+
+            for fb in fasit_per_side.get((dok_nr(navn), si), ()):
+                fx0, fy0, fx1, fy1 = fb["boks"]
+                tegner.rectangle([fx0 * SKALA * sx, fy0 * SKALA * sy,
+                                  fx1 * SKALA * sx, fy1 * SKALA * sy],
+                                 outline=FASIT, width=2)
+
+            kilder_her = set()
+            for p in side_pred:
+                px = p["px"]
+                r = [px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy]
+                if p["klasse"] == "BOM":
+                    kilder_her.add(p["kilde"])
+                    tegner.rectangle(r, outline=BOM, width=4)
+                    merke = f"BOM [{p['kilde']}]"
+                    if p["conf"] is not None:
+                        merke += f" conf={p['conf']:.2f}"
+                    _tegn_tekst(tegner, r, merke, BOM, over=True)
+                    _tegn_tekst(tegner, r,
+                                f"{p['w']:.0f}x{p['h']:.0f}pt e={p['elongation']:.1f}",
+                                BOM, over=False)
+                else:
+                    tegner.rectangle(r, outline=BEHOLDT, width=1)
+
+            bilde = Image.alpha_composite(base, overlay).convert("RGB")
+            filnavn = f"{os.path.splitext(navn)[0]}_side{si}.png"
+            for k in kilder_her:
+                undermappe = os.path.join(ut_mappe, "bom", k)
+                os.makedirs(undermappe, exist_ok=True)
+                bilde.save(os.path.join(undermappe, filnavn))
+                telling[k] += 1
+            n_tegnet += 1
+
+        dok.close()
+
+    print(f"  Tegnet {n_tegnet} sider til {os.path.join(ut_mappe, 'bom')}")
+    for k in sorted(telling):
+        print(f"    {telling[k]:>5} side(r) i bom/{k}/")
+    print("\n  Blå = fasit (saksbehandlerens sladding), oransje = BOM, grå = treff.")
+    print("  Spørsmålet per oransje boks: står det et fødselsnummer der?")
+    print("    ja  → saksbehandleren bommet, modellen har rett (ikke oversladding)")
+    print("    nei → reell oversladding")
 
 
 SWEEP_KONFIGER = [
@@ -341,16 +553,34 @@ def main():
                       dest="maks_bredde", help="Maks boksbredde i punkt")
     filt.add_argument("--maks-areal", type=float, default=None,
                       dest="maks_areal", help="Maks boksareal i pt²")
+    filt.add_argument("--maks-elongation", type=float, default=None,
+                      dest="maks_elongation",
+                      help="Maks elongation — fjerner tynne, lange streker")
+    filt.add_argument("--min-hoyde", type=float, default=None, dest="min_hoyde",
+                      help="Min bokshøyde i punkt")
+    filt.add_argument("--min-bredde", type=float, default=None, dest="min_bredde",
+                      help="Min boksbredde i punkt")
+    filt.add_argument("--min-areal-px", type=float, default=None,
+                      dest="min_areal_px",
+                      help="Min boksareal i PIKSEL² (som MIN_BOKS_AREAL)")
     filt.add_argument("--conf", type=float, default=None, dest="conf_terskel",
                       help="conf ≥ denne verdien beholdes uansett geometri")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
+    p.add_argument("--bom", action="store_true",
+                   help="Triage-modus: tegn ALLE BOM-bokser (treffer ingen "
+                        "fasit-boks) uavhengig av filter, 'begge'-kilden "
+                        "først. Svarer på om de er oversladding eller "
+                        "fødselsnumre saksbehandleren bommet på.")
     p.add_argument("--sweep", action="store_true",
                    help="Kjør et sett forhåndsdefinerte konfigurasjoner")
     p.add_argument("--kun-tapt", "--kun-riktige", action="store_true",
                    dest="kun_tapt",
                    help="Tegn kun sider der en fasit-boks mistet all dekning")
+    p.add_argument("--utsnitt-margin", type=float, default=60.0, metavar="PT",
+                   help="Margin rundt utsnittene av tapte bokser, i punkt. "
+                        "0 slår av utsnitt (default: 60)")
     p.add_argument("--maks-sider", type=int, default=None,
                    help="Maks antall sider å tegne (verst først)")
     p.add_argument("--velg", nargs="+", metavar="PDF",
@@ -366,9 +596,13 @@ def main():
     skriv_oppsummering(ds)
 
     felles = dict(kun_tapt=args.kun_tapt, velg=args.velg,
-                  maks_sider=args.maks_sider)
+                  maks_sider=args.maks_sider,
+                  utsnitt_margin=args.utsnitt_margin)
 
-    if args.per_kilde:
+    if args.bom:
+        triage_bom(ds, args.mappe, args.ut_mappe, velg=args.velg,
+                   maks_sider=args.maks_sider)
+    elif args.per_kilde:
         per_kilde = parse_per_kilde(args.per_kilde)
         ukjente = set(per_kilde) - {k.lower() for k in ds.kilder()}
         if ukjente:
@@ -381,11 +615,13 @@ def main():
             generer_bilder(ds, args.mappe, ut, filter_kwargs=kw, **felles)
     else:
         kw = {n: getattr(args, n) for n in
-              ("min_elongation", "maks_hoyde", "maks_bredde", "maks_areal",
+              ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
+               "maks_bredde", "min_bredde", "maks_areal", "min_areal_px",
                "conf_terskel") if getattr(args, n) is not None}
         if not kw:
             p.error("Oppgi minst ett filter (--elongation, --maks-hoyde, "
-                    "--maks-bredde, --maks-areal, --conf), --per-kilde eller --sweep")
+                    "--maks-bredde, --maks-areal, --conf), --per-kilde, "
+                    "--bom eller --sweep")
         generer_bilder(ds, args.mappe, args.ut_mappe, filter_kwargs=kw, **felles)
 
     print("\nFerdig!")

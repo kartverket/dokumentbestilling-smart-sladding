@@ -123,6 +123,7 @@ def les_prediksjoner(sti):
                 "ratio": ratio,
                 "elongation": max(ratio, 1 / ratio),
                 "areal": w_pt * h_pt,
+                "areal_px": abs(x1 - x0) * abs(y1 - y0),
                 "kilde": kilde, "conf": conf,
             })
     return pred
@@ -331,40 +332,67 @@ def pareto_front(rader, maal=lambda r: (r.m.tapt, r.m.ov_fj)):
 
 # ── Filtrering ───────────────────────────────────────────────
 
-FILTER_PARAMETRE = ("min_elongation", "maks_hoyde", "maks_bredde",
-                    "maks_areal", "conf_terskel")
+FILTER_PARAMETRE = ("min_elongation", "maks_elongation",
+                    "maks_hoyde", "min_hoyde", "maks_bredde", "min_bredde",
+                    "maks_areal", "min_areal_px", "conf_terskel")
 
 
-def filter_grunner(p, min_elongation=None, maks_hoyde=None, maks_bredde=None,
-                   maks_areal=None, conf_terskel=None):
-    """Grunner til at boksen filtreres bort (tom liste = beholdes)."""
-    # Høy confidence → stol på prediksjonen, hopp over geometrifiltre
+def filter_grunner(p, min_elongation=None, maks_elongation=None,
+                   maks_hoyde=None, min_hoyde=None,
+                   maks_bredde=None, min_bredde=None,
+                   maks_areal=None, min_areal_px=None, conf_terskel=None):
+    """Grunner til at boksen filtreres bort (tom liste = beholdes).
+
+    min_areal_px er i PIKSEL² for å matche MIN_BOKS_AREAL i config.py, og
+    sjekkes FØR conf-porten: i prod gjelder støygrensen alle bokser, også
+    høy-confidence og «begge».
+    """
+    grunner = []
+    if min_areal_px is not None and p["areal_px"] < min_areal_px:
+        grunner.append(f"areal {p['areal_px']:.0f}px² < {min_areal_px:g}")
+        return grunner
+    # Høy confidence → stol på prediksjonen, hopp over resten av geometrien
     if conf_terskel is not None and p.get("conf") is not None \
             and p["conf"] >= conf_terskel:
         return []
-    grunner = []
     if min_elongation is not None and p["elongation"] < min_elongation:
         grunner.append(f"elong {p['elongation']:.1f} < {min_elongation:g}")
+    if maks_elongation is not None and p["elongation"] > maks_elongation:
+        grunner.append(f"elong {p['elongation']:.1f} > {maks_elongation:g}")
     if maks_hoyde is not None and p["h"] > maks_hoyde:
         grunner.append(f"høyde {p['h']:.0f} > {maks_hoyde:g}")
+    if min_hoyde is not None and p["h"] < min_hoyde:
+        grunner.append(f"høyde {p['h']:.1f} < {min_hoyde:g}")
     if maks_bredde is not None and p["w"] > maks_bredde:
         grunner.append(f"bredde {p['w']:.0f} > {maks_bredde:g}")
+    if min_bredde is not None and p["w"] < min_bredde:
+        grunner.append(f"bredde {p['w']:.1f} < {min_bredde:g}")
     if maks_areal is not None and p["areal"] > maks_areal:
         grunner.append(f"areal {p['areal']:.0f} > {maks_areal:g}")
     return grunner
 
 
-def er_filtrert(p, min_elongation=None, maks_hoyde=None, maks_bredde=None,
-                maks_areal=None, conf_terskel=None):
+def er_filtrert(p, min_elongation=None, maks_elongation=None,
+                maks_hoyde=None, min_hoyde=None,
+                maks_bredde=None, min_bredde=None,
+                maks_areal=None, min_areal_px=None, conf_terskel=None):
     """Rask variant av filter_grunner som ikke bygger tekst."""
+    if min_areal_px is not None and p["areal_px"] < min_areal_px:
+        return True
     if conf_terskel is not None and p["conf"] is not None \
             and p["conf"] >= conf_terskel:
         return False
     if min_elongation is not None and p["elongation"] < min_elongation:
         return True
+    if maks_elongation is not None and p["elongation"] > maks_elongation:
+        return True
     if maks_hoyde is not None and p["h"] > maks_hoyde:
         return True
+    if min_hoyde is not None and p["h"] < min_hoyde:
+        return True
     if maks_bredde is not None and p["w"] > maks_bredde:
+        return True
+    if min_bredde is not None and p["w"] < min_bredde:
         return True
     if maks_areal is not None and p["areal"] > maks_areal:
         return True
@@ -392,12 +420,17 @@ def lag_filter_per_kilde(per_kilde, kun_kilde=None):
 
 
 def parse_per_kilde(spec_liste):
-    """Parser "kilde:e=V,h=V,b=V,a=V,c=V" → {kilde: {parametre}}."""
+    """Parser "kilde:e=V,h=V,b=V,c=V,..." → {kilde: {parametre}}.
+
+    e/emaks = min/maks elongation, h/hmin = maks/min høyde (pt),
+    b/bmin = maks/min bredde (pt), a = maks areal (pt²),
+    amin = min areal (px², som MIN_BOKS_AREAL), c = conf-terskel.
+    """
     param_map = {
-        "e": "min_elongation",
-        "h": "maks_hoyde",
-        "b": "maks_bredde",
-        "a": "maks_areal",
+        "e": "min_elongation",      "emaks": "maks_elongation",
+        "h": "maks_hoyde",          "hmin": "min_hoyde",
+        "b": "maks_bredde",         "bmin": "min_bredde",
+        "a": "maks_areal",          "amin": "min_areal_px",
         "c": "conf_terskel",
     }
     resultat = {}

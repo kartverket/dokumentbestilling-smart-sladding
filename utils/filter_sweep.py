@@ -101,21 +101,30 @@ def _skjult_tekst(n, maks_tapt, maks_tapt_pst, min_ov_tapt):
     return f"  ({n} rader skjult: {' eller '.join(krav)})"
 
 
+# (kort per-kilde-kode, langt CLI-flagg) per filterparameter
+PARAM_KODER = (
+    ("min_elongation", "e", "--elongation"),
+    ("maks_elongation", "emaks", "--maks-elongation"),
+    ("maks_hoyde", "h", "--maks-hoyde"),
+    ("min_hoyde", "hmin", "--min-hoyde"),
+    ("maks_bredde", "b", "--maks-bredde"),
+    ("min_bredde", "bmin", "--min-bredde"),
+    ("maks_areal", "a", "--maks-areal"),
+    ("min_areal_px", "amin", "--min-areal-px"),
+    ("conf_terskel", "c", "--conf"),
+)
+
+
 def review_kommando(spec):
     """Gjenskaper filteret som argumenter til filter_review.py."""
     def _par(kw):
-        return ",".join(f"{kort}={kw[navn]:g}" for kort, navn in
-                        (("e", "min_elongation"), ("h", "maks_hoyde"),
-                         ("b", "maks_bredde"), ("a", "maks_areal"),
-                         ("c", "conf_terskel"))
+        return ",".join(f"{kort}={kw[navn]:g}"
+                        for navn, kort, _flagg in PARAM_KODER
                         if kw.get(navn) is not None)
     if None in spec:
-        flagg = {"min_elongation": "--elongation", "maks_hoyde": "--maks-hoyde",
-                 "maks_bredde": "--maks-bredde", "maks_areal": "--maks-areal",
-                 "conf_terskel": "--conf"}
         kw = spec[None]
-        biter = [f"{f} {kw[n]:g}" for n, f in flagg.items()
-                 if kw.get(n) is not None]
+        biter = [f"{flagg} {kw[navn]:g}" for navn, _kort, flagg in PARAM_KODER
+                 if kw.get(navn) is not None]
         return " ".join(biter) or "(ingen filter)"
     biter = [f'"{k}:{_par(kw)}"' for k, kw in sorted(spec.items()) if _par(kw)]
     return ("--per-kilde " + " ".join(biter)) if biter else "(ingen filter)"
@@ -134,8 +143,13 @@ def _sweep_en_param(ds, navn, verdier, filter_fn, kostnad):
         print(f"  {_g(v):>8} │{_maal_celler(m)}")
 
 
+STD_FELT = ("min_elongation", "maks_hoyde", "maks_bredde", "conf_terskel")
+STD_HODER = ("elong", "hoyde", "bredde", "conf≥")
+
+
 def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
-                         sort_key, tittel=None, kun_kilde=None,
+                         sort_key, felt=STD_FELT, hoder=STD_HODER,
+                         tittel=None, kun_kilde=None,
                          maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None,
                          csv_rader=None, maks_rader=None):
     """Sweeper alle kombinasjoner. kun_kilde: filtrer bare den kilden,
@@ -161,16 +175,15 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
     print(f"{'═' * 145}")
 
     har_conf = any(c is not None for c in conf_v)
-    param_hode = (f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} {'conf≥':>6} │"
-                  if har_conf else
-                  f"  {'elong':>6} {'hoyde':>6} {'bredde':>7} │")
+    h0, h1, h2, h3 = hoder
+    param_hode = (f"  {h0:>6} {h1:>6} {h2:>7} {h3:>6} │"
+                  if har_conf else f"  {h0:>6} {h1:>6} {h2:>7} │")
     print(param_hode + HODE_MAAL)
     print(f"  {'─' * (len(param_hode) - 4)}┼{'─' * 106}")
 
     rader = []
     for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
-        kw = {"min_elongation": min_e, "maks_hoyde": maks_h,
-              "maks_bredde": maks_b, "conf_terskel": c_t}
+        kw = dict(zip(felt, (min_e, maks_h, maks_b, c_t)))
         m = evaluer(ds, lag_filter(**kw), kostnad=kostnad, kandidater=kandidater)
         etikett = (f"{_g(min_e)}/{_g(maks_h)}/{_g(maks_b)}/{_g(c_t)}"
                    + (f" [{kun_kilde}]" if kun_kilde else ""))
@@ -198,9 +211,8 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
             continue
         if maks_rader is not None and n_vist >= maks_rader:
             continue
-        e, h, b, c = (rad.spec[kun_kilde if kun_kilde else None][n] for n in
-                      ("min_elongation", "maks_hoyde", "maks_bredde",
-                       "conf_terskel"))
+        e, h, b, c = (rad.spec[kun_kilde if kun_kilde else None][n]
+                      for n in felt)
         params = (f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} {_g(c):>6} │"
                   if har_conf else f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} │")
         markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
@@ -247,8 +259,7 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
         spec = {k: kw for (k, kw) in kombo}
         m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
         etikett = "  ".join(
-            f"{k} {_g(kw['min_elongation'])}/{_g(kw['maks_hoyde'])}/"
-            f"{_g(kw['maks_bredde'])}/{_g(kw['conf_terskel'])}"
+            f"{k} " + "/".join(_g(kw.get(n)) for n in STD_FELT)
             for k, kw in sorted(spec.items()))
         rader.append(Rad(m, etikett, spec))
 
@@ -262,7 +273,7 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
             n_skjult += 1
             continue
         celler = "  │  ".join(
-            f"{f'{k} ' + '/'.join(_g(kw[n]) for n in ('min_elongation', 'maks_hoyde', 'maks_bredde', 'conf_terskel')):>{kolonne}}"
+            f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in STD_FELT):>{kolonne}}"
             for k, kw in sorted(rad.spec.items()))
         markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
         print("  " + celler + "  │" + _maal_celler(rad.m) + markør)
@@ -294,6 +305,111 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
               f" {d.dekket_foer:>8} {d.n_fasit - d.dekket_foer:>8}"
               f" {b.recall_etter:>7.2f}% {b.pres_etter:>6.1f}% {snitt:>13.2f}"
               f"{markør}")
+
+
+# ── Formanalyse ──────────────────────────────────────────────
+
+MAAL = (("elongation", "elongation", 2), ("h", "høyde (pt)", 1),
+        ("w", "bredde (pt)", 1), ("areal_px", "areal (px²)", 0))
+
+PERSENTILER = (0.1, 1, 5, 50, 95, 99, 99.9)
+
+
+def _persentil(sortert, pst):
+    if not sortert:
+        return 0.0
+    i = (len(sortert) - 1) * pst / 100.0
+    lav, høy = int(i), min(int(i) + 1, len(sortert) - 1)
+    return sortert[lav] + (sortert[høy] - sortert[lav]) * (i - lav)
+
+
+def _sweep_fordeling(ds):
+    """Persentiler for form, per kilde og klasse.
+
+    Sladdeboksen dekker de 5 siste sifrene i et fødselsnummer, så formen er
+    fysisk begrenset. Ligger en BOM-boks utenfor det TREFF-boksene noen gang
+    har vært, er formen umulig — ikke bare uvanlig.
+    """
+    print(f"\n{'═' * 145}")
+    print("FORM-FORDELING  (hva en 5-sifret sladding faktisk ser ut som)")
+    print(f"{'═' * 145}")
+    hode = f"  {'kilde':>8} {'klasse':>7} {'n':>7} │ {'mål':<12}"
+    for pst in PERSENTILER:
+        hode += f" {('p' + format(pst, 'g')):>9}"
+    print(hode)
+    print(f"  {'─' * (len(hode) - 2)}")
+
+    for kilde in ds.kilder():
+        for klasse in ("TREFF", "SLURV", "BOM"):
+            gruppe = [p for p in ds.per_kilde[kilde] if p["klasse"] == klasse]
+            if not gruppe:
+                continue
+            for nr, (nøkkel, navn, des) in enumerate(MAAL):
+                sortert = sorted(p[nøkkel] for p in gruppe)
+                venstre = (f"  {kilde:>8} {klasse:>7} {len(gruppe):>7} │"
+                           if nr == 0 else f"  {'':>8} {'':>7} {'':>7} │")
+                rad = venstre + f" {navn:<12}"
+                for pst in PERSENTILER:
+                    rad += f" {_persentil(sortert, pst):>9.{des}f}"
+                print(rad)
+            print(f"  {'·' * 100}")
+
+
+def _avled_grenser(ds, pst, bruk_conf=None):
+    """Grenser per kilde utledet fra TREFF-fordelingen, ikke fra netto.
+
+    Nedre grense = TREFF-persentil `pst` fra bunnen, øvre = fra toppen.
+    Ingen tilpasning mot ov.fj — grensene beskriver bare hvilke former
+    korrekte sladdinger har hatt.
+    """
+    spec = {}
+    for kilde in ds.kilder():
+        treff = [p for p in ds.per_kilde[kilde]
+                 if p["klasse"] in ("TREFF", "SLURV")]
+        if len(treff) < 100:          # for få til å estimere haler
+            continue
+        kw = {}
+        for nøkkel, felt_min, felt_maks in (
+                ("elongation", "min_elongation", "maks_elongation"),
+                ("h", "min_hoyde", "maks_hoyde"),
+                ("w", "min_bredde", "maks_bredde")):
+            sortert = sorted(p[nøkkel] for p in treff)
+            kw[felt_min] = round(_persentil(sortert, pst), 2)
+            kw[felt_maks] = round(_persentil(sortert, 100 - pst), 2)
+        areal = sorted(p["areal_px"] for p in treff)
+        kw["min_areal_px"] = round(_persentil(areal, pst))
+        if bruk_conf is not None:
+            kw["conf_terskel"] = bruk_conf
+        spec[kilde] = kw
+    return spec
+
+
+def _rapport_grenser(ds, ds_test, pst, kostnad):
+    """Måler den utledede form-grensen — trening og holdout."""
+    print(f"\n{'═' * 145}")
+    print(f"FORM-GRENSE UTLEDET FRA TREFF  (nedre = p{pst:g}, øvre = p{100 - pst:g} "
+          f"av korrekte bokser per kilde)")
+    print("  Grensene er IKKE tilpasset ov.fj — de beskriver bare hvilke former")
+    print("  korrekte 5-siffer-sladdinger har hatt. Alt utenfor har umulig form.")
+    print(f"{'═' * 145}")
+
+    for merke, conf in (("uten conf-port", None), ("med conf≥0.5-port", 0.5)):
+        spec = _avled_grenser(ds, pst, bruk_conf=conf)
+        if not spec:
+            print("  (for få TREFF-bokser per kilde til å estimere haler)")
+            return
+        print(f"\n  {merke}:")
+        for kilde, kw in sorted(spec.items()):
+            print(f"    {kilde:>8}  elong [{kw['min_elongation']:g}, "
+                  f"{kw['maks_elongation']:g}]  h [{kw['min_hoyde']:g}, "
+                  f"{kw['maks_hoyde']:g}]  b [{kw['min_bredde']:g}, "
+                  f"{kw['maks_bredde']:g}]  areal ≥ {kw['min_areal_px']:g}px²")
+        m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
+        print(f"    trening: {_maal_celler(m)}")
+        if ds_test is not None:
+            t = evaluer(ds_test, lag_filter_per_kilde(spec), kostnad=kostnad)
+            print(f"    holdout: {_maal_celler(t)}")
+        print(f"    → filter_review.py {review_kommando(spec)}")
 
 
 # ── Pareto-front ─────────────────────────────────────────────
@@ -389,6 +505,10 @@ def main():
                    help="Ta med prediksjoner på dokumenter som ikke finnes i "
                         "fasit-CSV-en (default: ekskluderes, siden de ellers "
                         "blåser opp oversladdingstallene)")
+    p.add_argument("--form-pst", type=float, default=0.1, metavar="P",
+                   help="Persentil for form-grensen utledet fra TREFF-bokser: "
+                        "nedre grense = pP, øvre = p(100-P). Lavere = mer "
+                        "konservativt (default: 0.1)")
     p.add_argument("--kjorte-liste", default=None, metavar="FIL",
                    help="Fil med dokumentene modellen har kjørt på (ett navn "
                         "eller nummer per linje). Uten den antas dokumentene "
@@ -513,6 +633,22 @@ def main():
                            "maks_bredde": 120, "conf_terskel": v},
                 args.kostnad)
 
+        _sweep_en_param(ds, "MIN_BOKS_AREAL (px²) — bittesmå bokser",
+                        [500, 700, 965, 1200, 1600, 2200, 3000],
+                        lambda v: {"min_areal_px": v}, args.kostnad)
+        _sweep_en_param(ds, "MIN_BOKS_HOYDE_PT — for lave for 5 lesbare sifre",
+                        [3, 4, 5, 6, 7, 8, 10],
+                        lambda v: {"min_hoyde": v}, args.kostnad)
+        _sweep_en_param(ds, "MIN_BOKS_BREDDE_PT — for smale for 5 sifre",
+                        [8, 12, 16, 20, 25, 30, 40],
+                        lambda v: {"min_bredde": v}, args.kostnad)
+        _sweep_en_param(ds, "MAKS_ELONGATION — tynne, lange streker",
+                        [6, 8, 10, 12, 15, 20, 30, 50],
+                        lambda v: {"maks_elongation": v}, args.kostnad)
+
+        _sweep_fordeling(ds)
+        _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
+
         elong_v = [None, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0, 2.5, 3.0]
         hoyde_v = [None, 40, 50, 60, 80]
         bredde_v = [None, 80, 100, 120, 150]
@@ -528,6 +664,14 @@ def main():
 
         alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
                                           conf_v, **felles)
+
+        stoy_rader = _sweep_kombinasjoner(
+            ds, [None, 3, 4, 5, 6], [None, 8, 12, 16, 20],
+            [None, 8, 10, 12, 15, 20], conf_v,
+            felt=("min_hoyde", "min_bredde", "maks_elongation", "conf_terskel"),
+            hoder=("h.min", "b.min", "e.maks", "conf≥"),
+            tittel="STØYFILTRE — for små eller for tynne til å være 5 sifre",
+            **{**felles, "csv_rader": None})
 
         kilder = ds.kilder()
         kryss_rader = []
@@ -548,7 +692,7 @@ def main():
         # ── Pareto-fronter: det eneste avsnittet som også går til terminalen
         tee.til_terminal = True
         front = _pareto_tabell(
-            alle_rader + kryss_rader, args.kostnad, ds_test=ds_test,
+            alle_rader + stoy_rader + kryss_rader, args.kostnad, ds_test=ds_test,
             tittel="PARETO-FRONT — alle konfigurasjoner (felles, per kilde "
                    "og kryss-kilde)", **grenser)
         _anbefaling(front, args.kostnad, ds_test=ds_test)
