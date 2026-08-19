@@ -94,8 +94,8 @@ def main():
                    help="fasit-CSV for automatisk evaluering til slutt")
     p.add_argument("--rapport-ut", default="res_prod_fasit.txt",
                    help="txt-rapport med treff/oversladding/timing")
-    p.add_argument("--terskel", type=float, default=0.15,
-                   help="andel fasit-areal som kreves for TRUFFET (default 0.15)")
+    p.add_argument("--terskel", type=float, default=0.32,
+                   help="andel fasit-areal som kreves for TRUFFET (default 0.32)")
     p.add_argument("--ingen-fasit", action="store_true", help="hopp over automatisk fasit-evaluering")
     args = p.parse_args()
 

@@ -44,7 +44,7 @@ def _sidestr(navn, si, mappe, sladd_bokser):
     iw, ih, _ = sladd_bokser[(navn, si)]
     return iw, ih
 
-def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.15, y_origin="topp", kilder=None, yolo_bokser=None):
+def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kilder=None, yolo_bokser=None):
     if fasit is None:
         print("Ingen fasit — hopper over måling.")
         return None

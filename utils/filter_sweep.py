@@ -642,7 +642,7 @@ def main():
                         f"(default: {STD_KRITERIUM})")
     p.add_argument("--terskel-liste", default=None, metavar="T,T,...",
                    help="Terskler i terskel-sweepen, komma-separert "
-                        "(default: 0.15,0.25,0.35,0.40,0.50,0.70,0.90)")
+                        "(default: 0.15,0.25,0.32,0.40,0.50,0.70,0.90)")
     p.add_argument("--kriterium-diff", nargs=2, default=None,
                    metavar=("A", "B"),
                    help="Sammenlign to matcheregler og vis hvor mange treff "
@@ -765,7 +765,7 @@ def main():
 
         terskler = ([float(t) for t in args.terskel_liste.split(",")]
                     if args.terskel_liste
-                    else [0.15, 0.25, 0.35, 0.40, 0.50, 0.70, 0.90])
+                    else [0.15, 0.25, 0.32, 0.40, 0.50, 0.70, 0.90])
         _sweep_terskel(fasit, pred, terskler, args.terskel,
                        args.slurv_faktor, args.inkluder_ulabelte, kjorte,
                        kriterium=args.kriterium)

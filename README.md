@@ -138,7 +138,7 @@ python run.py [flagg]
 | `--csv-ut FIL`           | `sladd_koordinater.csv`                       | Filnavn for boks-CSV                             |
 | `--fasit`                | av                                            | Mål recall mot fasit-CSV                         |
 | `--fasit-csv FIL`        | `smartsladding_uttrekk_labels_3_07_07_26.csv` | Fasit-CSV                                        |
-| `--terskel FLOAT`        | `0.15`                                        | Andel fasit-areal som kreves for TRUFFET         |
+| `--terskel FLOAT`        | `0.32`                                        | Andel fasit-areal som kreves for TRUFFET         |
 | `--y-origin topp\|bunn`  | `topp`                                        | Y-origo i fasit-CSV                              |
 | `--png`                  | av                                            | Tegn funne + fasit-bokser til PNG                |
 | `--png-mappe STI`        | `visning`                                     | Mappe for PNG-ene                                |
@@ -180,7 +180,7 @@ python tegn.py [flagg]
 | `--fasit-csv FIL`       | `smartsladding_uttrekk_labels_3_07_07_26.csv` | Fasit-CSV (tegnes som grønne rammer)             |
 | `--velg FIL [FIL ...]`  | —                                             | Begrens til disse filene                         |
 | `--fasit`               | av                                            | Mål recall mot fasit og skriv ut i terminal      |
-| `--terskel FLOAT`       | `0.15`                                        | Overlapp-terskel for TRUFFET                     |
+| `--terskel FLOAT`       | `0.32`                                        | Overlapp-terskel for TRUFFET                     |
 | `--yolo`                | av                                            | Kjør YOLO og vis treff som røde rammer           |
 | `--kun-oversladd`       | av                                            | Tegn kun sider med over-sladding                 |
 | `--kun-bom`             | av                                            | Tegn kun sider med minst én MANGLER (+ `--fasit`)|

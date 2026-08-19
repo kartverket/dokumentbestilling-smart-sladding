@@ -163,8 +163,8 @@ def main():
                    help="kjor YOLO og vis treff som roede rammer med conf")
     p.add_argument("--fasit", action="store_true",
                    help="maal recall mot fasit og skriv ut i terminal")
-    p.add_argument("--terskel", type=float, default=0.15,
-                   help="overlapp-terskel for TRUFFET (default 0.15)")
+    p.add_argument("--terskel", type=float, default=0.32,
+                   help="overlapp-terskel for TRUFFET (default 0.32)")
     p.add_argument("--kun-oversladd", action="store_true",
                    help="tegn kun sider med over-sladding (boks uten fasit-treff), "
                         "lagres i undermappa kun_oversladd/ under --png-mappe")

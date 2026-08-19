@@ -41,7 +41,13 @@ except ImportError:  # kjøring utenfor repoet
 
 SKALA = PDF_DPI / 72.0   # PDF-punkt → piksel
 
-STD_TERSKEL = 0.15       # min dekning av fasit-boks for at prediksjonen "treffer"
+# Terskelen er valgt ved MANUELL gjennomgang av utsnittene i gråsonen
+# (filter_review.py --band areal LO HI) over flere spenn, ikke regnet ut fra
+# geometri alene. Den er bevisst lavere enn separasjonsanalysen på label-par
+# antydet: falske treff på nabolinjen er sjeldne i praksis (12 av 20019 målt
+# på uttrekk 4), så det koster mer å forkaste ekte treff enn å slippe gjennom
+# naboer. Endre den ikke uten en ny båndgjennomgang.
+STD_TERSKEL = 0.32       # min dekning av fasit-boks for at prediksjonen "treffer"
 STD_SLURV_FAKTOR = 3.0   # pred-areal > faktor × dekket fasit-areal ⇒ SLURV
 
 
@@ -128,7 +134,7 @@ STD_KRITERIUM = "areal"
 # løper sifrene langs langsiden, så dette er «hvor mange siffer dekket vi» —
 # det operasjonelt meningsfulle målet, men et svakt skille mellom nabolinjer
 # (de deler samme langside-utstrekning). Terskelen er ikke kalibrert ennå.
-ANBEFALT_TERSKEL = {"areal": 0.40, "kortside": 0.60, "iou": 0.20, "senter": 0.40}
+ANBEFALT_TERSKEL = {"areal": 0.32, "kortside": 0.60, "iou": 0.20, "senter": 0.40}
 
 
 # ── Innlesing ────────────────────────────────────────────────

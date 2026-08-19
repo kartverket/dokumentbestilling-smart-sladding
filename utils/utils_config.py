@@ -9,7 +9,8 @@ SLADD_MAPPE  = "sladdet"
 Y_ORIGIN     = "topp"         
 
 # --- Evaluering ---
-TERSKEL      = 0.15            # andel fasit-areal som kreves for TRUFFET
+TERSKEL      = 0.32            # andel fasit-areal som kreves for TRUFFET
+                               # (manuelt validert — se STD_TERSKEL i filter_felles.py)
 
 # --- Farger (visualization.py) ---
 # Alle farger RGBA med 0.8 opacity (alpha=204). Aldri fyll, kun outline.
