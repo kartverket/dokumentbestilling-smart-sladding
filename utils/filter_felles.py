@@ -110,13 +110,24 @@ def match_metrikker(pn, fn, fasit_horisontal):
 KRITERIER = {
     "areal":    lambda m, t: m["dek_f"] >= t,
     "kortside": lambda m, t: m["dek_kort"] >= t,
+    "langside": lambda m, t: m["dek_lang"] >= t,
     "iou":      lambda m, t: m["iou"] >= t,
     "senter":   lambda m, t: m["senter_kort"] <= t,
 }
+
+# Hvilket felt i match_metrikker hvert kriterium leser, og om lav verdi er bra.
+# Brukes av båndgjennomgangen for å hente ut verdien selve terskelen gjelder.
+KRITERIUM_FELT = {"areal": "dek_f", "kortside": "dek_kort",
+                  "langside": "dek_lang", "iou": "iou", "senter": "senter_kort"}
+KRITERIUM_LAV_ER_BRA = {"senter"}
 STD_KRITERIUM = "areal"
 
 # Fornuftig terskel per kriterium, målt på label-par fra uttrekk 4 + 5
 # (947 samme-felt-par, 2696 ulike-felt-par). Se docs.
+# langside = andel av fasit-boksens LANGSIDE som dekkes. For et fødselsnummer
+# løper sifrene langs langsiden, så dette er «hvor mange siffer dekket vi» —
+# det operasjonelt meningsfulle målet, men et svakt skille mellom nabolinjer
+# (de deler samme langside-utstrekning). Terskelen er ikke kalibrert ennå.
 ANBEFALT_TERSKEL = {"areal": 0.40, "kortside": 0.60, "iou": 0.20, "senter": 0.40}
 
 

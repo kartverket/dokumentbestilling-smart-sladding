@@ -37,9 +37,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
-from filter_felles import (PDF_DPI, SKALA, STD_SLURV_FAKTOR, STD_TERSKEL,
+from filter_felles import (KRITERIER, KRITERIUM_FELT, KRITERIUM_LAV_ER_BRA,
+                           PDF_DPI, SKALA, STD_KRITERIUM, STD_SLURV_FAKTOR,
+                           STD_TERSKEL,
                            bygg_datasett, dok_nr, evaluer, filter_grunner,
-                           overlapp,
+                           match_metrikker, overlapp,
                            lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
                            les_fasit_rader, les_prediksjoner, parse_per_kilde,
                            skriv_oppsummering)
@@ -520,6 +522,202 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
     print("    nei → reell oversladding")
 
 
+BAND_FASIT = (30, 120, 255, 255)     # blå   = fasit (saksbehandlerens sladding)
+BAND_PRED  = (230, 30, 30, 255)      # rød   = prediksjonen i båndet
+BAND_ANNEN = (150, 150, 150, 140)    # grå   = andre bokser på siden
+
+
+def band_review(ds, mappe, ut_mappe, kriterium, lo, hi, maks=None,
+                utsnitt_margin=25.0, ut_csv=None):
+    """Tegner UTSNITT av hvert (prediksjon, fasit)-par der målet ligger i [lo, hi).
+
+    Dette er gråsonen terskelen faktisk avgjør. Under lo forkastes paret uansett
+    valg, over hi godtas det uansett — det er kun båndet som skifter side når
+    terskelen flyttes fra lo til hi. Derfor er det bare disse som må ses.
+
+    Fasit er menneskeskapt og kan være feil: en fasit-boks kan være slurvete
+    tegnet, dekke to felt, eller sitte på noe som ikke er et fødselsnummer.
+    Utsnittet viser derfor selve dokumentinnholdet, ikke bare rammene, slik at
+    spørsmålet «er fasit riktig her?» kan besvares.
+    """
+    felt = KRITERIUM_FELT[kriterium]
+    lav_er_bra = kriterium in KRITERIUM_LAV_ER_BRA
+
+    fasit_per_side = defaultdict(list)
+    for j, fb in enumerate(ds.fasit_bokser):
+        fasit_per_side[(fb["dok_nr"], fb["side"])].append((j, fb))
+    pred_per_side = defaultdict(list)
+    for p in ds.pred:
+        pred_per_side[(p["dok_nr"], p["side"])].append(p)
+
+    # Alle par med overlapp, uansett verdi — så fordelingen kan rapporteres
+    par = []
+    for nøkkel, fasit_her in fasit_per_side.items():
+        for p in pred_per_side.get(nøkkel, ()):
+            for j, fb in fasit_her:
+                m = match_metrikker(p["norm"], fb["norm"], fb["horisontal"])
+                if m is None:
+                    continue
+                par.append((m[felt], m, p, j, fb))
+
+    i_band = [t for t in par if lo <= t[0] < hi]
+    i_band.sort(key=lambda t: t[0], reverse=lav_er_bra)
+
+    print(f"\nBÅNDGJENNOMGANG — kriterium «{kriterium}» ({felt}) i [{lo:.0%}, {hi:.0%})")
+    print(f"  Overlappende par totalt:      {len(par)}")
+    print(f"  Par i båndet:                 {len(i_band)}")
+    print(f"  Berørte fasit-bokser:         {len({t[3] for t in i_band})}")
+    print(f"  Berørte prediksjoner:         {len({id(t[2]) for t in i_band})}")
+    if not i_band:
+        print("  Ingen par i båndet — terskelvalget mellom disse to verdiene "
+              "endrer ingenting.")
+        return
+
+    # Hvor mange fasit-bokser SKIFTER side? Bare de som ikke har en annen
+    # prediksjon som klarer den høye terskelen uansett.
+    klarer_hi = defaultdict(bool)
+    for verdi, _m, _p, j, _fb in par:
+        if (verdi < hi) if lav_er_bra else (verdi >= hi):
+            klarer_hi[j] = True
+    vipper = {t[3] for t in i_band if not klarer_hi[t[3]]}
+    print(f"  Fasit-bokser som faktisk vipper: {len(vipper)}  "
+          f"(resten er dekket av en annen prediksjon uansett terskel)")
+
+    per_kilde = defaultdict(int)
+    for t in i_band:
+        per_kilde[t[2]["kilde"]] += 1
+    print("  Per kilde: " + ", ".join(f"{k}={v}" for k, v in sorted(per_kilde.items())))
+
+    valgte = i_band[:maks] if maks else i_band
+    if maks and len(i_band) > maks:
+        print(f"  ⚠ Tegner kun de {maks} første av {len(i_band)} "
+              f"(--maks-sider styrer dette)")
+
+    mappenavn = os.path.join(
+        ut_mappe, f"band_{kriterium}_{lo:.2f}-{hi:.2f}".replace(".", ""))
+    os.makedirs(mappenavn, exist_ok=True)
+
+    if ut_csv:
+        import csv as _csv
+        with open(ut_csv, "w", newline="", encoding="utf-8") as f:
+            w = _csv.writer(f)
+            # Kolonnen heter "verdi", ikke felt-navnet: for areal-kriteriet er
+            # felt == "dek_f", og da ville overskriften stått to ganger.
+            w.writerow(["utsnitt", "fil", "side", "fasit_idx", "vipper", "kilde",
+                        "conf", "verdi", "dek_f", "dek_kort", "dek_lang", "iou",
+                        "senter_kort", "pred_wpt", "pred_hpt"])
+            for n, (verdi, m, p, j, fb) in enumerate(valgte, 1):
+                w.writerow([f"{n:04d}", p["navn"], p["side"], j,
+                            "ja" if j in vipper else "nei", p["kilde"],
+                            f"{p['conf']:.3f}" if p["conf"] is not None else "",
+                            f"{verdi:.4f}",
+                            *[f"{m[k]:.4f}" for k in ("dek_f", "dek_kort",
+                                                      "dek_lang", "iou",
+                                                      "senter_kort")],
+                            f"{p['w']:.1f}", f"{p['h']:.1f}"])
+        print(f"  Måltall skrevet til {ut_csv}")
+
+    # ── Tegn utsnittene, gruppert per fil for å åpne hver PDF én gang ──
+    per_fil = defaultdict(list)
+    for n, t in enumerate(valgte, 1):
+        per_fil[t[2]["navn"]].append((n, t))
+
+    n_tegnet = 0
+    for navn in sorted(per_fil):
+        sti = os.path.join(mappe, navn)
+        if not os.path.isfile(sti):
+            print(f"  ⚠ Finner ikke {sti}, hopper over")
+            continue
+        try:
+            dok = fitz.open(sti)
+        except Exception as e:
+            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            continue
+        # Render hver side maks én gang, selv med flere par på samme side
+        sider_cache = {}
+        for n, (verdi, m, p, j, fb) in sorted(per_fil[navn]):
+            si = p["side"]
+            if not 1 <= si <= len(dok):
+                continue
+            if si not in sider_cache:
+                sider_cache[si] = _render_side(dok, si)
+            bilde = sider_cache[si]
+            sx = bilde.width / p["bw"]
+            sy = bilde.height / p["bh"]
+
+            base = bilde.convert("RGBA")
+            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            tegner = ImageDraw.Draw(overlay)
+
+            # Andre bokser på siden, som kontekst
+            for annen in pred_per_side.get((p["dok_nr"], si), ()):
+                if annen is p:
+                    continue
+                a = annen["px"]
+                tegner.rectangle([a[0] * sx, a[1] * sy, a[2] * sx, a[3] * sy],
+                                 outline=BAND_ANNEN, width=2)
+            for jj, andre_fb in fasit_per_side.get((p["dok_nr"], si), ()):
+                if jj == j:
+                    continue
+                b = andre_fb["boks"]
+                tegner.rectangle([b[0] * SKALA * sx, b[1] * SKALA * sy,
+                                  b[2] * SKALA * sx, b[3] * SKALA * sy],
+                                 outline=BAND_ANNEN, width=2)
+
+            fx = [fb["boks"][0] * SKALA * sx, fb["boks"][1] * SKALA * sy,
+                  fb["boks"][2] * SKALA * sx, fb["boks"][3] * SKALA * sy]
+            px = [p["px"][0] * sx, p["px"][1] * sy,
+                  p["px"][2] * sx, p["px"][3] * sy]
+            tegner.rectangle(fx, outline=BAND_FASIT, width=3)
+            tegner.rectangle(px, outline=BAND_PRED, width=3)
+
+            flat = Image.alpha_composite(base, overlay).convert("RGB")
+
+            # Utsnitt rundt unionen av de to boksene
+            marg = utsnitt_margin * SKALA
+            u = [min(fx[0], px[0]) - marg * sx, min(fx[1], px[1]) - marg * sy,
+                 max(fx[2], px[2]) + marg * sx, max(fx[3], px[3]) + marg * sy]
+            u = [max(0, u[0]), max(0, u[1]),
+                 min(flat.width, u[2]), min(flat.height, u[3])]
+            utsnitt = flat.crop([int(v) for v in u])
+
+            # Måltall brennes inn under utsnittet, så bildet står alene
+            tekst = (f"{kriterium} {verdi:.3f}  |  dek_f={m['dek_f']:.2f} "
+                     f"kort={m['dek_kort']:.2f} lang={m['dek_lang']:.2f} "
+                     f"iou={m['iou']:.2f} senter={m['senter_kort']:.2f}")
+            tekst2 = (f"blaa=fasit roed=pred   {navn} s{si}  {p['kilde']}"
+                      + (f" conf={p['conf']:.2f}" if p["conf"] is not None else "")
+                      + f"  pred {p['w']:.0f}x{p['h']:.0f}pt"
+                      + f"  fasit {fb['boks'][2]-fb['boks'][0]:.0f}"
+                      + f"x{fb['boks'][3]-fb['boks'][1]:.0f}pt"
+                      + ("   VIPPER" if j in vipper else ""))
+            # Bred nok at bildeteksten ikke klippes
+            bunn = Image.new("RGB", (max(utsnitt.width, 780), utsnitt.height + 48),
+                             (255, 255, 255))
+            bunn.paste(utsnitt, (0, 0))
+            d = ImageDraw.Draw(bunn)
+            d.text((4, utsnitt.height + 4), tekst, fill=(0, 0, 0), font=_font_liten())
+            d.text((4, utsnitt.height + 26), tekst2, fill=(90, 90, 90),
+                   font=_font_liten())
+
+            vipp = "vipper_" if j in vipper else ""
+            filnavn = (f"{n:04d}_{verdi:.3f}_{vipp}"
+                       f"{os.path.splitext(navn)[0]}_s{si}_f{j}.png")
+            bunn.save(os.path.join(mappenavn, filnavn))
+            n_tegnet += 1
+        dok.close()
+
+    print(f"\n  Tegnet {n_tegnet} utsnitt til {mappenavn}/")
+    print(f"  Filnavnene starter med løpenummer og {felt}-verdien, så de "
+          f"sorterer stigende.")
+    print("  Blå = fasit, rød = prediksjonen i båndet, grå = andre bokser.")
+    print("  Spørsmål per utsnitt:")
+    print("    1. Er fasit-boksen riktig? (feiltegnet fasit skal ikke telle mot oss)")
+    print("    2. Peker prediksjonen på SAMME felt som fasit — eller nabolinjen?")
+    print("    3. Dekker prediksjonen nok av sifrene til å være en reell sladding?")
+    print("  Er svaret ja/ja/ja bør paret godtas — da er terskelen satt for høyt.")
+
+
 def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
                    utsnitt_margin=60.0, velg=None, ds=None):
     """Anvender filteret DIREKTE på saksbehandlernes sladdinger.
@@ -767,6 +965,9 @@ def main():
     p.add_argument("--mappe", default=None, help="Mappe med PDF-dokumentene")
     p.add_argument("--ut-mappe", default="filter_review",
                    help="Mappe for PNG-output (default: filter_review)")
+    p.add_argument("--kriterium", default=STD_KRITERIUM,
+                   choices=sorted(KRITERIER),
+                   help=f"Matcheregel for dekning (default: {STD_KRITERIUM})")
     p.add_argument("--terskel", type=float, default=STD_TERSKEL,
                    help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
     p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
@@ -825,6 +1026,14 @@ def main():
                         "fasit-boks) uavhengig av filter, 'begge'-kilden "
                         "først. Svarer på om de er oversladding eller "
                         "fødselsnumre saksbehandleren bommet på.")
+    p.add_argument("--band", nargs=3, default=None,
+                   metavar=("KRITERIUM", "LO", "HI"),
+                   help="Tegn utsnitt av hvert (prediksjon, fasit)-par der "
+                        "målet ligger i [LO, HI) — gråsonen terskelvalget "
+                        "faktisk avgjør. F.eks. «--band areal 0.40 0.45». "
+                        f"Kriterier: {', '.join(sorted(KRITERIER))}")
+    p.add_argument("--band-csv", default=None, metavar="FIL",
+                   help="Skriv måltallene for båndet til CSV")
     p.add_argument("--sweep", action="store_true",
                    help="Kjør et sett forhåndsdefinerte konfigurasjoner")
     p.add_argument("--kun-tapt", "--kun-riktige", action="store_true",
@@ -856,7 +1065,8 @@ def main():
             ds_kryss = bygg_datasett(
                 les_fasit(args.fasit_csv), les_prediksjoner(args.res_csv),
                 terskel=args.terskel, slurv_faktor=args.slurv_faktor,
-                inkluder_ulabelte=args.inkluder_ulabelte, kjorte_dok=kjorte)
+                inkluder_ulabelte=args.inkluder_ulabelte, kjorte_dok=kjorte,
+                kriterium=args.kriterium)
         test_mot_fasit(args.fasit_csv, args.mappe, args.ut_mappe, kw_alle,
                        maks_sider=args.maks_sider,
                        utsnitt_margin=args.utsnitt_margin, velg=args.velg,
@@ -874,14 +1084,26 @@ def main():
                        les_prediksjoner(args.res_csv),
                        terskel=args.terskel, slurv_faktor=args.slurv_faktor,
                        inkluder_ulabelte=args.inkluder_ulabelte,
-                       kjorte_dok=kjorte)
+                       kjorte_dok=kjorte, kriterium=args.kriterium)
     skriv_oppsummering(ds)
 
     felles = dict(kun_tapt=args.kun_tapt, velg=args.velg,
                   maks_sider=args.maks_sider,
                   utsnitt_margin=args.utsnitt_margin)
 
-    if args.bom:
+    if args.band:
+        kriterium, lo, hi = args.band[0], float(args.band[1]), float(args.band[2])
+        if kriterium not in KRITERIER:
+            p.error(f"ukjent kriterium {kriterium!r} — "
+                    f"gyldige: {', '.join(sorted(KRITERIER))}")
+        if not lo < hi:
+            p.error(f"LO må være mindre enn HI (fikk {lo} og {hi})")
+        band_review(ds, args.mappe, args.ut_mappe, kriterium, lo, hi,
+                    maks=args.maks_sider,
+                    utsnitt_margin=(args.utsnitt_margin
+                                    if args.utsnitt_margin != 60.0 else 25.0),
+                    ut_csv=args.band_csv)
+    elif args.bom:
         triage_bom(ds, args.mappe, args.ut_mappe, velg=args.velg,
                    maks_sider=args.maks_sider)
     elif args.per_kilde:

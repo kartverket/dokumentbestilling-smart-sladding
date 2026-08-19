@@ -331,10 +331,14 @@ def _tilstand(fasit, pred, kriterium, terskel, slurv_faktor,
     ds = bygg_datasett(fasit, pred, terskel=terskel, slurv_faktor=slurv_faktor,
                        inkluder_ulabelte=inkluder_ulabelte, kjorte_dok=kjorte,
                        kriterium=kriterium)
+    # Bare prediksjoner I SCOPE tas med. bygg_datasett tvinger prediksjoner på
+    # ulabelte dokumenter til BOM, og de ville ellers blåst opp BOM-cellene og
+    # gjort summene uenige med ds.n_bom.
+    i_scope = {id(p) for p in ds.pred}
     return {
         "ds": ds,
         "dekket": [d > 0 for d in ds.dekning_foer],
-        "klasse": [p.get("klasse") for p in pred],
+        "klasse": [p.get("klasse") if id(p) in i_scope else None for p in pred],
         "etikett": f"{kriterium} ≥ {terskel:.0%}" if kriterium != "senter"
                    else f"{kriterium} ≤ {terskel:.0%}",
     }
