@@ -33,10 +33,12 @@ from itertools import product
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from filter_felles import (STD_SLURV_FAKTOR, STD_TERSKEL, baseline,
+from filter_felles import (ANBEFALT_TERSKEL, KRITERIER, STD_KRITERIUM,
+                           STD_SLURV_FAKTOR, STD_TERSKEL, baseline,
                            bygg_datasett, evaluer, lag_filter,
                            lag_filter_per_kilde, les_fasit, les_kjorte_dok, les_prediksjoner,
-                           pareto_front, skriv_oppsummering, splitt_dokumenter)
+                           match_metrikker, pareto_front, skriv_oppsummering,
+                           splitt_dokumenter)
 
 # En sweep-rad: måling, kort etikett, og spesifikasjonen som gjenskaper
 # filteret. spec = {None: kwargs} for et globalt filter, ellers {kilde: kwargs}.
@@ -286,10 +288,17 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
 
 
 def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
-                   inkluder_ulabelte, kjorte):
-    """Viser hvordan utgangspunktet endrer seg med overlapp-terskelen."""
+                   inkluder_ulabelte, kjorte, kriterium=STD_KRITERIUM):
+    """Viser hvordan utgangspunktet endrer seg med overlapp-terskelen.
+
+    Terskelen er MONOTON innenfor ett kriterium: en fasit-boks som er dekket
+    ved 40 % er nødvendigvis dekket ved 15 %. Å skru terskelen opp kan derfor
+    bare FJERNE treff, aldri legge til. Vil du se treff som kommer til, må
+    selve regelen byttes — se --kriterium-diff.
+    """
     print(f"\n{'─' * 118}")
-    print("Sweep: OVERLAPP-TERSKEL (utgangspunkt uten geometrifiltre)")
+    print(f"Sweep: OVERLAPP-TERSKEL (kriterium «{kriterium}», "
+          f"utgangspunkt uten geometrifiltre)")
     print(f"{'─' * 118}")
     print(f"  {'Terskel':>8} │ {'TREFF':>8} {'SLURV':>8} {'BOM':>8} │"
           f" {'dekket':>8} {'udekket':>8} {'recall%':>8} {'pres%':>7} "
@@ -298,7 +307,7 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
     for t in terskler:
         d = bygg_datasett(fasit, pred, terskel=t, slurv_faktor=slurv_faktor,
                           inkluder_ulabelte=inkluder_ulabelte,
-                          kjorte_dok=kjorte)
+                          kjorte_dok=kjorte, kriterium=kriterium)
         b = baseline(d)
         snitt = sum(d.dekning_foer) / d.dekket_foer if d.dekket_foer else 0
         markør = " ◀" if abs(t - valgt) < 1e-9 else ""
@@ -306,6 +315,124 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
               f" {d.dekket_foer:>8} {d.n_fasit - d.dekket_foer:>8}"
               f" {b.recall_etter:>7.2f}% {b.pres_etter:>6.1f}% {snitt:>13.2f}"
               f"{markør}")
+
+
+# ── Kriterie-diff ────────────────────────────────────────────
+
+def _tilstand(fasit, pred, kriterium, terskel, slurv_faktor,
+              inkluder_ulabelte, kjorte):
+    """Snapshot av én matcheregel: hvem er dekket, og hva er hver pred klassifisert som.
+
+    bygg_datasett MUTERER prediksjons-dictene (p["klasse"], p["dekker"]), så
+    snapshotet må tas FØR neste regel bygges — ellers sammenligner man en regel
+    med seg selv. Fasit-indeksene er stabile mellom kall fordi scope kun
+    avhenger av labelte/kjørte dokumenter, ikke av terskelen.
+    """
+    ds = bygg_datasett(fasit, pred, terskel=terskel, slurv_faktor=slurv_faktor,
+                       inkluder_ulabelte=inkluder_ulabelte, kjorte_dok=kjorte,
+                       kriterium=kriterium)
+    return {
+        "ds": ds,
+        "dekket": [d > 0 for d in ds.dekning_foer],
+        "klasse": [p.get("klasse") for p in pred],
+        "etikett": f"{kriterium} ≥ {terskel:.0%}" if kriterium != "senter"
+                   else f"{kriterium} ≤ {terskel:.0%}",
+    }
+
+
+def _diff_kriterier(fasit, pred, spek_a, spek_b, slurv_faktor,
+                    inkluder_ulabelte, kjorte, ut_csv=None):
+    """Hva flytter seg når matcheregelen byttes fra A til B.
+
+    Innenfor samme kriterium er dette monotont (bare tap), men bytter man
+    regelform — areal → kortside — kan treff både forsvinne og komme til.
+    De som KOMMER TIL er interessante: de telles i dag som oversladding.
+    """
+    a = _tilstand(fasit, pred, *spek_a, slurv_faktor, inkluder_ulabelte, kjorte)
+    b = _tilstand(fasit, pred, *spek_b, slurv_faktor, inkluder_ulabelte, kjorte)
+    ds_a, ds_b = a["ds"], b["ds"]
+
+    print(f"\n{'═' * 118}")
+    print(f"KRITERIE-DIFF   A = {a['etikett']}   →   B = {b['etikett']}")
+    print(f"{'═' * 118}")
+
+    # ── Fasit-bokser: 2x2 ──
+    begge = kun_a = kun_b = ingen = 0
+    for da, db in zip(a["dekket"], b["dekket"]):
+        if da and db:
+            begge += 1
+        elif da:
+            kun_a += 1
+        elif db:
+            kun_b += 1
+        else:
+            ingen += 1
+    n = len(a["dekket"])
+    print(f"\n  FASIT-BOKSER ({n} i scope) — regnet som truffet:")
+    print(f"    {'':<26}{'B: truffet':>14}{'B: mangler':>14}")
+    print(f"    {'A: truffet':<26}{begge:>14}{kun_a:>14}   ← {kun_a} FALT UT")
+    print(f"    {'A: mangler':<26}{kun_b:>14}{ingen:>14}")
+    print(f"    {'':<26}{'↑':>14}")
+    print(f"    {kun_b} KOM TIL — disse teller i dag som bom/oversladding")
+    print(f"\n    recall A: {(begge + kun_a) / n * 100:.2f}%    "
+          f"recall B: {(begge + kun_b) / n * 100:.2f}%    "
+          f"netto: {(kun_b - kun_a) / n * 100:+.2f} pp")
+
+    # ── Prediksjoner: 3x3 ──
+    klasser = ("TREFF", "SLURV", "BOM")
+    kryss = {(x, y): 0 for x in klasser for y in klasser}
+    for ka, kb in zip(a["klasse"], b["klasse"]):
+        if ka in klasser and kb in klasser:
+            kryss[(ka, kb)] += 1
+    print(f"\n  PREDIKSJONER — klasse under A (rad) vs B (kolonne):")
+    print(f"    {'A \\ B':<10}" + "".join(f"{k:>10}" for k in klasser) + f"{'sum':>10}")
+    for ka in klasser:
+        rad = [kryss[(ka, kb)] for kb in klasser]
+        print(f"    {ka:<10}" + "".join(f"{v:>10}" for v in rad) + f"{sum(rad):>10}")
+    print(f"    {'sum':<10}" + "".join(
+        f"{sum(kryss[(ka, kb)] for ka in klasser):>10}" for kb in klasser))
+
+    bom_til_treff = sum(kryss[("BOM", k)] for k in ("TREFF", "SLURV"))
+    treff_til_bom = sum(kryss[(k, "BOM")] for k in ("TREFF", "SLURV"))
+    print(f"\n    BOM → dekkende: {bom_til_treff:>7}  "
+          f"(målt som oversladding i dag, men treffer et felt under B)")
+    print(f"    dekkende → BOM: {treff_til_bom:>7}  "
+          f"(regnes som treff i dag, men er feil felt under B)")
+    print(f"    oversladding:   {ds_a.n_bom} → {ds_b.n_bom}  "
+          f"({(ds_b.n_bom - ds_a.n_bom) / ds_a.n_bom * 100:+.1f}%)"
+          if ds_a.n_bom else "")
+
+    # ── CSV for etterkontroll: hver boks som flyttet seg ──
+    if ut_csv:
+        import csv as _csv
+        with open(ut_csv, "w", newline="", encoding="utf-8") as f:
+            w = _csv.writer(f)
+            w.writerow(["hva", "retning", "dok_nr", "side", "x0", "y0", "x1", "y1",
+                        "dek_f", "dek_kort", "iou", "senter_kort"])
+            for j, (da, db) in enumerate(zip(a["dekket"], b["dekket"])):
+                if da == db:
+                    continue
+                fb = ds_a.fasit_bokser[j]
+                # Beste prediksjon på samme side, for å vise HVA som traff
+                beste, bm = None, None
+                for pp in ds_a.pred:
+                    if (pp["dok_nr"], pp["side"]) != (fb["dok_nr"], fb["side"]):
+                        continue
+                    m = match_metrikker(pp["norm"], fb["norm"], fb["horisontal"])
+                    if m and (bm is None or m["dek_f"] > bm["dek_f"]):
+                        beste, bm = pp, m
+                w.writerow(["fasit", "falt_ut" if da else "kom_til",
+                            fb["dok_nr"], fb["side"], *[f"{v:.2f}" for v in fb["boks"]],
+                            *([f"{bm[k]:.3f}" for k in
+                               ("dek_f", "dek_kort", "iou", "senter_kort")]
+                              if bm else ["", "", "", ""])])
+            for pp, ka, kb in zip(pred, a["klasse"], b["klasse"]):
+                if ka == kb or ka is None or kb is None:
+                    continue
+                w.writerow(["pred", f"{ka}->{kb}", pp["dok_nr"], pp["side"],
+                            *[f"{v:.1f}" for v in pp["px"]], "", "", "", ""])
+        print(f"\n    Flyttede bokser skrevet til {ut_csv}")
+        print(f"    Tegn dem for øyekontroll med filter_review.py --velg <pdf-ene>")
 
 
 # ── Formanalyse ──────────────────────────────────────────────
@@ -499,6 +626,24 @@ def main():
                    help="Resultat-CSV fra modellen (pikselkoordinater)")
     p.add_argument("--terskel", type=float, default=STD_TERSKEL,
                    help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
+    p.add_argument("--kriterium", default=STD_KRITERIUM,
+                   choices=sorted(KRITERIER),
+                   help="Regel for om en prediksjon og en fasit-boks er SAMME "
+                        "FELT. areal = ensidig arealdekning av fasit-boksen "
+                        "(dagens). kortside = overlapp langs fasit-boksens "
+                        "kortside, uavhengig av om siden er rotert. "
+                        f"(default: {STD_KRITERIUM})")
+    p.add_argument("--terskel-liste", default=None, metavar="T,T,...",
+                   help="Terskler i terskel-sweepen, komma-separert "
+                        "(default: 0.15,0.25,0.35,0.40,0.50,0.70,0.90)")
+    p.add_argument("--kriterium-diff", nargs=2, default=None,
+                   metavar=("A", "B"),
+                   help="Sammenlign to matcheregler og vis hvor mange treff "
+                        "som faller ut og kommer til. Hver spesifikasjon er "
+                        "KRITERIUM:TERSKEL, f.eks. areal:0.15 kortside:0.60")
+    p.add_argument("--diff-csv", default=None, metavar="FIL",
+                   help="Skriv boksene som flyttet seg i --kriterium-diff til "
+                        "CSV, for øyekontroll")
     p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
                    help="Pred-areal > faktor × dekket fasit-areal ⇒ SLURV "
                         f"(default: {STD_SLURV_FAKTOR})")
@@ -578,11 +723,17 @@ def main():
         ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
                                 slurv_faktor=args.slurv_faktor,
                                 inkluder_ulabelte=args.inkluder_ulabelte,
-                                kjorte_dok=kjorte)
+                                kjorte_dok=kjorte, kriterium=args.kriterium)
 
-        print(f"Overlapp-terskel {args.terskel:.0%}, "
+        print(f"Kriterium «{args.kriterium}», terskel {args.terskel:.0%}, "
               f"slurv-faktor {args.slurv_faktor:g}, "
-              f"kostnad {args.kostnad:g}\n")
+              f"kostnad {args.kostnad:g}")
+        if args.kriterium in ANBEFALT_TERSKEL and abs(
+                args.terskel - ANBEFALT_TERSKEL[args.kriterium]) > 1e-9:
+            print(f"  Merk: anbefalt terskel for «{args.kriterium}» er "
+                  f"{ANBEFALT_TERSKEL[args.kriterium]:.0%} "
+                  f"(målt på label-par fra uttrekk 4 + 5)")
+        print("")
         skriv_oppsummering(ds_full)
 
         ds_test = None
@@ -605,13 +756,31 @@ def main():
 
         tee.til_terminal = False
 
-        _sweep_terskel(fasit, pred, [0.15, 0.25, 0.35, 0.5, 0.7, 0.9], args.terskel,
-                       args.slurv_faktor, args.inkluder_ulabelte, kjorte)
+        terskler = ([float(t) for t in args.terskel_liste.split(",")]
+                    if args.terskel_liste
+                    else [0.15, 0.25, 0.35, 0.40, 0.50, 0.70, 0.90])
+        _sweep_terskel(fasit, pred, terskler, args.terskel,
+                       args.slurv_faktor, args.inkluder_ulabelte, kjorte,
+                       kriterium=args.kriterium)
+
+        if args.kriterium_diff:
+            spek = []
+            for rå in args.kriterium_diff:
+                navn, _, t = rå.partition(":")
+                if navn not in KRITERIER:
+                    p.error(f"ukjent kriterium {navn!r} i --kriterium-diff — "
+                            f"gyldige: {', '.join(sorted(KRITERIER))}")
+                if not t:
+                    p.error(f"mangler terskel i {rå!r} — skriv f.eks. {navn}:0.40")
+                spek.append((navn, float(t)))
+            _diff_kriterier(fasit, pred, spek[0], spek[1], args.slurv_faktor,
+                            args.inkluder_ulabelte, kjorte, args.diff_csv)
+
         # bygg_datasett muterer prediksjonene — bygg opp igjen med valgt terskel
         ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
                                 slurv_faktor=args.slurv_faktor,
                                 inkluder_ulabelte=args.inkluder_ulabelte,
-                                kjorte_dok=kjorte)
+                                kjorte_dok=kjorte, kriterium=args.kriterium)
         if args.holdout is not None:
             ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
         else:

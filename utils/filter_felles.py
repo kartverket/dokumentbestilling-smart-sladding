@@ -62,6 +62,64 @@ def areal(a):
     return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
 
 
+# ── Matchemål ────────────────────────────────────────────────
+
+def match_metrikker(pn, fn, fasit_horisontal):
+    """Alle mål for ett (prediksjon, fasit)-par. Bokser i normaliserte koord.
+
+    En sladd er et avlangt rektangel, og naboene — linjen over og under i
+    teksten — ligger forskjøvet langs KORTSIDEN. Står dokumentet rett er
+    kortsiden høyden; er siden rotert, er den bredden. Derfor måles
+    kortside-aksen eksplisitt, ikke y.
+
+    `fasit_horisontal` må avgjøres i PUNKT-rom av kalleren: normaliseringen
+    deler x på sidebredden og y på sidehøyden, så w/h skjeves med sideforholdet
+    og en nesten kvadratisk boks kan bytte orientering. Andelene LANGS én akse
+    er derimot skalauavhengige, så de kan regnes normalisert.
+
+    Returnerer None når boksene ikke overlapper i det hele tatt.
+    """
+    o = overlapp(pn, fn)
+    if o <= 0:
+        return None
+    fa, pa = areal(fn), areal(pn)
+    if fa <= 0:
+        return None
+    ox = max(0.0, min(pn[2], fn[2]) - max(pn[0], fn[0]))
+    oy = max(0.0, min(pn[3], fn[3]) - max(pn[1], fn[1]))
+    if fasit_horisontal:
+        kort, o_kort = fn[3] - fn[1], oy
+        lang, o_lang = fn[2] - fn[0], ox
+        d_senter = abs((pn[1] + pn[3]) / 2 - (fn[1] + fn[3]) / 2)
+    else:
+        kort, o_kort = fn[2] - fn[0], ox
+        lang, o_lang = fn[3] - fn[1], oy
+        d_senter = abs((pn[0] + pn[2]) / 2 - (fn[0] + fn[2]) / 2)
+    return {
+        "dek_f": o / fa,                                  # dagens kriterium
+        "dek_p": o / pa if pa > 0 else 0.0,
+        "iou": o / (fa + pa - o),
+        "dek_kort": o_kort / kort if kort > 0 else 0.0,
+        "dek_lang": o_lang / lang if lang > 0 else 0.0,
+        "senter_kort": d_senter / kort if kort > 0 else 9.9,
+    }
+
+
+# Et kriterium avgjør om prediksjonen og fasit-boksen er SAMME FELT.
+# For "senter" er lav verdi bra, så terskelen er et tak, ikke et gulv.
+KRITERIER = {
+    "areal":    lambda m, t: m["dek_f"] >= t,
+    "kortside": lambda m, t: m["dek_kort"] >= t,
+    "iou":      lambda m, t: m["iou"] >= t,
+    "senter":   lambda m, t: m["senter_kort"] <= t,
+}
+STD_KRITERIUM = "areal"
+
+# Fornuftig terskel per kriterium, målt på label-par fra uttrekk 4 + 5
+# (947 samme-felt-par, 2696 ulike-felt-par). Se docs.
+ANBEFALT_TERSKEL = {"areal": 0.40, "kortside": 0.60, "iou": 0.20, "senter": 0.40}
+
+
 # ── Innlesing ────────────────────────────────────────────────
 
 def les_fasit(sti):
@@ -218,13 +276,15 @@ class Datasett:
 
     def __init__(self, pred, utenfor, fasit_bokser, dekning_foer,
                  terskel, slurv_faktor, n_fasit=None, navn="alle",
-                 scope_dok=None, n_fasit_ukjort=0, n_dok_ukjort=0):
+                 scope_dok=None, n_fasit_ukjort=0, n_dok_ukjort=0,
+                 kriterium=STD_KRITERIUM):
         self.pred = pred
         self.utenfor = utenfor
         self.fasit_bokser = fasit_bokser
         self.dekning_foer = dekning_foer
         self.terskel = terskel
         self.slurv_faktor = slurv_faktor
+        self.kriterium = kriterium
         self.navn = navn
         self.n_fasit_ukjort = n_fasit_ukjort
         self.n_dok_ukjort = n_dok_ukjort
@@ -248,7 +308,7 @@ class Datasett:
 
 def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
                   slurv_faktor=STD_SLURV_FAKTOR, inkluder_ulabelte=False,
-                  kjorte_dok=None):
+                  kjorte_dok=None, kriterium=STD_KRITERIUM):
     """Kobler prediksjoner mot fasit-bokser og klassifiserer hver prediksjon.
 
     Setter på hver prediksjon:
@@ -259,6 +319,11 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
     Scope er skjæringen mellom dokumenter som er LABELT og dokumenter som er
     KJØRT. Fasit på dokumenter modellen aldri kjørte på holdes utenfor — de er
     ikke bom, de er umålte, og tas de med blir recall kunstig lav.
+
+    kriterium: navn i KRITERIER — hvilken regel som avgjør «samme felt».
+    "areal" er dagens ensidige arealdekning av fasit-boksen; "kortside" måler
+    overlapp langs fasit-boksens kortside og er uavhengig av om siden er
+    rotert. Terskelen tolkes av kriteriet, så 0.4 betyr ulike ting per regel.
 
     kjorte_dok: eksplisitt sett med kjørte dokumentnumre. Utelates det, antas
     dokumentene som forekommer i resultat-CSV-en. Da regnes et dokument der
@@ -294,6 +359,8 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
                 "boks": (x0, y0, x1, y1),
                 "norm": n,
                 "norm_areal": areal(n),
+                # Avgjort i punkt-rom: normalisering skjever w/h
+                "horisontal": (x1 - x0) >= (y1 - y0),
             })
 
     innenfor, utenfor = [], []
@@ -302,6 +369,12 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
             innenfor.append(p)
         else:
             utenfor.append(p)
+
+    try:
+        passer = KRITERIER[kriterium]
+    except KeyError:
+        raise ValueError(f"ukjent kriterium {kriterium!r} — "
+                         f"gyldige: {', '.join(sorted(KRITERIER))}")
 
     dekning_foer = [0] * len(fasit_bokser)
     for p in innenfor:
@@ -313,7 +386,8 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
             fa = fb["norm_areal"]
             if fa <= 0:
                 continue
-            if overlapp(pn, fb["norm"]) / fa >= terskel:
+            m = match_metrikker(pn, fb["norm"], fb["horisontal"])
+            if m is not None and passer(m, terskel):
                 dekker.append(j)
                 dekket_areal += fa
                 dekning_foer[j] += 1
@@ -334,7 +408,8 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
     return Datasett(innenfor, utenfor, fasit_bokser, dekning_foer,
                     terskel, slurv_faktor, scope_dok=scope_dok,
                     n_fasit_ukjort=n_fasit_ukjort,
-                    n_dok_ukjort=len(labelte_dok - kjorte))
+                    n_dok_ukjort=len(labelte_dok - kjorte),
+                    kriterium=kriterium)
 
 
 def del_datasett(ds, dok_sett, navn):
@@ -351,7 +426,8 @@ def del_datasett(ds, dok_sett, navn):
             dekning[j] += 1
     return Datasett(pred, [], ds.fasit_bokser, dekning, ds.terskel,
                     ds.slurv_faktor, n_fasit=n_fasit, navn=navn,
-                    scope_dok=dok_sett & ds.scope_dok)
+                    scope_dok=dok_sett & ds.scope_dok,
+                    kriterium=ds.kriterium)
 
 
 def splitt_dokumenter(ds, andel, seed=42):
