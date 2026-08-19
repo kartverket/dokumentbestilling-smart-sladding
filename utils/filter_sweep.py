@@ -149,7 +149,7 @@ STD_HODER = ("elong", "hoyde", "bredde", "conf≥")
 
 def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
                          sort_key, felt=STD_FELT, hoder=STD_HODER,
-                         tittel=None, kun_kilde=None,
+                         tittel=None, kun_kilde=None, bare_front=True,
                          maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None,
                          csv_rader=None, maks_rader=None):
     """Sweeper alle kombinasjoner. kun_kilde: filtrer bare den kilden,
@@ -164,22 +164,10 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
     if min_ov_tapt is not None:
         filter_info += f"  [ov/tapt > {min_ov_tapt:g}]"
 
-    print(f"\n{'═' * 145}")
-    print(f"{tittel or 'KOMBINASJONS-SWEEP'}"
-          f"   (utgangspunkt: {ds.dekket_foer} dekkede fasit-bokser, "
-          f"{ds.n_bom} oversladdinger, {len(ds.pred)} prediksjoner)"
-          f"  [sortert: {sort_key}, kostnad {kostnad:g}]{filter_info}")
-    if kun_kilde:
-        print(f"  Filteret gjelder KUN kilde '{kun_kilde}' "
-              f"({len(kandidater)} prediksjoner); øvrige kilder beholdes urørt.")
-    print(f"{'═' * 145}")
-
     har_conf = any(c is not None for c in conf_v)
     h0, h1, h2, h3 = hoder
     param_hode = (f"  {h0:>6} {h1:>6} {h2:>7} {h3:>6} │"
                   if har_conf else f"  {h0:>6} {h1:>6} {h2:>7} │")
-    print(param_hode + HODE_MAAL)
-    print(f"  {'─' * (len(param_hode) - 4)}┼{'─' * 106}")
 
     rader = []
     for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
@@ -189,9 +177,11 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
                    + (f" [{kun_kilde}]" if kun_kilde else ""))
         rader.append(Rad(m, etikett, {kun_kilde: kw} if kun_kilde else {None: kw}))
         if csv_rader is not None:
+            rad = {"omfang": kun_kilde or "alle"}
+            for navn, _kort, _flagg in PARAM_KODER:
+                rad[navn] = kw.get(navn)
             csv_rader.append({
-                "omfang": kun_kilde or "alle",
-                "elong": min_e, "hoyde": maks_h, "bredde": maks_b, "conf": c_t,
+                **rad,
                 "tapt": m.tapt, "tapt_pst": round(m.tapt_pst, 4),
                 "ov_fj": m.ov_fj, "ov_pst": round(m.ov_pst, 3),
                 "red_fj": m.red_fj, "slurv_fj": m.slurv_fj,
@@ -202,22 +192,36 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
                 "pres_etter": round(m.pres_etter, 3),
             })
 
-    rader.sort(key=lambda r: _sort_fn(sort_key)(r.m))
+    aktuelle = [r for r in rader
+                if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
+    n_skjult = len(rader) - len(aktuelle)
 
-    n_skjult = n_vist = 0
-    for rad in rader:
-        if _skjules(rad.m, maks_tapt, maks_tapt_pst, min_ov_tapt):
-            n_skjult += 1
-            continue
-        if maks_rader is not None and n_vist >= maks_rader:
-            continue
+    if bare_front:
+        vis = pareto_front(aktuelle)
+        note = (f"Pareto-front: {len(vis)} av {len(rader)} konfigurasjoner "
+                f"— resten er dominert eller likeverdig")
+    else:
+        vis = sorted(aktuelle, key=lambda r: _sort_fn(sort_key)(r.m))
+        note = f"alle {len(vis)} konfigurasjoner, sortert: {sort_key}"
+    if maks_rader is not None:
+        vis = vis[:maks_rader]
+
+    print(f"\n{'═' * 145}")
+    print(f"{tittel or 'KOMBINASJONS-SWEEP'}"
+          f"   ({ds.dekket_foer} dekkede fasit-bokser, {ds.n_bom} oversladdinger"
+          + (f", filter kun på '{kun_kilde}' ({len(kandidater)} pred), "
+             f"øvrige urørt" if kun_kilde else "") + ")")
+    print(f"  {note}   [kostnad {kostnad:g}]{filter_info}")
+    print(f"{'═' * 145}")
+    print(param_hode + HODE_MAAL)
+    print(f"  {'─' * (len(param_hode) - 4)}┼{'─' * 106}")
+
+    for rad in vis:
         e, h, b, c = (rad.spec[kun_kilde if kun_kilde else None][n]
                       for n in felt)
         params = (f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} {_g(c):>6} │"
                   if har_conf else f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} │")
-        markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
-        print(params + _maal_celler(rad.m) + markør)
-        n_vist += 1
+        print(params + _maal_celler(rad.m))
 
     if n_skjult:
         print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
@@ -241,19 +245,6 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
         beste = sorted(per_kilde_rader[k], key=lambda r: sort_fn(r.m))[:maks_kand]
         kandidater.append([(k, r.spec[k]) for r in beste])
 
-    print(f"\n{'═' * 145}")
-    print("KRYSS-KILDE SWEEP  (uavhengige parametre per kilde, målt globalt)")
-    print(f"  Utgangspunkt: {ds.dekket_foer} dekkede fasit-bokser, "
-          f"{ds.n_bom} oversladdinger"
-          f"  [sortert: {sort_key}, kostnad {kostnad:g}, "
-          f"topp {maks_kand} kandidater per kilde]")
-    print(f"{'═' * 145}")
-
-    kolonne = max(24, max(len(k) for k in kilder) + 18)
-    hode = "  " + "  │  ".join(f"{k + ' (e/h/b/c)':>{kolonne}}" for k in kilder)
-    print(hode + "  │" + HODE_MAAL)
-    print(f"  {'─' * (len(hode) + 106)}")
-
     rader = []
     for kombo in product(*kandidater):
         spec = {k: kw for (k, kw) in kombo}
@@ -263,22 +254,25 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
             for k, kw in sorted(spec.items()))
         rader.append(Rad(m, etikett, spec))
 
-    rader.sort(key=lambda r: sort_fn(r.m))
+    print(f"\n{'═' * 145}")
+    print("KRYSS-KILDE SWEEP  (uavhengige parametre per kilde, målt globalt)")
+    print(f"  Pareto-fronten av {len(rader)} kombinasjoner "
+          f"[kostnad {kostnad:g}, topp {maks_kand} kandidater per kilde]")
+    print(f"{'═' * 145}")
 
-    n_vist = n_skjult = 0
-    for rad in rader:
-        if n_vist >= 30:
-            break
-        if _skjules(rad.m, maks_tapt, maks_tapt_pst, min_ov_tapt):
-            n_skjult += 1
-            continue
+    kolonne = max(24, max(len(k) for k in kilder) + 18)
+    hode = "  " + "  │  ".join(f"{k + ' (e/h/b/c)':>{kolonne}}" for k in kilder)
+    print(hode + "  │" + HODE_MAAL)
+    print(f"  {'─' * (len(hode) + 106)}")
+
+    aktuelle = [r for r in rader
+                if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
+    for rad in pareto_front(aktuelle)[:15]:
         celler = "  │  ".join(
             f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in STD_FELT):>{kolonne}}"
             for k, kw in sorted(rad.spec.items()))
-        markør = " ◀" if rad.m.tapt == 0 and rad.m.ov_fj > 0 else ""
-        print("  " + celler + "  │" + _maal_celler(rad.m) + markør)
-        n_vist += 1
-
+        print("  " + celler + "  │" + _maal_celler(rad.m))
+    n_skjult = len(rader) - len(aktuelle)
     if n_skjult:
         print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
     return rader
@@ -312,7 +306,7 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
 MAAL = (("elongation", "elongation", 2), ("h", "høyde (pt)", 1),
         ("w", "bredde (pt)", 1), ("areal_px", "areal (px²)", 0))
 
-PERSENTILER = (0.1, 1, 5, 50, 95, 99, 99.9)
+PERSENTILER = (0.1, 1, 50, 99, 99.9)
 
 
 def _persentil(sortert, pst):
@@ -342,7 +336,7 @@ def _sweep_fordeling(ds):
     for kilde in ds.kilder():
         for klasse in ("TREFF", "SLURV", "BOM"):
             gruppe = [p for p in ds.per_kilde[kilde] if p["klasse"] == klasse]
-            if not gruppe:
+            if len(gruppe) < 20:      # for få til å si noe om haler
                 continue
             for nr, (nøkkel, navn, des) in enumerate(MAAL):
                 sortert = sorted(p[nøkkel] for p in gruppe)
@@ -534,6 +528,9 @@ def main():
     p.add_argument("--min-ov-tapt", "--min-ov-rik", type=float, default=None,
                    dest="min_ov_tapt",
                    help="Vis kun rader der ov.fj/tapt > denne verdien")
+    p.add_argument("--alle-rader", action="store_true",
+                   help="Skriv alle konfigurasjoner i kombinasjons-tabellene, "
+                        "ikke bare Pareto-fronten. Gir en mye større fil.")
     p.add_argument("--maks-rader", type=int, default=None,
                    help="Maks antall rader per tabell")
     p.add_argument("--ut", default=None, metavar="FIL",
@@ -660,7 +657,7 @@ def main():
                        min_ov_tapt=args.min_ov_tapt)
         felles = dict(kostnad=args.kostnad, sort_key=args.sort,
                       csv_rader=csv_rader, maks_rader=args.maks_rader,
-                      **grenser)
+                      bare_front=not args.alle_rader, **grenser)
 
         alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
                                           conf_v, **felles)
@@ -671,7 +668,7 @@ def main():
             felt=("min_hoyde", "min_bredde", "maks_elongation", "conf_terskel"),
             hoder=("h.min", "b.min", "e.maks", "conf≥"),
             tittel="STØYFILTRE — for små eller for tynne til å være 5 sifre",
-            **{**felles, "csv_rader": None})
+            **felles)
 
         kilder = ds.kilder()
         kryss_rader = []
@@ -700,8 +697,13 @@ def main():
 
         if args.ut_csv and csv_rader:
             import csv as _csv
+            felt_navn = list(csv_rader[0])
+            for r in csv_rader:
+                for k in r:
+                    if k not in felt_navn:
+                        felt_navn.append(k)
             with open(args.ut_csv, "w", newline="", encoding="utf-8") as f:
-                w = _csv.DictWriter(f, fieldnames=list(csv_rader[0]))
+                w = _csv.DictWriter(f, fieldnames=felt_navn)
                 w.writeheader()
                 w.writerows(csv_rader)
     finally:
