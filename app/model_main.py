@@ -158,13 +158,12 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             ocr_treff = True
 
     # ── Forsøk å laste YOLO-bokser fra cache ────────────────────
-    # Full pipeline kjører YOLO på det uroterte bildet, så rammen er kjent uten
-    # å rendre og oppslaget kan gjøres før vi bestemmer oss for å rasterisere.
-    # --kun-yolo kjører på det roterte bildet, og rotasjonene finnes ikke før
-    # orienteringssteget — der må oppslaget vente.
+    # YOLO kjører på det orienteringskorrigerte bildet, så oppslaget krever
+    # rotasjonene. Med OCR fra cache har vi dem før render, og kan dermed hoppe
+    # over rasteriseringen helt; ellers må orienteringssteget kjøre først.
     yolo_bokser_per_side = None
-    if yolo_cache and not kun_yolo:
-        yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, [0] * n_sider)
+    if yolo_cache and ocr_treff:
+        yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
 
     # ── Rendre bare når noe faktisk trenger piksler ─────────────
     # Treff i begge cachene betyr at ingenting leser bildene: sidemålene over
@@ -180,10 +179,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             with _ta_tid(t, "orientering"):
                 rotasjoner = [finn_rotasjon(b) for b in bilder]
 
-        # Det roterte bildet trengs bare av OCR og av --kun-yolo; full pipeline
-        # med OCR fra cache mater YOLO med det uroterte bildet.
-        if not ocr_treff or kun_yolo:
-            bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+        bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
 
         if not ocr_treff and not kun_yolo:
             with _ta_tid(t, "ocr"):
@@ -195,8 +191,8 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     if tokens_per_side is None:
         tokens_per_side = [[] for _ in range(n_sider)]
 
-    # --kun-yolo: rotasjonene er kjent nå, så YOLO-cachen kan slås opp
-    if yolo_cache and kun_yolo and yolo_bokser_per_side is None:
+    # Uten OCR-treff ble rotasjonene kjent først nå, etter orienteringssteget
+    if yolo_cache and not ocr_treff:
         yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
 
     yolo_treff = yolo_bokser_per_side is not None
@@ -214,7 +210,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             elif yolo_treff:
                 yolo_bokser = yolo_bokser_per_side[si]
             else:
-                bilde_yolo = bilder_ocr[si] if kun_yolo else bilder[si]
+                bilde_yolo = bilder_ocr[si]
                 # Med cache predikerer vi ned til gulvet og filtrerer selv, slik
                 # at cachen dekker senere endringer i YOLO_CONF. Boksene som
                 # overlever filteret er de samme som en predict på YOLO_CONF gir.
@@ -234,9 +230,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
                                     k, med_linjer))
 
     if nye_yolo_bokser is not None and len(nye_yolo_bokser) == n_sider:
-        skriv_yolo_cache(yolo_cache_mappe, navn,
-                         rotasjoner if kun_yolo else [0] * n_sider,
-                         nye_yolo_bokser)
+        skriv_yolo_cache(yolo_cache_mappe, navn, rotasjoner, nye_yolo_bokser)
 
     if skriv_tid:
         _skriv_tid(t, len(sider), navn, ocr_treff, yolo_treff)

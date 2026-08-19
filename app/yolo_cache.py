@@ -19,15 +19,12 @@ lesing. Å endre YOLO_CONF — eller geometrifiltrene, matchingen eller
 evalueringsterskelen — gir dermed fortsatt treff, så lenge den nye terskelen
 ikke er lavere enn gulvet cachen ble skrevet med.
 
-«rotasjon» er rotasjonen på bildet YOLO faktisk fikk, ikke nødvendigvis
-sidens rotasjon: full pipeline kjører YOLO på det uroterte bildet (alltid 0),
---kun-yolo på det roterte. Feltet er derfor en del av nøkkelen, og en endring
-av hvilket bilde YOLO mates med gir automatisk miss.
-
-De to modusene deler mappe. For dokumenter uten rotasjon er entryen gyldig for
-begge; for et dokument med minst én rotert side skriver de over hverandre, så
-vekselvis valider_full.sh og valider_yolo.sh gir miss på nettopp de
-dokumentene. Det koster en ny inferens, ikke feil resultat.
+«rotasjon» er rotasjonen på bildet YOLO fikk, altså resultatet av
+orienteringssteget. Full pipeline og --kun-yolo mater YOLO med det samme
+orienteringskorrigerte bildet, så entryene er de samme og valider_full.sh og
+valider_yolo.sh deler cache fullt ut. Feltet er likevel en del av nøkkelen:
+skulle orienteringsmodellen endre seg, gir det miss i stedet for bokser i feil
+koordinatrom.
 
 Filformat per dokument:
     {cache_mappe}/{doc_id}.json
