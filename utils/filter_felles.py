@@ -149,6 +149,59 @@ def les_kjorte_dok(sti):
     return dokumenter
 
 
+def les_fasit_rader(sti, ekskluder=("REJECTED",)):
+    """Leser fasit-labels som fulle rader, med geometri og metadata.
+
+    I motsetning til les_fasit beholdes alle kolonner, slik at fordelingen av
+    ml_status/type kan rapporteres. Brukes til å teste et filter DIREKTE mot
+    saksbehandlernes sladdinger, uavhengig av modellens prediksjoner — da
+    trengs ingen resultat-CSV, og alle labels kan vurderes.
+
+    Geometrien regnes i PDF-punkt (som filtrene), pluss areal i piksel².
+    Fasit-bokser har ingen conf, så conf-porten slår aldri inn: testen viser
+    hva geometrireglene alene ville forkastet.
+    """
+    rader, forkastet = [], defaultdict(int)
+    ekskluder = {e.strip().upper() for e in ekskluder}
+    with open(sti, newline="", encoding="utf-8-sig") as f:
+        leser = csv.DictReader(f)
+        kolonner = leser.fieldnames or []
+        for r in leser:
+            status = (r.get("ml_status") or "").strip().upper()
+            if status in ekskluder:
+                forkastet[status or "(tom)"] += 1
+                continue
+            try:
+                nr = int(r["fil_revisjon_id"])
+                side = int(r["sidetall"])
+                x, y = float(r["x"]), float(r["y"])
+                w, h = float(r["width"]), float(r["height"])
+            except (TypeError, ValueError, KeyError):
+                forkastet["(ugyldig rad)"] += 1
+                continue
+            x0, x1 = sorted((x, x + w))
+            y0, y1 = sorted((y, y + h))
+            bw, bh = x1 - x0, y1 - y0
+            if bw <= 0 or bh <= 0:
+                forkastet["(null areal)"] += 1
+                continue
+            ratio = bw / bh
+            rader.append({
+                "dok_nr": nr, "side": side,
+                "boks": (x0, y0, x1, y1),
+                "w": bw, "h": bh,
+                "kortside": min(bw, bh), "langside": max(bw, bh),
+                "elongation": max(ratio, 1 / ratio),
+                "areal": bw * bh,
+                "areal_px": bw * bh * SKALA * SKALA,
+                "conf": None,
+                "ml_status": status or "(tom)",
+                "type": (r.get("type") or "").strip() or "(tom)",
+                "rad": r,
+            })
+    return rader, dict(forkastet), kolonner
+
+
 # ── Datasett med fasit-sentrisk indeks ───────────────────────
 
 class Datasett:

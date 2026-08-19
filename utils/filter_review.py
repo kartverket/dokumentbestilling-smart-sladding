@@ -28,6 +28,7 @@ Kjør:
 import argparse
 import csv
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -40,7 +41,7 @@ from filter_felles import (PDF_DPI, SKALA, STD_SLURV_FAKTOR, STD_TERSKEL,
                            bygg_datasett, dok_nr, evaluer, filter_grunner,
                            overlapp,
                            lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
-                           les_prediksjoner, parse_per_kilde,
+                           les_fasit_rader, les_prediksjoner, parse_per_kilde,
                            skriv_oppsummering)
 
 # ── Farger ────────────────────────────────────────────────────
@@ -519,6 +520,179 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
     print("    nei → reell oversladding")
 
 
+def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
+                   utsnitt_margin=60.0, velg=None):
+    """Anvender filteret DIREKTE på saksbehandlernes sladdinger.
+
+    Hver fasit-boks er en sladding et menneske faktisk gjorde, altså per
+    definisjon riktig. Blir den forkastet av filteret, er det en form filteret
+    ikke godtar — og det gjelder uansett hva modellen predikerte, så alle
+    labels kan vurderes, ikke bare de dokumentene modellen kjørte på.
+    """
+    rader, ekskludert, kolonner = les_fasit_rader(fasit_csv)
+    n_eks = sum(ekskludert.values())
+
+    print(f"FASIT-TEST — filteret anvendt direkte på sladdingene")
+    print(f"  Kolonner i labels-CSV: {', '.join(kolonner)}")
+    print(f"  Labels lest:      {len(rader)}  (riktige sladdinger)")
+    if ekskludert:
+        print(f"  Ekskludert:       {n_eks}  "
+              + ", ".join(f"{k}: {v}" for k, v in sorted(ekskludert.items())))
+
+    for felt in ("ml_status", "type"):
+        fordeling = defaultdict(int)
+        for r in rader:
+            fordeling[r[felt]] += 1
+        if len(fordeling) > 1 or felt == "ml_status":
+            print(f"  {felt}: "
+                  + ", ".join(f"{k}={v}" for k, v in
+                              sorted(fordeling.items(), key=lambda kv: -kv[1])))
+
+    # Formfordelingen til ALLE riktige sladdinger — viser hvor mye margin
+    # terskelen har mot virkelige data, ikke bare mot modellens bokser.
+    def _pst(sortert, p):
+        if not sortert:
+            return 0.0
+        i = (len(sortert) - 1) * p / 100.0
+        lav, hoy = int(i), min(int(i) + 1, len(sortert) - 1)
+        return sortert[lav] + (sortert[hoy] - sortert[lav]) * (i - lav)
+
+    PST = (0.01, 0.1, 1, 50, 99, 99.9, 99.99)
+    print("")
+    print("  Form på alle riktige sladdinger "
+          "(her ligger grensene dine, mål mot halene):")
+    hode = f"    {'mål':<14}" + "".join(f" {('p' + format(p, 'g')):>9}" for p in PST)
+    print(hode)
+    print(f"    {'-' * (len(hode) - 4)}")
+    for nokkel, navn, des in (("elongation", "elongation", 2),
+                              ("kortside", "kortside (pt)", 1),
+                              ("langside", "langside (pt)", 1),
+                              ("areal_px", "areal (px²)", 0)):
+        sortert = sorted(r[nokkel] for r in rader)
+        print(f"    {navn:<14}"
+              + "".join(f" {_pst(sortert, p):>9.{des}f}" for p in PST))
+
+    etikett = _etikett(filter_kwargs)
+    print(f"\n  Filter: {etikett}")
+    print(f"  Merk: fasit-bokser har ingen conf, så conf-porten slår ikke inn "
+          f"— testen viser hva geometrien alene forkaster.")
+
+    forkastet = []
+    for r in rader:
+        grunner = filter_grunner(r, **filter_kwargs)
+        if grunner:
+            r["_grunner"] = grunner
+            forkastet.append(r)
+
+    andel = len(forkastet) / len(rader) * 100 if rader else 0
+    print(f"\n  Sladdinger filteret ville forkastet: {len(forkastet)} "
+          f"({andel:.3f}% av {len(rader)})")
+    if not forkastet:
+        print("  Ingen — filteret forkaster ingen av saksbehandlernes sladdinger.")
+        return
+
+    for felt, tittel in (("_grunn", "regel (en boks kan bryte flere)"),
+                         ("ml_status", "ml_status"), ("type", "type")):
+        fordeling = defaultdict(int)
+        for r in forkastet:
+            if felt == "_grunn":
+                for g in r["_grunner"]:
+                    fordeling[re.sub(r"[\d.]+", "N", g, count=1)] += 1
+            else:
+                fordeling[r[felt]] += 1
+        if len(fordeling) > 1 or felt == "_grunn":
+            print(f"\n  Gruppert etter {tittel}:")
+            for k, v in sorted(fordeling.items(), key=lambda kv: -kv[1]):
+                print(f"    {v:>6}  {k}")
+
+    # ── Manifest ──
+    os.makedirs(ut_mappe, exist_ok=True)
+    forkastet.sort(key=lambda r: ("; ".join(r["_grunner"]), r["dok_nr"], r["side"]))
+    manifest = []
+    for nr, r in enumerate(forkastet, 1):
+        x0, y0, x1, y1 = r["boks"]
+        manifest.append({
+            "nr": nr, "fil_revisjon_id": r["dok_nr"], "side": r["side"],
+            "grunn": "; ".join(r["_grunner"]),
+            "ml_status": r["ml_status"], "type": r["type"],
+            "elongation": round(r["elongation"], 2),
+            "kortside_pt": round(r["kortside"], 1),
+            "langside_pt": round(r["langside"], 1),
+            "bredde_pt": round(r["w"], 1), "hoyde_pt": round(r["h"], 1),
+            "areal_px": round(r["areal_px"]),
+            "x0": round(x0, 1), "y0": round(y0, 1),
+            "utsnitt": f"{nr:04d}_{r['dok_nr']}_side{r['side']}.png",
+            "vurdering": "",
+        })
+        r["_utsnitt"] = manifest[-1]["utsnitt"]
+    manifest_sti = os.path.join(ut_mappe, "forkastede_sladdinger.csv")
+    with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(manifest[0]))
+        w.writeheader()
+        w.writerows(manifest)
+    print(f"\n  Manifest: {manifest_sti}")
+
+    # ── Utsnitt ──
+    if not mappe:
+        return
+    if velg:
+        velg_sett = {os.path.basename(v) for v in velg}
+    per_dok = defaultdict(list)
+    for r in (forkastet[:maks_sider] if maks_sider else forkastet):
+        per_dok[r["dok_nr"]].append(r)
+
+    # Finn PDF-en for hvert dokumentnummer
+    filer = {}
+    for navn in os.listdir(mappe):
+        if navn.lower().endswith(".pdf"):
+            n = dok_nr(navn)
+            if n is not None:
+                filer.setdefault(n, navn)
+
+    ut = os.path.join(ut_mappe, "utsnitt")
+    os.makedirs(ut, exist_ok=True)
+    n_tegnet = mangler = 0
+    for nr in sorted(per_dok):
+        navn = filer.get(nr)
+        if navn is None or (velg and os.path.basename(navn) not in velg_sett):
+            mangler += len(per_dok[nr])
+            continue
+        try:
+            dok = fitz.open(os.path.join(mappe, navn))
+        except Exception as e:
+            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            mangler += len(per_dok[nr])
+            continue
+        for r in per_dok[nr]:
+            si = r["side"]
+            if not 1 <= si <= len(dok):
+                mangler += 1
+                continue
+            bilde = _render_side(dok, si)
+            overlay = Image.new("RGBA", bilde.size, (0, 0, 0, 0))
+            tegner = ImageDraw.Draw(overlay)
+            x0, y0, x1, y1 = r["boks"]
+            rr = [x0 * SKALA, y0 * SKALA, x1 * SKALA, y1 * SKALA]
+            tegner.rectangle(rr, outline=KRITISK_FJERNET, width=4)
+            _tegn_tekst(tegner, rr, "FORKASTET AV FILTER", KRITISK_FJERNET, True)
+            _tegn_tekst(tegner, rr, "; ".join(r["_grunner"]),
+                        KRITISK_FJERNET, False)
+            ferdig = Image.alpha_composite(bilde.convert("RGBA"),
+                                           overlay).convert("RGB")
+            mrg = utsnitt_margin * SKALA
+            boks = (max(0, int(rr[0] - mrg)), max(0, int(rr[1] - mrg)),
+                    min(ferdig.width, int(rr[2] + mrg)),
+                    min(ferdig.height, int(rr[3] + mrg)))
+            if boks[2] > boks[0] and boks[3] > boks[1]:
+                ferdig.crop(boks).save(os.path.join(ut, r["_utsnitt"]))
+                n_tegnet += 1
+        dok.close()
+
+    print(f"  Tegnet {n_tegnet} utsnitt til {ut}")
+    if mangler:
+        print(f"  {mangler} uten utsnitt (PDF mangler i {mappe})")
+
+
 SWEEP_KONFIGER = [
     {"min_elongation": 1.5},
     {"min_elongation": 2.0},
@@ -539,8 +713,9 @@ def main():
                     "filterkonfigurasjon, gruppert etter om fjerningen faktisk "
                     "koster recall.")
     p.add_argument("--fasit-csv", required=True, help="Labels-CSV (fasit)")
-    p.add_argument("--res-csv", required=True, help="Resultat-CSV fra modellen")
-    p.add_argument("--mappe", required=True, help="Mappe med PDF-dokumentene")
+    p.add_argument("--res-csv", default=None,
+                   help="Resultat-CSV fra modellen (ikke nødvendig med --mot-fasit)")
+    p.add_argument("--mappe", default=None, help="Mappe med PDF-dokumentene")
     p.add_argument("--ut-mappe", default="filter_review",
                    help="Mappe for PNG-output (default: filter_review)")
     p.add_argument("--terskel", type=float, default=STD_TERSKEL,
@@ -591,6 +766,11 @@ def main():
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
+    p.add_argument("--mot-fasit", action="store_true", dest="mot_fasit",
+                   help="Anvend filteret DIREKTE på saksbehandlernes sladdinger "
+                        "(alle labels, ikke bare dokumenter modellen kjørte på). "
+                        "Svarer på hvor mange riktige sladdinger filteret ville "
+                        "forkastet. Krever ikke --res-csv.")
     p.add_argument("--bom", action="store_true",
                    help="Triage-modus: tegn ALLE BOM-bokser (treffer ingen "
                         "fasit-boks) uavhengig av filter, 'begge'-kilden "
@@ -609,6 +789,27 @@ def main():
     p.add_argument("--velg", nargs="+", metavar="PDF",
                    help="Begrens til disse PDF-filene")
     args = p.parse_args()
+
+    kw_alle = {n: getattr(args, n) for n in
+               ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
+                "maks_bredde", "min_bredde", "min_kortside", "maks_kortside",
+                "min_langside", "maks_langside", "maks_areal", "min_areal_px",
+                "conf_terskel") if getattr(args, n) is not None}
+
+    if args.mot_fasit:
+        if not kw_alle:
+            p.error("--mot-fasit krever minst ett filter "
+                    "(--elongation, --maks-elongation, --min-kortside, ...)")
+        test_mot_fasit(args.fasit_csv, args.mappe, args.ut_mappe, kw_alle,
+                       maks_sider=args.maks_sider,
+                       utsnitt_margin=args.utsnitt_margin, velg=args.velg)
+        print("\nFerdig!")
+        return
+
+    if not args.res_csv:
+        p.error("--res-csv er påkrevd (unntatt med --mot-fasit)")
+    if not args.mappe:
+        p.error("--mappe er påkrevd")
 
     kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
     ds = bygg_datasett(les_fasit(args.fasit_csv),
@@ -637,11 +838,7 @@ def main():
             ut = os.path.join(args.ut_mappe, _mappenavn(kw))
             generer_bilder(ds, args.mappe, ut, filter_kwargs=kw, **felles)
     else:
-        kw = {n: getattr(args, n) for n in
-              ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
-               "maks_bredde", "min_bredde", "min_kortside", "maks_kortside",
-               "min_langside", "maks_langside", "maks_areal", "min_areal_px",
-               "conf_terskel") if getattr(args, n) is not None}
+        kw = kw_alle
         if not kw:
             p.error("Oppgi minst ett filter (--elongation, --maks-hoyde, "
                     "--maks-bredde, --maks-areal, --conf), --per-kilde, "
