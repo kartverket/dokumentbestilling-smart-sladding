@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from filter_felles import (STD_SLURV_FAKTOR, STD_TERSKEL, baseline,
                            bygg_datasett, evaluer, lag_filter,
-                           lag_filter_per_kilde, les_fasit, les_prediksjoner,
+                           lag_filter_per_kilde, les_fasit, les_kjorte_dok, les_prediksjoner,
                            pareto_front, skriv_oppsummering, splitt_dokumenter)
 
 # En sweep-rad: måling, kort etikett, og spesifikasjonen som gjenskaper
@@ -273,7 +273,8 @@ def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
     return rader
 
 
-def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor, inkluder_ulabelte):
+def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
+                   inkluder_ulabelte, kjorte):
     """Viser hvordan utgangspunktet endrer seg med overlapp-terskelen."""
     print(f"\n{'─' * 118}")
     print("Sweep: OVERLAPP-TERSKEL (utgangspunkt uten geometrifiltre)")
@@ -284,7 +285,8 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor, inkluder_ulabelte
     print(f"  {'─' * 8}─┼─{'─' * 88}")
     for t in terskler:
         d = bygg_datasett(fasit, pred, terskel=t, slurv_faktor=slurv_faktor,
-                          inkluder_ulabelte=inkluder_ulabelte)
+                          inkluder_ulabelte=inkluder_ulabelte,
+                          kjorte_dok=kjorte)
         b = baseline(d)
         snitt = sum(d.dekning_foer) / d.dekket_foer if d.dekket_foer else 0
         markør = " ◀" if abs(t - valgt) < 1e-9 else ""
@@ -387,6 +389,11 @@ def main():
                    help="Ta med prediksjoner på dokumenter som ikke finnes i "
                         "fasit-CSV-en (default: ekskluderes, siden de ellers "
                         "blåser opp oversladdingstallene)")
+    p.add_argument("--kjorte-liste", default=None, metavar="FIL",
+                   help="Fil med dokumentene modellen har kjørt på (ett navn "
+                        "eller nummer per linje). Uten den antas dokumentene "
+                        "i resultat-CSV-en, og et dokument der modellen ikke "
+                        "fant noe regnes som ukjørt.")
     p.add_argument("--kostnad", type=float, default=1.0,
                    help="Hvor mange fjernede oversladdinger én tapt fasit-boks "
                         "er verdt. netto = ov.fj − kostnad × tapt (default: 1)")
@@ -443,9 +450,11 @@ def main():
     try:
         fasit = les_fasit(args.fasit_csv)
         pred = les_prediksjoner(args.res_csv)
+        kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
         ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
                                 slurv_faktor=args.slurv_faktor,
-                                inkluder_ulabelte=args.inkluder_ulabelte)
+                                inkluder_ulabelte=args.inkluder_ulabelte,
+                                kjorte_dok=kjorte)
 
         print(f"Overlapp-terskel {args.terskel:.0%}, "
               f"slurv-faktor {args.slurv_faktor:g}, "
@@ -473,11 +482,12 @@ def main():
         tee.til_terminal = False
 
         _sweep_terskel(fasit, pred, [0.15, 0.25, 0.30, 0.35], args.terskel,
-                       args.slurv_faktor, args.inkluder_ulabelte)
+                       args.slurv_faktor, args.inkluder_ulabelte, kjorte)
         # bygg_datasett muterer prediksjonene — bygg opp igjen med valgt terskel
         ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
                                 slurv_faktor=args.slurv_faktor,
-                                inkluder_ulabelte=args.inkluder_ulabelte)
+                                inkluder_ulabelte=args.inkluder_ulabelte,
+                                kjorte_dok=kjorte)
         if args.holdout is not None:
             ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
         else:

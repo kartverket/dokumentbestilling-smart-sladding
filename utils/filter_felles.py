@@ -128,6 +128,24 @@ def les_prediksjoner(sti):
     return pred
 
 
+def les_kjorte_dok(sti):
+    """Leser en liste over dokumenter modellen har kjørt på.
+
+    Én oppføring per linje; både filnavn (00123.pdf) og rene tall godtas.
+    Tomme linjer og linjer som starter med # hoppes over.
+    """
+    dokumenter = set()
+    with open(sti, encoding="utf-8-sig") as f:
+        for linje in f:
+            linje = linje.strip()
+            if not linje or linje.startswith("#"):
+                continue
+            nr = dok_nr(linje)
+            if nr is not None:
+                dokumenter.add(nr)
+    return dokumenter
+
+
 # ── Datasett med fasit-sentrisk indeks ───────────────────────
 
 class Datasett:
@@ -143,7 +161,8 @@ class Datasett:
     """
 
     def __init__(self, pred, utenfor, fasit_bokser, dekning_foer,
-                 terskel, slurv_faktor, n_fasit=None, navn="alle"):
+                 terskel, slurv_faktor, n_fasit=None, navn="alle",
+                 scope_dok=None, n_fasit_ukjort=0, n_dok_ukjort=0):
         self.pred = pred
         self.utenfor = utenfor
         self.fasit_bokser = fasit_bokser
@@ -151,6 +170,10 @@ class Datasett:
         self.terskel = terskel
         self.slurv_faktor = slurv_faktor
         self.navn = navn
+        self.n_fasit_ukjort = n_fasit_ukjort
+        self.n_dok_ukjort = n_dok_ukjort
+        self.scope_dok = (scope_dok if scope_dok is not None
+                          else {p["dok_nr"] for p in pred})
         # Ved dokument-splitt peker dekker-indeksene fortsatt inn i den
         # globale fasit-listen, men bare en delmengde er i scope.
         self.n_fasit = len(fasit_bokser) if n_fasit is None else n_fasit
@@ -168,15 +191,28 @@ class Datasett:
 
 
 def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
-                  slurv_faktor=STD_SLURV_FAKTOR, inkluder_ulabelte=False):
+                  slurv_faktor=STD_SLURV_FAKTOR, inkluder_ulabelte=False,
+                  kjorte_dok=None):
     """Kobler prediksjoner mot fasit-bokser og klassifiserer hver prediksjon.
 
     Setter på hver prediksjon:
       p["dekker"]  liste av fasit-boks-indekser den dekker ≥ terskel
       p["klasse"]  "TREFF" | "SLURV" | "BOM"
       p["riktig"]  bakoverkompatibel bool (dekker noe = True)
+
+    Scope er skjæringen mellom dokumenter som er LABELT og dokumenter som er
+    KJØRT. Fasit på dokumenter modellen aldri kjørte på holdes utenfor — de er
+    ikke bom, de er umålte, og tas de med blir recall kunstig lav.
+
+    kjorte_dok: eksplisitt sett med kjørte dokumentnumre. Utelates det, antas
+    dokumentene som forekommer i resultat-CSV-en. Da regnes et dokument der
+    modellen ikke fant noe som helst som ukjørt, så recall blir marginalt
+    optimistisk — oppgi listen for å fjerne den tvetydigheten.
     """
     labelte_dok = {nr for (nr, _side) in fasit}
+    kjorte = (set(kjorte_dok) if kjorte_dok is not None
+              else {p["dok_nr"] for p in pred})
+    scope_dok = labelte_dok & kjorte
 
     # Sidestørrelse i punkt, utledet fra pikselstørrelsen i resultat-CSV-en
     side_str = {}
@@ -188,7 +224,11 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
     # Flat, normalisert fasit-liste + oppslag (dok, side) -> [indekser]
     fasit_bokser = []
     per_side = defaultdict(list)
+    n_fasit_ukjort = 0
     for (nr, si), bokser in sorted(fasit.items()):
+        if nr not in scope_dok:
+            n_fasit_ukjort += len(bokser)
+            continue
         pw, ph = side_str.get((nr, si), (595, 842))   # fallback A4
         for (x0, y0, x1, y1) in bokser:
             n = (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
@@ -236,7 +276,9 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
         p["riktig"] = False
 
     return Datasett(innenfor, utenfor, fasit_bokser, dekning_foer,
-                    terskel, slurv_faktor)
+                    terskel, slurv_faktor, scope_dok=scope_dok,
+                    n_fasit_ukjort=n_fasit_ukjort,
+                    n_dok_ukjort=len(labelte_dok - kjorte))
 
 
 def del_datasett(ds, dok_sett, navn):
@@ -252,14 +294,17 @@ def del_datasett(ds, dok_sett, navn):
         for j in p["dekker"]:
             dekning[j] += 1
     return Datasett(pred, [], ds.fasit_bokser, dekning, ds.terskel,
-                    ds.slurv_faktor, n_fasit=n_fasit, navn=navn)
+                    ds.slurv_faktor, n_fasit=n_fasit, navn=navn,
+                    scope_dok=dok_sett & ds.scope_dok)
 
 
 def splitt_dokumenter(ds, andel, seed=42):
     """Deler dokumentene i (trening, holdout). Splitten er på DOKUMENT, ikke
     prediksjon — ellers lekker samme side inn i begge settene."""
     import random
-    dokumenter = sorted({p["dok_nr"] for p in ds.pred})
+    # Del over HELE scope, ikke bare dokumenter med prediksjoner — ellers
+    # faller dokumenter der modellen ikke fant noe ut av begge settene.
+    dokumenter = sorted(ds.scope_dok)
     stokket = list(dokumenter)
     random.Random(seed).shuffle(stokket)
     n_test = max(1, round(len(stokket) * andel))
@@ -466,12 +511,17 @@ def baseline(ds):
 def skriv_oppsummering(ds, skriv=print):
     """Skriver utgangspunktet: fasit-dekning, klassefordeling, scope."""
     b = baseline(ds)
-    skriv(f"Fasit:        {ds.n_fasit} bokser "
+    skriv(f"Fasit i scope: {ds.n_fasit} bokser "
           f"i {len({(f['dok_nr'], f['side']) for f in ds.fasit_bokser})} "
           f"(dok, side)-grupper")
     skriv(f"Prediksjoner: {len(ds.pred)} i scope"
           + (f"  ({len(ds.utenfor)} ekskludert — dokument mangler i fasit)"
              if ds.utenfor else ""))
+    skriv(f"Scope:        {len(ds.scope_dok)} dokumenter "
+          f"(labelt OG kjørt)")
+    if ds.n_dok_ukjort:
+        skriv(f"              {ds.n_dok_ukjort} labelte dokumenter er ikke "
+              f"kjørt — {ds.n_fasit_ukjort} fasit-bokser holdt utenfor")
 
     per_kilde = defaultdict(lambda: [0, 0, 0, 0])
     for p in ds.pred:

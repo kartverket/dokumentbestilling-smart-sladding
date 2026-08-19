@@ -37,7 +37,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from filter_felles import (PDF_DPI, SKALA, STD_SLURV_FAKTOR, STD_TERSKEL,
                            bygg_datasett, dok_nr, evaluer, filter_grunner,
-                           lag_filter, lag_filter_per_kilde, les_fasit,
+                           lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
                            les_prediksjoner, parse_per_kilde,
                            skriv_oppsummering)
 
@@ -326,6 +326,11 @@ def main():
     p.add_argument("--inkluder-ulabelte", action="store_true",
                    help="Ta med dokumenter som ikke finnes i fasit-CSV-en")
 
+    p.add_argument("--kjorte-liste", default=None, metavar="FIL",
+                   help="Fil med dokumentene modellen har kjørt på (ett navn "
+                        "eller nummer per linje). Uten den antas dokumentene "
+                        "i resultat-CSV-en, og et dokument der modellen ikke "
+                        "fant noe regnes som ukjørt.")
     filt = p.add_argument_group("Filterparametre (oppgi minst ett, "
                                 "eller bruk --per-kilde/--sweep)")
     filt.add_argument("--elongation", type=float, default=None,
@@ -352,10 +357,12 @@ def main():
                    help="Begrens til disse PDF-filene")
     args = p.parse_args()
 
+    kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
     ds = bygg_datasett(les_fasit(args.fasit_csv),
                        les_prediksjoner(args.res_csv),
                        terskel=args.terskel, slurv_faktor=args.slurv_faktor,
-                       inkluder_ulabelte=args.inkluder_ulabelte)
+                       inkluder_ulabelte=args.inkluder_ulabelte,
+                       kjorte_dok=kjorte)
     skriv_oppsummering(ds)
 
     felles = dict(kun_tapt=args.kun_tapt, velg=args.velg,
