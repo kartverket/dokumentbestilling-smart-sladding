@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import fitz
 import numpy as np
 
-from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL
+from config import DEDUP_OVERLAPP, YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
 from orientering import finn_rotasjon, boks_tilbake
@@ -19,12 +19,25 @@ def _ta_tid(t, post):
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
 
 
+def _hopp_over_geometrifilter(conf):
+    """Høy konfidens → stol på modellen, hopp over geometrifiltrene.
+
+    Tar bare konfidens, ikke kilde: grensene er de samme for paddle, yolo og
+    begge. «begge»-bokser var tidligere fritatt uansett konfidens, men
+    gjennomgangen av uttrekk 4 viste at lav-konfidens «begge» står for en reell
+    del av oversladdingen (4 av 7 tap hadde conf 0.17-0.31), så de går nå
+    gjennom samme port som resten. Paddle-bokser har conf=None og fritas aldri.
+    """
+    return conf is not None and conf >= YOLO_CONF_GEOMETRI_TERSKEL
+
+
 def _finn_bokser_kun_yolo(bilde_ocr):
     bokser = []
     for (x0, y0, x1, y1, conf) in finn_yolo_bokser(bilde_ocr):
         yb = (x0, y0, x1, y1)
-        if (not er_for_liten(yb) and not har_feil_ratio(yb)
-                and not er_for_tynn(yb)):
+        if not er_for_liten(yb) and (
+                _hopp_over_geometrifilter(round(conf, 3))
+                or (not har_feil_ratio(yb) and not er_for_tynn(yb))):
             bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3)])
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 
@@ -44,11 +57,12 @@ def _finn_bokser_med_kilde(tokens, bilde_ocr, elektronisk_tinglyst=False):
                 bokser.append([yb, kilde, round(conf, 3)])
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
-    # Universelle: samme grenser for alle kilder, ingen konfidens-fritak.
+    # Universelle grenser for alle kilder; kun høy konfidens fritar.
     bokser = [par for par in bokser
-              if not er_for_liten(par[0])
-              and not har_feil_ratio(par[0])
-              and not er_for_tynn(par[0])]
+              if not er_for_liten(par[0]) and (
+                  _hopp_over_geometrifilter(par[2])
+                  or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0]))
+              )]
 
     return [(tuple(boks), kilde, conf) for boks, kilde, conf in bokser]
 

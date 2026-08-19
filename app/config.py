@@ -2,8 +2,10 @@
 PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, mer nøyaktig)
 
 # ---- Dimensjonsfiltre ------------------------------------------------------
-# Grensene er UNIVERSELLE: de gjelder alle bokser uansett kilde (paddle, yolo,
-# begge) og uansett konfidens. Ingen unntak.
+# Grensene er UNIVERSELLE: samme verdier for alle kilder (paddle, yolo, begge).
+# Eneste unntak er høy konfidens, se YOLO_CONF_GEOMETRI_TERSKEL — det gjelder
+# også likt for alle kilder, men paddle har ingen konfidens fra OCR og blir
+# derfor alltid filtrert.
 #
 # Grensene er orienteringsuavhengige: en sladding av 5 sifre kan stå loddrett,
 # og da er «høyde» den lange siden. Tidligere MAKS_BOKS_HOYDE_PT/…_BREDDE_PT
@@ -19,6 +21,11 @@ MIN_ELONGATION     = 1.44      # min max(w/h, h/w) — forkaster nesten-kvadrati
                                # (1.5 tok 3 ekte sladdinger på 1.47-1.49)
 MAKS_ELONGATION    = 9         # maks max(w/h, h/w) — bokser 3-4x bredere enn feltet
 MIN_KORTSIDE_PT    = 6         # min korteste side i punkt — for tynn til å være tekst
+
+# Bokser med conf ≥ dette hopper over geometrifiltrene. Gjelder alle kilder;
+# paddle-bokser har conf=None og fritas aldri. «begge»-bokser var tidligere
+# fritatt uansett konfidens — det er fjernet, se _hopp_over_geometrifilter.
+YOLO_CONF_GEOMETRI_TERSKEL = 0.5
 
 # Kun default for --maks-bredde i utils/tegn.py; ikke del av filterstien.
 MAKS_BREDDE_ELEKTRONISK_PT = 50
