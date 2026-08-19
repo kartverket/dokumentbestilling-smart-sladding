@@ -122,6 +122,8 @@ def les_prediksjoner(sti):
                 "w": w_pt, "h": h_pt,
                 "ratio": ratio,
                 "elongation": max(ratio, 1 / ratio),
+                "kortside": min(w_pt, h_pt),
+                "langside": max(w_pt, h_pt),
                 "areal": w_pt * h_pt,
                 "areal_px": abs(x1 - x0) * abs(y1 - y0),
                 "kilde": kilde, "conf": conf,
@@ -334,12 +336,16 @@ def pareto_front(rader, maal=lambda r: (r.m.tapt, r.m.ov_fj)):
 
 FILTER_PARAMETRE = ("min_elongation", "maks_elongation",
                     "maks_hoyde", "min_hoyde", "maks_bredde", "min_bredde",
+                    "min_kortside", "maks_kortside",
+                    "min_langside", "maks_langside",
                     "maks_areal", "min_areal_px", "conf_terskel")
 
 
 def filter_grunner(p, min_elongation=None, maks_elongation=None,
                    maks_hoyde=None, min_hoyde=None,
                    maks_bredde=None, min_bredde=None,
+                   min_kortside=None, maks_kortside=None,
+                   min_langside=None, maks_langside=None,
                    maks_areal=None, min_areal_px=None, conf_terskel=None):
     """Grunner til at boksen filtreres bort (tom liste = beholdes).
 
@@ -367,6 +373,14 @@ def filter_grunner(p, min_elongation=None, maks_elongation=None,
         grunner.append(f"bredde {p['w']:.0f} > {maks_bredde:g}")
     if min_bredde is not None and p["w"] < min_bredde:
         grunner.append(f"bredde {p['w']:.1f} < {min_bredde:g}")
+    if min_kortside is not None and p["kortside"] < min_kortside:
+        grunner.append(f"kortside {p['kortside']:.1f} < {min_kortside:g}")
+    if maks_kortside is not None and p["kortside"] > maks_kortside:
+        grunner.append(f"kortside {p['kortside']:.1f} > {maks_kortside:g}")
+    if min_langside is not None and p["langside"] < min_langside:
+        grunner.append(f"langside {p['langside']:.1f} < {min_langside:g}")
+    if maks_langside is not None and p["langside"] > maks_langside:
+        grunner.append(f"langside {p['langside']:.1f} > {maks_langside:g}")
     if maks_areal is not None and p["areal"] > maks_areal:
         grunner.append(f"areal {p['areal']:.0f} > {maks_areal:g}")
     return grunner
@@ -375,6 +389,8 @@ def filter_grunner(p, min_elongation=None, maks_elongation=None,
 def er_filtrert(p, min_elongation=None, maks_elongation=None,
                 maks_hoyde=None, min_hoyde=None,
                 maks_bredde=None, min_bredde=None,
+                min_kortside=None, maks_kortside=None,
+                min_langside=None, maks_langside=None,
                 maks_areal=None, min_areal_px=None, conf_terskel=None):
     """Rask variant av filter_grunner som ikke bygger tekst."""
     if min_areal_px is not None and p["areal_px"] < min_areal_px:
@@ -393,6 +409,14 @@ def er_filtrert(p, min_elongation=None, maks_elongation=None,
     if maks_bredde is not None and p["w"] > maks_bredde:
         return True
     if min_bredde is not None and p["w"] < min_bredde:
+        return True
+    if min_kortside is not None and p["kortside"] < min_kortside:
+        return True
+    if maks_kortside is not None and p["kortside"] > maks_kortside:
+        return True
+    if min_langside is not None and p["langside"] < min_langside:
+        return True
+    if maks_langside is not None and p["langside"] > maks_langside:
         return True
     if maks_areal is not None and p["areal"] > maks_areal:
         return True
@@ -430,6 +454,8 @@ def parse_per_kilde(spec_liste):
         "e": "min_elongation",      "emaks": "maks_elongation",
         "h": "maks_hoyde",          "hmin": "min_hoyde",
         "b": "maks_bredde",         "bmin": "min_bredde",
+        "kmin": "min_kortside",     "kmaks": "maks_kortside",
+        "lmin": "min_langside",     "lmaks": "maks_langside",
         "a": "maks_areal",          "amin": "min_areal_px",
         "c": "conf_terskel",
     }

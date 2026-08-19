@@ -38,6 +38,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from filter_felles import (PDF_DPI, SKALA, STD_SLURV_FAKTOR, STD_TERSKEL,
                            bygg_datasett, dok_nr, evaluer, filter_grunner,
+                           overlapp,
                            lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
                            les_prediksjoner, parse_per_kilde,
                            skriv_oppsummering)
@@ -73,6 +74,8 @@ def _etikett(kwargs):
     for nøkkel, mal in (("min_elongation", "e≥{:g}"), ("maks_elongation", "e≤{:g}"),
                         ("maks_hoyde", "h≤{:g}"), ("min_hoyde", "h≥{:g}"),
                         ("maks_bredde", "b≤{:g}"), ("min_bredde", "b≥{:g}"),
+                        ("min_kortside", "kort≥{:g}"), ("maks_kortside", "kort≤{:g}"),
+                        ("min_langside", "lang≥{:g}"), ("maks_langside", "lang≤{:g}"),
                         ("maks_areal", "a≤{:g}"), ("min_areal_px", "apx≥{:g}"),
                         ("conf_terskel", "c≥{:g}→behold")):
         if kwargs.get(nøkkel) is not None:
@@ -89,6 +92,8 @@ def _mappenavn(kwargs):
     for nøkkel, kort in (("min_elongation", "e"), ("maks_elongation", "eM"),
                          ("maks_hoyde", "h"), ("min_hoyde", "hm"),
                          ("maks_bredde", "b"), ("min_bredde", "bm"),
+                         ("min_kortside", "km"), ("maks_kortside", "kM"),
+                         ("min_langside", "lm"), ("maks_langside", "lM"),
                          ("maks_areal", "a"), ("min_areal_px", "apx"),
                          ("conf_terskel", "c")):
         if kwargs.get(nøkkel) is not None:
@@ -170,7 +175,11 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
         fb = ds.fasit_bokser[j]
         fx0, fy0, fx1, fy1 = fb["boks"]
         for p in fjernet_for.get(j, [{}]):
+            fa = fb["norm_areal"]
+            dekning = (overlapp(p["norm"], fb["norm"]) / fa * 100
+                       if p and fa > 0 else "")
             manifest.append({
+                "dekning_pst": round(dekning, 1) if dekning != "" else "",
                 "fil": navn_per_dok.get(fb["dok_nr"], f"{fb['dok_nr']}"),
                 "side": fb["side"],
                 "fasit_x0": round(fx0, 1), "fasit_y0": round(fy0, 1),
@@ -182,6 +191,8 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
                 "pred_bredde_pt": round(p["w"], 1) if p else "",
                 "pred_hoyde_pt": round(p["h"], 1) if p else "",
                 "elongation": round(p["elongation"], 2) if p else "",
+                "kortside_pt": round(p["kortside"], 1) if p else "",
+                "langside_pt": round(p["langside"], 1) if p else "",
                 "grunn": "; ".join(p.get("_grunner", ())),
                 "_j": j,
                 "vurdering": "",
@@ -198,7 +209,8 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
     if manifest:
         os.makedirs(ut_mappe, exist_ok=True)
         manifest_sti = os.path.join(ut_mappe, "tapt.csv")
-        felt = ["nr", "fil", "side", "grunn", "kilde", "conf", "elongation",
+        felt = ["nr", "fil", "side", "grunn", "dekning_pst", "kilde", "conf",
+                "elongation", "kortside_pt", "langside_pt",
                 "pred_bredde_pt", "pred_hoyde_pt", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "dekkere_foer", "fasit_x0", "fasit_y0",
                 "utsnitt", "vurdering"]
@@ -560,6 +572,17 @@ def main():
                       help="Min bokshøyde i punkt")
     filt.add_argument("--min-bredde", type=float, default=None, dest="min_bredde",
                       help="Min boksbredde i punkt")
+    filt.add_argument("--min-kortside", type=float, default=None,
+                      dest="min_kortside",
+                      help="Min korteste side i punkt (orienteringsuavhengig — "
+                           "rammer ikke stående bokser slik --min-bredde gjør)")
+    filt.add_argument("--maks-kortside", type=float, default=None,
+                      dest="maks_kortside", help="Maks korteste side i punkt")
+    filt.add_argument("--min-langside", type=float, default=None,
+                      dest="min_langside",
+                      help="Min lengste side i punkt — for kort til 5 sifre")
+    filt.add_argument("--maks-langside", type=float, default=None,
+                      dest="maks_langside", help="Maks lengste side i punkt")
     filt.add_argument("--min-areal-px", type=float, default=None,
                       dest="min_areal_px",
                       help="Min boksareal i PIKSEL² (som MIN_BOKS_AREAL)")
@@ -616,7 +639,8 @@ def main():
     else:
         kw = {n: getattr(args, n) for n in
               ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
-               "maks_bredde", "min_bredde", "maks_areal", "min_areal_px",
+               "maks_bredde", "min_bredde", "min_kortside", "maks_kortside",
+               "min_langside", "maks_langside", "maks_areal", "min_areal_px",
                "conf_terskel") if getattr(args, n) is not None}
         if not kw:
             p.error("Oppgi minst ett filter (--elongation, --maks-hoyde, "

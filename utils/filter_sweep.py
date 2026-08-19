@@ -109,6 +109,10 @@ PARAM_KODER = (
     ("min_hoyde", "hmin", "--min-hoyde"),
     ("maks_bredde", "b", "--maks-bredde"),
     ("min_bredde", "bmin", "--min-bredde"),
+    ("min_kortside", "kmin", "--min-kortside"),
+    ("maks_kortside", "kmaks", "--maks-kortside"),
+    ("min_langside", "lmin", "--min-langside"),
+    ("maks_langside", "lmaks", "--maks-langside"),
     ("maks_areal", "a", "--maks-areal"),
     ("min_areal_px", "amin", "--min-areal-px"),
     ("conf_terskel", "c", "--conf"),
@@ -303,8 +307,8 @@ def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
 
 # ── Formanalyse ──────────────────────────────────────────────
 
-MAAL = (("elongation", "elongation", 2), ("h", "høyde (pt)", 1),
-        ("w", "bredde (pt)", 1), ("areal_px", "areal (px²)", 0))
+MAAL = (("elongation", "elongation", 2), ("kortside", "kortside (pt)", 1),
+        ("langside", "langside (pt)", 1), ("areal_px", "areal (px²)", 0))
 
 PERSENTILER = (0.1, 1, 50, 99, 99.9)
 
@@ -365,8 +369,8 @@ def _avled_grenser(ds, pst, bruk_conf=None):
         kw = {}
         for nøkkel, felt_min, felt_maks in (
                 ("elongation", "min_elongation", "maks_elongation"),
-                ("h", "min_hoyde", "maks_hoyde"),
-                ("w", "min_bredde", "maks_bredde")):
+                ("kortside", "min_kortside", "maks_kortside"),
+                ("langside", "min_langside", "maks_langside")):
             sortert = sorted(p[nøkkel] for p in treff)
             kw[felt_min] = round(_persentil(sortert, pst), 2)
             kw[felt_maks] = round(_persentil(sortert, 100 - pst), 2)
@@ -395,9 +399,9 @@ def _rapport_grenser(ds, ds_test, pst, kostnad):
         print(f"\n  {merke}:")
         for kilde, kw in sorted(spec.items()):
             print(f"    {kilde:>8}  elong [{kw['min_elongation']:g}, "
-                  f"{kw['maks_elongation']:g}]  h [{kw['min_hoyde']:g}, "
-                  f"{kw['maks_hoyde']:g}]  b [{kw['min_bredde']:g}, "
-                  f"{kw['maks_bredde']:g}]  areal ≥ {kw['min_areal_px']:g}px²")
+                  f"{kw['maks_elongation']:g}]  kortside [{kw['min_kortside']:g}, "
+                  f"{kw['maks_kortside']:g}]  langside [{kw['min_langside']:g}, "
+                  f"{kw['maks_langside']:g}]  areal ≥ {kw['min_areal_px']:g}px²")
         m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
         print(f"    trening: {_maal_celler(m)}")
         if ds_test is not None:
@@ -598,7 +602,7 @@ def main():
 
         tee.til_terminal = False
 
-        _sweep_terskel(fasit, pred, [0.15, 0.25, 0.30, 0.35], args.terskel,
+        _sweep_terskel(fasit, pred, [0.15, 0.25, 0.35, 0.5, 0.7, 0.9], args.terskel,
                        args.slurv_faktor, args.inkluder_ulabelte, kjorte)
         # bygg_datasett muterer prediksjonene — bygg opp igjen med valgt terskel
         ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
@@ -633,12 +637,13 @@ def main():
         _sweep_en_param(ds, "MIN_BOKS_AREAL (px²) — bittesmå bokser",
                         [500, 700, 965, 1200, 1600, 2200, 3000],
                         lambda v: {"min_areal_px": v}, args.kostnad)
-        _sweep_en_param(ds, "MIN_BOKS_HOYDE_PT — for lave for 5 lesbare sifre",
+        _sweep_en_param(ds, "MIN_KORTSIDE_PT — for tynne til å være tekst "
+                            "(orienteringsuavhengig: stående bokser rammes ikke)",
                         [3, 4, 5, 6, 7, 8, 10],
-                        lambda v: {"min_hoyde": v}, args.kostnad)
-        _sweep_en_param(ds, "MIN_BOKS_BREDDE_PT — for smale for 5 sifre",
-                        [8, 12, 16, 20, 25, 30, 40],
-                        lambda v: {"min_bredde": v}, args.kostnad)
+                        lambda v: {"min_kortside": v}, args.kostnad)
+        _sweep_en_param(ds, "MIN_LANGSIDE_PT — for korte til å romme 5 sifre",
+                        [10, 15, 20, 25, 30, 40, 50],
+                        lambda v: {"min_langside": v}, args.kostnad)
         _sweep_en_param(ds, "MAKS_ELONGATION — tynne, lange streker",
                         [6, 8, 10, 12, 15, 20, 30, 50],
                         lambda v: {"maks_elongation": v}, args.kostnad)
@@ -663,10 +668,11 @@ def main():
                                           conf_v, **felles)
 
         stoy_rader = _sweep_kombinasjoner(
-            ds, [None, 3, 4, 5, 6], [None, 8, 12, 16, 20],
-            [None, 8, 10, 12, 15, 20], conf_v,
-            felt=("min_hoyde", "min_bredde", "maks_elongation", "conf_terskel"),
-            hoder=("h.min", "b.min", "e.maks", "conf≥"),
+            ds, [None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
+            [None, 6, 8, 10, 12, 15], conf_v,
+            felt=("min_kortside", "min_langside", "maks_elongation",
+                  "conf_terskel"),
+            hoder=("k.min", "l.min", "e.maks", "conf≥"),
             tittel="STØYFILTRE — for små eller for tynne til å være 5 sifre",
             **felles)
 
