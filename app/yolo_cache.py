@@ -24,6 +24,11 @@ sidens rotasjon: full pipeline kjører YOLO på det uroterte bildet (alltid 0),
 --kun-yolo på det roterte. Feltet er derfor en del av nøkkelen, og en endring
 av hvilket bilde YOLO mates med gir automatisk miss.
 
+De to modusene deler mappe. For dokumenter uten rotasjon er entryen gyldig for
+begge; for et dokument med minst én rotert side skriver de over hverandre, så
+vekselvis valider_full.sh og valider_yolo.sh gir miss på nettopp de
+dokumentene. Det koster en ny inferens, ikke feil resultat.
+
 Filformat per dokument:
     {cache_mappe}/{doc_id}.json
     {

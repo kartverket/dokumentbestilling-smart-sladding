@@ -12,7 +12,9 @@
 #   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #
-# Bruker OCR-cache ($SLADD_CACHE) for å unngå å kjøre OCR på nytt.
+# Bruker OCR- og YOLO-cache ($SLADD_CACHE) for å unngå å kjøre OCR og YOLO på nytt.
+# YOLO-cachen er per vektfil. Treffer begge, hoppes også PDF-renderingen over,
+# så en ny kjøring av samme modell koster nesten ingenting.
 # Se også: valider_yolo.sh — kun YOLO (raskere, men uten OCR-matching)
 # Krever at server.env er sourcet (SLADD_-variablene må finnes).
 
@@ -119,7 +121,7 @@ else
 fi
 printf "│ fasit:    %s\n" "$FASIT"
 printf "│ utmappe:  %s\n" "$UT_MAPPE"
-printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/ocr"
+printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/{ocr,yolo}"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 

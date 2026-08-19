@@ -106,6 +106,7 @@ printf "│ uttrekk:  %s\n" "$UTTREKK_MAPPE"
 printf "│ liste:    %s\n" "$LISTE_FIL"
 printf "│ fasit:    %s\n" "$FASIT"
 printf "│ utmappe:  %s\n" "$UT_MAPPE"
+printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/yolo"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 
