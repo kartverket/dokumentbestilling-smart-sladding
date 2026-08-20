@@ -124,12 +124,21 @@ def finn_fnr(tekst):
     return treff
 
 
+_har_logget_keys = False
+
+
 def _les_tokens(res):
+    global _har_logget_keys
     tokens = []
     if not res:
         return tokens
 
-    dt_scores = res.get("dt_scores") or []
+    if not _har_logget_keys:
+        _har_logget_keys = True
+        print(f"[OCR debug] Resultat-nøkler: {list(res.keys()) if hasattr(res, 'keys') else type(res)}")
+
+    # dt_scores kan hete forskjellig avhengig av PaddleOCR-versjon
+    dt_scores = res.get("dt_scores") or res.get("det_scores") or res.get("scores") or []
 
     ord_per_linje = res.get("text_word")
     boks_per_linje = res.get("text_word_boxes")
