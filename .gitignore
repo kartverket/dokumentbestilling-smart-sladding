@@ -36,3 +36,4 @@ PP-LCNet_x1_0_doc_ori_infer/
 PP-LCNet_x1_0_doc_ori_infer.tar
 *.csv
 runs/
+.deploy-historikk

@@ -94,27 +94,140 @@ PNG-resultat lagres i `utils/visning_test/`.
 
 ## Produksjon (Docker)
 
-Produksjon kjøres som Docker-container. `docker-compose.yml` har to tjenester som bygges fra samme `Dockerfile`:
+Produksjon kjøres som Docker-container på GPU-serveren. **Det som kjører på port 5071 er produksjon** — ingenting annet.
 
-| Tjeneste   | MODE | Port (host→container) | Container          |
-|------------|------|------------------------|--------------------|
-| `app-prod` | prod | 5071 → 8080            | `smsl-server-prod` |
-| `app-dev`  | dev  | 5072 → 8080            | `smsl-server-dev`  |
+Et image bygges én gang og får en uforanderlig tag (`<dato>-<commit>`, f.eks. `20260820-6d7e6820`). Etter det flyttes bare *hvilken* tag som kjører hvor. Prod bygger aldri selv, så det som står på 5071 endrer seg ikke av at noen bygger noe nytt, og rollback er å peke tilbake på en tag som allerede har kjørt.
+
+Imagene lagres **bare lokalt på serveren** — ingen registry foreløpig. Det betyr at `docker image prune -a` sletter muligheten til å rulle tilbake, og at en ny maskin må bygge alt på nytt.
+
+| Rolle | Port | Container   | Tag styres av |
+|-------|------|-------------|---------------|
+| Prod  | 5071 | `smsl-prod` | `PROD_TAG`    |
+| Test  | 5072 | `smsl-test` | `TEST_TAG`    |
+
+`deploy.sh` gjør alt arbeidet. Første gang på en ny maskin:
 
 ```sh
-# bygg + start prod (port 5071)
-docker compose up -d --build app-prod
-
-# følg loggen (modellene lastes først ved første /model-kall)
-docker compose logs -f app-prod
-
-# test
-curl http://localhost:5071/health
+cp .env.example .env
+git submodule update --init app/weights   # henter best.pt
 ```
 
+### Normal flyt: build → test → promote
 
 ```sh
-docker compose logs app-prod | grep -i "GPU tilgjengelig"   # -> True hvis du kjører på gpu
+./deploy.sh build                       # bygger f.eks. tag 20260820-6d7e6820
+./deploy.sh test 20260820-6d7e6820      # starter den på 5072 og venter på /health
+```
+
+Verifiser mot testporten før du promoterer:
+
+```sh
+curl http://localhost:5072/health
+curl -X POST http://localhost:5072/model \
+  -H "Content-Type: application/pdf" \
+  --data-binary "@/sti/til/dokument.pdf"
+```
+
+Når den ser bra ut, settes *samme tag* i prod — ingen ny bygging, altså samme bits som ble testet:
+
+```sh
+./deploy.sh promote 20260820-6d7e6820
+./deploy.sh stop test                   # frigi GPU-minnet testcontaineren holder
+```
+
+`promote` krever at du oppgir taggen eksplisitt, ber om bekreftelse, og **ruller automatisk tilbake** til forrige tag hvis `/health` ikke svarer.
+
+### Øvrige kommandoer
+
+```sh
+./deploy.sh status            # hva kjører hvor, og er det friskt
+./deploy.sh versions          # lokalt bygde tagger, nyest først
+./deploy.sh rollback          # tilbake til forrige tag i prod
+./deploy.sh stop prod|test    # ta ned en container
+./deploy.sh start prod|test   # opp igjen med taggen som står i .env
+./deploy.sh logs prod|test    # følg loggen
+./deploy.sh prune             # slett gamle images (kan ikke angres)
+```
+
+`start` og `stop` bytter aldri versjon — de tar bare ned og opp den taggen som allerede står i `.env`. Skal du bytte versjon, er det `promote` (prod) eller `test <tag>` (test). `stop prod` ber om bekreftelse, siden det tar ned produksjon; `stop test` gjør ikke.
+
+`stop` stopper containeren uten å slette den, så `start` henter opp nøyaktig samme oppsett. GPU-minnet frigis uansett, siden prosessen dør, og `restart: unless-stopped` tar den ikke opp av seg selv etter en eksplisitt stopp.
+
+Deploy-historikken ligger i `.deploy-historikk` (tid, ny tag, forrige tag) og er det `rollback` leser.
+
+`prune` er den ene kommandoen som ikke kan angres, siden imagene bare finnes her. Den verner de 5 nyeste, taggen i prod, taggen i test og alt som står i deploy-historikken — men sletter du noe eldre, er eneste vei tilbake å bygge på nytt fra commiten taggen navngir.
+
+### Imaget
+
+| | |
+|---|---|
+| Navn | `smart-sladding:<dato>-<commit>` |
+| Lagring | bare lokalt på serveren |
+| Størrelse | ~10–15 GB |
+| Ny versjon koster | ~64 kB ved en ren kodeendring (lagene deles) |
+
+Imaget inneholder alle modellene det trenger:
+
+```
+/app/
+  PP-OCRv6_medium_det_infer/     59 MB   ← curl i Dockerfile
+  PP-OCRv6_medium_rec_infer/     73 MB   ← curl i Dockerfile
+  PP-LCNet_x1_0_doc_ori_infer/  6,6 MB   ← curl i Dockerfile
+  weights/best.pt                51 MB   ← COPY fra submodulet app/weights
+  *.py                           64 kB   ← COPY app/*.py
+```
+
+Merk at `Dockerfile` hardkoder nedlasting av **v6**-modellene, mens `app/config.py` velger settet med `MODELL_SETT`. Bytter du til `"v5"` må Dockerfile endres tilsvarende, ellers bygges et image uten de modellene koden ber om.
+
+Vektene ligger i et eget lag fra koden. Det gjør at ti versjoner på serveren koster 51 MB vekter til sammen og ikke 51 MB hver, og at et rebuild etter en kodeendring gjenbruker alt det tunge.
+
+### Logger
+
+Tre strømmer, alle gjennom samme roterende handler: de zippes ved døgnskiftet og eldste zip slettes når historikken er full.
+
+| Logg | Fil i loggmappa | Kilde |
+|------|-----------------|-------|
+| Applikasjon | `app.log` | `app/app.py` |
+| Access | `gunicorn_access_prod.log` | `config/gunicorn_config_prod.py` |
+| Gunicorn-feil | `gunicorn_error_prod.log` | samme |
+
+Etter rotasjon: `app.log.2026-08-19.zip` — datoen er **døgnet zipen dekker**. Skjer det et ekstra rollover i samme døgn (nedetid over midnatt, eller flere workers), får den et løpenummer (`.2.zip`) i stedet for å overskrive.
+
+Hvor de havner defineres i `server.env`:
+
+```sh
+export SLADD_LOGS=/data/docker       # loggrot på verten
+export SLADD_LOGG_DAGER=30           # døgn historikk per fil
+```
+
+`deploy.sh` leser dem og sender dem videre til compose som `LOG_ROOT` og `LOG_BACKUP_DAYS`. Under loggroten lages:
+
+```
+$SLADD_LOGS/
+  gunicorn_logs/        ← prod: access + error
+  ml_logs/              ← prod: app.log
+  gunicorn_logs_test/   ← test, holdt for seg
+  ml_logs_test/
+```
+
+Test skriver til egne mapper med vilje. Delte de prods, ville to rotasjons-handlere kappet om samme fil ved midnatt, og testtrafikk havnet i prods access-logg. Mappene opprettes av Docker ved første kjøring.
+
+Inne i containeren ligger stiene på `/data/gunicorn_logs` og `/data/ml_logs` uansett, satt med `GUNICORN_LOG_DIR` og `ML_LOG_DIR`. `./deploy.sh status` viser hvilken loggrot og retensjon som gjelder.
+
+`_prod`-suffikset i filnavnene er historisk — det finnes bare én gunicorn-config nå. Navnene er beholdt så eksisterende logghistorikk på serveren ikke splittes i to serier. Test skriver samme filnavn, men i sine egne mapper.
+
+Gunicorns error-logg går også til stdout, så `./deploy.sh logs prod` fortsatt viser oppstart og feil. Stray stdout/stderr havner i dockers egen loggfil, som compose kapper på 50 MB × 5.
+
+### Verdt å vite
+
+- Prod og test deler GPU-en. Kjører du en testcontainer ved siden av prod, konkurrerer de om samme kort — kjør `./deploy.sh stop test` når du er ferdig.
+- `best.pt` kommer fra submodulet `app/weights` (repo `dokumentbestilling-smart-sladding-model`). `./deploy.sh build` nekter å bygge uten den, siden et image uten vekter starter fint og feiler først ved første `/model`-kall.
+- En tag bygget på ucommittede endringer får suffikset `-dirty` og blir avvist av `./deploy.sh promote`. Commit først.
+- Modellene lastes først ved første `/model`-kall, så `/health` svarer lenge før containeren er varm.
+- Bekreft at GPU-en faktisk brukes:
+
+```sh
+./deploy.sh logs prod | grep -i "GPU tilgjengelig"   # -> True hvis du kjører på gpu
 ```
 
 ---

@@ -10,6 +10,11 @@ app = Flask(__name__)
 load_dotenv()
 base_url = os.getenv('DOKUMENT_URL', default='http://localhost:3000/pantebok')
 
+# Hvor applikasjonsloggen havner, og hvor mange døgn historikk som
+# beholdes. Settes av compose; defaultene er containerstiene.
+ML_LOG_DIR = os.getenv('ML_LOG_DIR', '/data/ml_logs')
+LOG_BACKUP_DAYS = int(os.getenv('LOG_BACKUP_DAYS', '30'))
+
 
 @app.route('/health')
 def health():
@@ -38,7 +43,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler("/data/ml_logs/app.log", when="midnight", backupCount=30),
+        zipped_timed_rotating_file_handler.ZippedTimedRotatingFileHandler(
+            os.path.join(ML_LOG_DIR, "app.log"), when="midnight", backupCount=LOG_BACKUP_DAYS),
         logging.StreamHandler()
     ]
 )
