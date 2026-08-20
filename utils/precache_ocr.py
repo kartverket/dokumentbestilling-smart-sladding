@@ -62,6 +62,21 @@ def _fmt_tid(sekunder):
 
 # ── Ressursovervåking ────────────────────────────────────────────
 
+def _frigjør_gpu_cache():
+    """Frigjør ubrukt cachet GPU-minne tilbake til CUDA.
+
+    PaddlePaddle sin CUDA-allokator cacher minneblokker for gjenbruk.
+    Når bilder har varierende dimensjoner allokeres nye blokker som aldri
+    frigjøres av seg selv — dette ser ut som en "leak" i nvidia-smi.
+    Kall denne periodisk for å holde GPU-minnet stabilt.
+    """
+    try:
+        import paddle
+        if paddle.is_compiled_with_cuda():
+            paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
+
 def _minne_info():
     """Returnerer (brukt_gb, tilgjengelig_gb, prosent_brukt) for systemminne."""
     try:
@@ -413,6 +428,10 @@ def main():
 
         tid_batch = time.perf_counter() - start_batch
         total_tid += tid_batch
+
+        # Frigjør ubrukt cachet GPU-minne — forhindrer den gradvise veksten
+        # som PaddlePaddle sin CUDA-allokator ellers viser.
+        _frigjør_gpu_cache()
 
         if args.vis_ressurser and ferdig % 10 == 0:
             _skriv_ressursstatus()
