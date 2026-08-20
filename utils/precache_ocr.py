@@ -19,6 +19,7 @@ Bruk:
 """
 
 import argparse
+import multiprocessing as mp
 import os
 import sys
 import time
@@ -335,6 +336,110 @@ def _skriv_ressursstatus():
         print(f"  Ressurser: {' | '.join(deler)}")
 
 
+# ── CPU OCR-worker (multiprocessing) ─────────────────────────────
+
+def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id):
+    """Prosess som kjører PaddleOCR på CPU for ett dokument om gangen.
+
+    Hver worker har sin egen PaddleOCR-instans med device='cpu' og mkldnn.
+    Leser filstier fra fil_kø, skriver resultater til resultat_kø.
+    """
+    # Sett opp paths
+    _utils = os.path.dirname(os.path.abspath(__file__))
+    _app = os.path.join(_utils, "..", "app")
+    if _utils not in sys.path:
+        sys.path.insert(0, _utils)
+    if _app not in sys.path:
+        sys.path.insert(0, _app)
+
+    os.environ["GLOG_minloglevel"] = "2"
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # tving CPU-modus
+
+    import numpy as np
+    from load_pdf import les_sider
+    from ocr_cache import skriv_cache as skriv_ocr_cache
+    from config import NEDSKALERING, MIN_KONFIDENS, DET_SIDE_LEN, REC_BATCH, SIDER_PER_OCR_BATCH
+    from paddleocr import PaddleOCR, DocImgOrientationClassification
+
+    # Opprett CPU-basert PaddleOCR
+    det_dir = os.path.join(_app, "PP-OCRv6_medium_det_infer")
+    rec_dir = os.path.join(_app, "PP-OCRv6_medium_rec_infer")
+    ori_dir = os.path.join(_app, "PP-LCNet_x1_0_doc_ori_infer")
+
+    reader = PaddleOCR(
+        lang="en",
+        device="cpu",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        text_det_limit_type="max",
+        text_det_limit_side_len=DET_SIDE_LEN,
+        text_recognition_batch_size=REC_BATCH,
+        text_detection_model_name="PP-OCRv6_medium_det",
+        text_recognition_model_name="PP-OCRv6_medium_rec",
+        text_detection_model_dir=det_dir,
+        text_recognition_model_dir=rec_dir,
+        enable_mkldnn=True,
+    )
+    orient = DocImgOrientationClassification(
+        model_name="PP-LCNet_x1_0_doc_ori",
+        model_dir=ori_dir,
+    )
+
+    from paddle_ocr_model_fnr import _les_tokens
+
+    def _orientering(bilde):
+        lite = np.ascontiguousarray(bilde[::NEDSKALERING, ::NEDSKALERING])
+        try:
+            res = orient.predict(lite)
+            r = res[0]
+            vinkel = int(r["label_names"][0])
+            score = float(np.asarray(r["scores"]).reshape(-1)[0])
+        except Exception:
+            return 0
+        if score < MIN_KONFIDENS:
+            return 0
+        return (vinkel // 90) % 4
+
+    ferdig = 0
+    while True:
+        try:
+            sti = fil_kø.get(timeout=5)
+        except Exception:
+            # Kø tom i 5s — sjekk om vi skal avslutte
+            if fil_kø.empty():
+                break
+            continue
+
+        if sti is None:  # poison pill
+            break
+
+        navn = os.path.basename(sti)
+        try:
+            bilder = les_sider(sti)
+            rotasjoner = [_orientering(b) for b in bilder]
+            bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+
+            tokens_per_side = []
+            for start in range(0, len(bilder_ocr), SIDER_PER_OCR_BATCH):
+                chunk = bilder_ocr[start:start + SIDER_PER_OCR_BATCH]
+                bgr_chunk = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
+                resultater = reader.predict(bgr_chunk, return_word_box=True) or []
+                for res in resultater:
+                    tokens_per_side.append(_les_tokens(res))
+                while len(tokens_per_side) < start + len(chunk):
+                    tokens_per_side.append([])
+
+            skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+            ferdig += 1
+            n_tokens = sum(len(ts) for ts in tokens_per_side)
+            resultat_kø.put(("ok", worker_id, navn, len(bilder), n_tokens))
+        except Exception as e:
+            resultat_kø.put(("feil", worker_id, navn, 0, repr(e)))
+
+    resultat_kø.put(("ferdig", worker_id, "", ferdig, ""))
+
+
 def main():
     _setup_loggfil()
 
@@ -365,6 +470,8 @@ def main():
                    help="maks GPU-minnebruk i prosent før batchstørrelse reduseres (default: 75)")
     p.add_argument("--hpi", action="store_true",
                    help="aktiver High Performance Inference (TensorRT) — krever kraftig GPU")
+    p.add_argument("--cpu-ocr", type=int, default=0,
+                   help="antall ekstra CPU-prosesser for OCR (0=kun GPU, auto=basert på kjerner)")
     p.add_argument("--vis-ressurser", action="store_true",
                    help="vis RAM/GPU-status for hvert dokument")
     p.add_argument("--force", action="store_true",
@@ -448,9 +555,51 @@ def main():
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
 
+    # ── CPU OCR-workers (parallelt med GPU) ───────────────────────
+    cpu_ocr = args.cpu_ocr
+    cpu_prosesser = []
+    cpu_fil_kø = None
+    cpu_resultat_kø = None
+    cpu_filer_sendt = 0
+
+    if cpu_ocr > 0:
+        # Splitt filer: gi en andel til CPU-workers, resten til GPU
+        # CPU er ~5-10x tregere per side, så gi dem ~40% av filene
+        # (10 CPU-workers × 0.1 GPU-hastighet ≈ 1× GPU-hastighet)
+        cpu_andel = min(0.6, cpu_ocr * 0.06)  # ~6% per worker, maks 60%
+        cpu_antall = int(len(filer) * cpu_andel)
+        cpu_filer = filer[len(filer) - cpu_antall:]  # ta fra slutten
+        filer = filer[:len(filer) - cpu_antall]       # GPU tar resten
+
+        cpu_fil_kø = mp.Queue()
+        cpu_resultat_kø = mp.Queue()
+
+        # Legg filer i køen
+        for f in cpu_filer:
+            cpu_fil_kø.put(f)
+        cpu_filer_sendt = len(cpu_filer)
+
+        # Poison pills
+        for _ in range(cpu_ocr):
+            cpu_fil_kø.put(None)
+
+        # Start CPU-workers
+        for i in range(cpu_ocr):
+            p = mp.Process(
+                target=_cpu_worker,
+                args=(cpu_fil_kø, cpu_resultat_kø, cache_mappe, i),
+                daemon=True
+            )
+            p.start()
+            cpu_prosesser.append(p)
+
+        print(f"  CPU OCR: {cpu_ocr} prosesser, {cpu_filer_sendt} filer "
+              f"({cpu_andel*100:.0f}% av totalt)")
+        print(f"  GPU:     {len(filer)} filer ({(1-cpu_andel)*100:.0f}%)")
+
     # ── Skriv ressursstatus før start ────────────────────────────
     _skriv_ressursstatus()
-    print(f"\nStarter OCR-caching av {len(filer)} dokumenter "
+    print(f"\nStarter OCR-caching av {len(filer)} dokumenter på GPU "
           f"(workers={workers}, prefetch={prefetch}, "
           f"ocr_batch={ocr_batch}, "
           f"minne_grense={args.minne_grense}%)\n")
@@ -651,16 +800,56 @@ def main():
 
     render_executor.shutdown(wait=True)
 
+    # ── Vent på CPU-workers og samle resultater ──────────────────
+    cpu_ferdig = 0
+    cpu_feilet = 0
+    cpu_sider = 0
+    if cpu_prosesser:
+        print(f"\nGPU ferdig. Venter på {len(cpu_prosesser)} CPU-workers...")
+        # Drain result queue
+        workers_avsluttet = 0
+        while workers_avsluttet < len(cpu_prosesser):
+            try:
+                msg = cpu_resultat_kø.get(timeout=30)
+                status = msg[0]
+                if status == "ok":
+                    _, wid, navn, n_sider, n_tokens = msg
+                    cpu_ferdig += 1
+                    cpu_sider += n_sider
+                    if cpu_ferdig % 50 == 0:
+                        print(f"  [CPU] {cpu_ferdig}/{cpu_filer_sendt} ferdig")
+                elif status == "feil":
+                    _, wid, navn, _, feilmelding = msg
+                    cpu_feilet += 1
+                    feilet.append((navn, feilmelding))
+                elif status == "ferdig":
+                    workers_avsluttet += 1
+            except Exception:
+                # Timeout — sjekk om alle prosesser er døde
+                if all(not p.is_alive() for p in cpu_prosesser):
+                    break
+
+        for p in cpu_prosesser:
+            p.join(timeout=10)
+
+        print(f"  CPU-workers ferdig: {cpu_ferdig} dok, {cpu_sider} sider, "
+              f"{cpu_feilet} feilet")
+
     # ── Oppsummering ─────────────────────────────────────────────
     vegg_tid = time.perf_counter() - start_alle
+    totalt_ferdig = ferdig + cpu_ferdig
+    totalt_sider = total_sider + cpu_sider
     print(f"\n{'=' * 60}")
-    print(f"Ferdig! {ferdig} dokumenter, {total_sider} sider")
+    print(f"Ferdig! {totalt_ferdig} dokumenter, {totalt_sider} sider")
+    if cpu_prosesser:
+        print(f"  GPU: {ferdig} dok, {total_sider} sider")
+        print(f"  CPU: {cpu_ferdig} dok, {cpu_sider} sider ({len(cpu_prosesser)} workers)")
     print(f"  GPU-tid:    {_fmt_tid(total_tid)} ({total_tid / max(ferdig, 1):.2f}s/dok, "
           f"{total_tid / max(total_sider, 1):.2f}s/side)")
     print(f"  Vegg-tid:   {_fmt_tid(vegg_tid)} (inkl. rendering, I/O)")
-    if total_sider > 0:
-        print(f"  Throughput: {total_sider / vegg_tid:.1f} sider/s, "
-              f"{ferdig / vegg_tid * 3600:.0f} dok/time")
+    if totalt_sider > 0:
+        print(f"  Throughput: {totalt_sider / vegg_tid:.1f} sider/s, "
+              f"{totalt_ferdig / vegg_tid * 3600:.0f} dok/time")
 
     # Flaskehals-analyse
     total_tracked = tid_vente_cpu + tid_gpu
@@ -677,9 +866,8 @@ def main():
               f"(høy = GPU er flaskehals, lav = CPU er flaskehals)")
         if cpu_pct > 60:
             print(f"\n  💡 CPU-rendering er flaskehalsen. Prøv --workers {workers * 2}")
-        elif gpu_pct_tid > 80:
-            print(f"\n  💡 GPU er flaskehalsen. Vurder: "
-                  f"større --ocr-batch, eller kjør CPU+GPU parallelt.")
+        elif gpu_pct_tid > 80 and not cpu_prosesser:
+            print(f"\n  💡 GPU er flaskehalsen. Prøv --cpu-ocr 10 for parallell CPU-inferens.")
 
     print(f"  Cache-mappe: {cache_mappe}")
 
