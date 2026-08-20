@@ -159,33 +159,43 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     n_sider = len(sidemaal)
 
     # ── Forsøk å laste OCR-resultater fra cache ─────────────────
+    # Rotasjonene er verdt å hente selv med --kun-yolo: de kommer fra
+    # orienteringsmodellen, ikke fra tekstgjenkjenningen, og YOLO kjører på
+    # det orienteringskorrigerte bildet. Uten dem måtte --kun-yolo rendre og
+    # orientere hvert dokument på nytt selv med full YOLO-cache.
     rotasjoner, tokens_per_side = None, None
-    ocr_treff = False
-    if cache_mappe and not kun_yolo and navn:
+    ocr_treff = rot_treff = False
+    if cache_mappe and navn:
         cachet = les_ocr_cache(cache_mappe, navn)
         if cachet is not None and len(cachet[0]) == n_sider:
-            rotasjoner, tokens_per_side = cachet
-            ocr_treff = True
+            rotasjoner = cachet[0]
+            rot_treff = True
+            if not kun_yolo:
+                tokens_per_side = cachet[1]
+                ocr_treff = True
 
     # ── Forsøk å laste YOLO-bokser fra cache ────────────────────
     # YOLO kjører på det orienteringskorrigerte bildet, så oppslaget krever
-    # rotasjonene. Med OCR fra cache har vi dem før render, og kan dermed hoppe
-    # over rasteriseringen helt; ellers må orienteringssteget kjøre først.
+    # rotasjonene. Har vi dem fra cache før render, kan rasteriseringen
+    # hoppes over helt; ellers må orienteringssteget kjøre først.
     yolo_bokser_per_side = None
-    if yolo_cache and ocr_treff:
+    if yolo_cache and rot_treff:
         yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
 
     # ── Rendre bare når noe faktisk trenger piksler ─────────────
     # Treff i begge cachene betyr at ingenting leser bildene: sidemålene over
-    # dekker det _bygg_side trenger.
-    trenger_piksler = not ocr_treff or (bruker_yolo and yolo_bokser_per_side is None)
+    # dekker det _bygg_side trenger. Med --kun-yolo trengs ikke tokens, så
+    # rotasjoner + YOLO fra cache er nok.
+    mangler_ocr = not ocr_treff and not kun_yolo
+    trenger_piksler = (mangler_ocr or not rot_treff
+                       or (bruker_yolo and yolo_bokser_per_side is None))
     bilder = bilder_ocr = None
 
     if trenger_piksler:
         with _ta_tid(t, "render"):
             bilder = list(les_sider_fra_bytes(pdf_bytes))
 
-        if not ocr_treff:
+        if not rot_treff:
             with _ta_tid(t, "orientering"):
                 # Batch: ett modellkall for hele dokumentet. Per side ble
                 # GPU-en startet og stoppet én gang per side.
@@ -203,8 +213,8 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     if tokens_per_side is None:
         tokens_per_side = [[] for _ in range(n_sider)]
 
-    # Uten OCR-treff ble rotasjonene kjent først nå, etter orienteringssteget
-    if yolo_cache and not ocr_treff:
+    # Uten treff ble rotasjonene kjent først nå, etter orienteringssteget
+    if yolo_cache and not rot_treff:
         yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
 
     yolo_treff = yolo_bokser_per_side is not None

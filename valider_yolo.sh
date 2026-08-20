@@ -14,6 +14,7 @@
 #   uttrekk  — uttrekk-nummer å validere på (påkrevd)
 #   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri, utledes fra modell ellers)
+#   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
 #
 # Modellnavnet utledes automatisk fra stien for å navngi utmappen.
 # Krever at server.env er sourcet (SLADD_-variablene må finnes).
@@ -32,6 +33,7 @@ MODELL=""
 UTTREKK_NR=""
 LISTE=""
 NAVN=""
+PRECACHE="ja"
 EKSTRA_FLAGG=()
 
 for arg in "$@"; do
@@ -40,10 +42,11 @@ for arg in "$@"; do
         uttrekk=*) UTTREKK_NR="${arg#uttrekk=}" ;;
         liste=*)   LISTE="${arg#liste=}" ;;
         navn=*)    NAVN="${arg#navn=}" ;;
+        precache=*) PRECACHE="${arg#precache=}" ;;
         -*)        EKSTRA_FLAGG+=("$arg") ;;
         *)
             echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS]"
+            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS] [precache=nei]"
             exit 1
             ;;
     esac
@@ -118,6 +121,25 @@ printf "│ utmappe:  %s\n" "$UT_MAPPE"
 printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/yolo"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
+
+# ── Fyll cachene først ───────────────────────────────────────────
+# run.py kjører ett dokument om gangen i én prosess. precache.py gjør
+# det samme arbeidet i parallelle prosesser mot samme GPU — målt 3,3×
+# på V100S — og legger det i cachen run.py leser. Etterpå er
+# valideringen nesten gratis. precache=nei hopper over steget.
+if [[ "$PRECACHE" == "ja" ]]; then
+    echo "── Fyller cache (precache.py) ──"
+    PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
+        --mappe "$UTTREKK_MAPPE"
+        --kun yolo
+        --yolo-vekter "$MODELL"
+    )
+    if [[ -n "$LISTE_FIL" ]]; then
+        PRECACHE_CMD+=(--velg-fra-fil "$LISTE_FIL")
+    fi
+    "${PRECACHE_CMD[@]}"
+    echo ""
+fi
 
 # ── Bygg kommando ────────────────────────────────────────────────
 CMD=(python -u "$SLADD_RUN"

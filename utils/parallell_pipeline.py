@@ -510,13 +510,21 @@ def _pipeline(oppgave):
                     for navn, _b in gruppe:
                         kø.put(("feil", wid, navn, 0, kort_feil(e)))
                     continue
-                # Ett dokument alene. Trykket er forbigående — de andre
-                # prosessene frigir minne fortløpende — så her venter vi
-                # heller enn å gi opp dokumentet.
+                # Ett dokument alene, side for side. Stigen har to trinn av
+                # en grunn: er trykket fra de andre prosessene, hjelper det å
+                # vente. Er det prosessens egen allokator som har spist opp
+                # minnetaket sitt, hjelper ingen venting — da må modellene
+                # rives ned og bygges opp igjen for å gi minnet tilbake.
+                nullstill = getattr(behandle, "nullstill", None)
                 resultater, siste = None, e
-                for forsøk, pause in enumerate((0, 5, 15, 45), start=1):
+                trinn = ((0, False), (5, False), (0, True), (30, False))
+                for forsøk, (pause, riv_ned) in enumerate(trinn, start=1):
                     if pause:
                         time.sleep(pause)
+                    if riv_ned and nullstill:
+                        kø.put(("oom", wid, gruppe[0][0], 1,
+                                "bygger modellene på nytt for å frigi minne"))
+                        nullstill()
                     frigjør_gpu_cache()
                     try:
                         resultater = behandle(gruppe, sider_om_gangen=1)

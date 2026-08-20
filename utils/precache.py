@@ -172,6 +172,25 @@ def lag_behandler(oppgave):
         _tid("cache", t0)
         return resultater
 
+    def nullstill():
+        """Riv ned modellene så allokatoren gir minnet tilbake.
+
+        Siste utvei når prosessen går tom for minne innenfor sitt eget tak:
+        da er det dens egen cache som er full, og empty_cache() alene får
+        den ikke ned. Modellene er lazy og bygges opp igjen ved neste kall
+        (~10 s), mot at dokumentet faktisk blir gjort.
+        """
+        import orientering
+        orientering._orient = None
+        if ocr_mappe:
+            import paddle_ocr_model_fnr
+            paddle_ocr_model_fnr.reader = None
+        if yolo_mappe:
+            import yolo_fnr as yf
+            yf._modell = None
+        pp.frigjør_gpu_cache()
+
+    behandle.nullstill = nullstill
     return behandle
 
 
@@ -232,8 +251,9 @@ def main():
                         "GPU-minnetoppen — deteksjonsmodellen holder "
                         "aktiveringer for hele sidebatchen samtidig")
     p.add_argument("--rec-batch", type=int, default=0,
-                   help="tekstlinjer per gjenkjennings-batch (0=config-default). "
-                        "Påvirker kun minne og hastighet, ikke resultatet")
+                   help="tekstlinjer per gjenkjennings-batch (0=auto ut fra "
+                        "minnetaket per prosess). Påvirker kun minne og "
+                        "hastighet, ikke resultatet")
     p.add_argument("--hpi", action="store_true",
                    help="aktiver High Performance Inference (TensorRT)")
     p.add_argument("--force", action="store_true",
@@ -298,12 +318,21 @@ def main():
     # ── Oppsett ──────────────────────────────────────────────────
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
-    if args.rec_batch:
-        # Leses av app/paddle_ocr_model_fnr.py når prediktoren bygges
-        os.environ["SLADD_REC_BATCH"] = str(args.rec_batch)
-
     opts = pp.oppsett(args)
     n = opts["n_prosesser"]
+
+    # Gjenkjenningsmodellen kjører 128 linjer per batch som default, og én
+    # slik batch ba om 1,4 GB i målingene. Med et tak på ~6,5 GB per prosess
+    # sprekker den så snart allokatoren har vokst litt, og siden minnet er
+    # prosessens eget hjelper det ikke å vente. 32 linjer holdt kortet på
+    # 69 % uten en eneste minnefeil. Leses av app/paddle_ocr_model_fnr.py.
+    rec_batch = args.rec_batch
+    if not rec_batch and opts["gpu_mb"]:
+        rec_batch = 32 if opts["gpu_mb"] < 10000 else 64
+    if rec_batch:
+        os.environ["SLADD_REC_BATCH"] = str(rec_batch)
+        print(f"  Rec-batch:  {rec_batch} tekstlinjer"
+              + ("" if args.rec_batch else " (auto ut fra minnetaket)"))
     if args.ocr_batch:
         ocr_batch = args.ocr_batch
     else:
