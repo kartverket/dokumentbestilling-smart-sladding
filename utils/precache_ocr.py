@@ -9,6 +9,7 @@ Optimalisert for å bruke så mye ressurser som mulig uten å krasje:
   - Pre-rendrer neste PDF(er) mens GPU jobber
   - Overvåker minne og tilpasser pipeline-dybden
   - Kan parallellisere PDF-rendering (CPU) med OCR (GPU)
+  - Kan kjøre CPU-OCR i egne prosesser ved siden av GPU-en (--cpu-ocr)
   - Hopper automatisk over allerede cachede dokumenter
 
 Bruk:
@@ -16,6 +17,7 @@ Bruk:
     python precache_ocr.py --mappe /sti/til/pdfer --cache /sti/til/cache
     python precache_ocr.py --mappe /sti/til/pdfer --workers 4 --antall alle
     python precache_ocr.py --velg-fra-fil filer.txt --mappe /sti/til/pdfer
+    python precache_ocr.py --mappe /sti/til/pdfer --cpu-ocr 10
 """
 
 import argparse
@@ -338,15 +340,89 @@ def _skriv_ressursstatus():
         print(f"  Ressurser: {' | '.join(deler)}")
 
 
+# ── Arbeidsfordeling mellom GPU og CPU ───────────────────────────
+
+class _Arbeidsfordeler:
+    """Delt filliste som GPU-hovedprosessen og CPU-workerne henter fra.
+
+    Begge sider tar neste ledige fil fra samme teller, så fordelingen
+    balanserer seg selv: den raskeste siden tar flest filer. En fast
+    fordeling gjettet på forhånd gir alltid en hale der den ene siden
+    er ferdig og venter på den andre.
+
+    Telleren er en delt mp.Value; fillisten i hver worker er en
+    fork()-kopi. Derfor må CPU-workerne startes med fork-kontekst.
+    """
+
+    def __init__(self, filer, ctx=None):
+        self._filer = filer
+        self.totalt = len(filer)
+        self._delt = ctx.Value("i", 0) if ctx is not None else None
+        self._lokal = 0
+
+    def hent(self):
+        """Returner neste filsti, eller None når alle filer er utdelt."""
+        if self._delt is None:
+            if self._lokal >= self.totalt:
+                return None
+            sti = self._filer[self._lokal]
+            self._lokal += 1
+            return sti
+        with self._delt.get_lock():
+            i = self._delt.value
+            if i >= self.totalt:
+                return None
+            self._delt.value = i + 1
+        return self._filer[i]
+
+    def tom(self):
+        """True når det ikke er flere filer å dele ut."""
+        if self._delt is None:
+            return self._lokal >= self.totalt
+        return self._delt.value >= self.totalt
+
+    def utdelt(self):
+        """Antall filer delt ut så langt."""
+        return self._lokal if self._delt is None else self._delt.value
+
+
 # ── CPU OCR-worker (multiprocessing) ─────────────────────────────
 
-def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worker):
+def _cpu_worker(fordeler, resultat_kø, cache_mappe, worker_id, tråder_per_worker):
     """Prosess som kjører PaddleOCR på CPU for ett dokument om gangen.
 
-    Hver worker har sin egen PaddleOCR-instans med device='cpu' og mkldnn.
-    Leser filstier fra fil_kø, skriver resultater til resultat_kø.
+    Wrapper som stenger av utskrift og rapporterer krasj tilbake på køen.
+    PaddlePaddle skriver oneDNN-meldinger (ReduceMeanCheckIfOneDNNSupport
+    o.l.) direkte fra C++ til fd 1/2 — med flere workers drukner loggen i
+    det. Alt vi trenger å vite går via resultat_kø.
     """
-    # Begrens tråder per prosess — forhindrer oversubscription
+    _devnull = open(os.devnull, "w")
+    try:
+        os.dup2(_devnull.fileno(), 1)
+        os.dup2(_devnull.fileno(), 2)
+    except OSError:
+        pass
+    sys.stdout = _devnull
+    sys.stderr = _devnull
+
+    try:
+        _cpu_worker_kjør(fordeler, resultat_kø, cache_mappe, worker_id,
+                         tråder_per_worker)
+    except BaseException as e:  # rapporteres på køen — ellers dør workeren stille
+        import traceback
+        resultat_kø.put(("worker-feil", worker_id, "", 0,
+                         f"{e!r}\n{traceback.format_exc()}"))
+        resultat_kø.put(("ferdig", worker_id, "", 0, ""))
+
+
+def _cpu_worker_kjør(fordeler, resultat_kø, cache_mappe, worker_id, tråder_per_worker):
+    """Selve arbeidsløkken: hent fil, OCR på CPU, skriv cache, rapporter."""
+    # Trådbegrensning. Merk: OMP_NUM_THREADS o.l. har ingen effekt her —
+    # OpenMP-runtimet er allerede initialisert i foreldreprosessen og
+    # arves gjennom fork(). Den virksomme knappen er cpu_threads under,
+    # som Paddle setter med omp_set_num_threads() ved oppstart av
+    # prediktoren. Uten den bruker HVER worker 10 tråder (Paddle-default)
+    # og maskinen blir overtegnet: alt stopper nesten helt.
     tr = str(tråder_per_worker)
     os.environ["OMP_NUM_THREADS"] = tr
     os.environ["MKL_NUM_THREADS"] = tr
@@ -367,10 +443,6 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
     os.environ["FLAGS_call_stack_level"] = "0"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # tving CPU-modus
 
-    # Supprimér C++-nivå oneDNN-spam fra PaddlePaddle (ReduceMeanCheckIfOneDNNSupport osv.)
-    _devnull = open(os.devnull, "w")
-    os.dup2(_devnull.fileno(), 2)  # redirect stderr → /dev/null
-
     import numpy as np
     from load_pdf import les_sider
     from ocr_cache import skriv_cache as skriv_ocr_cache
@@ -385,6 +457,7 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
     reader = PaddleOCR(
         lang="en",
         device="cpu",
+        cpu_threads=tråder_per_worker,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
@@ -397,11 +470,16 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
         text_recognition_model_dir=rec_dir,
         enable_mkldnn=True,
     )
-    orient = DocImgOrientationClassification(
+    ori_kwargs = dict(
         model_name="PP-LCNet_x1_0_doc_ori",
         model_dir=ori_dir,
         device="cpu",
     )
+    try:
+        orient = DocImgOrientationClassification(cpu_threads=tråder_per_worker,
+                                                 **ori_kwargs)
+    except (TypeError, ValueError):
+        orient = DocImgOrientationClassification(**ori_kwargs)
 
     from paddle_ocr_model_fnr import _les_tokens
 
@@ -418,20 +496,16 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
             return 0
         return (vinkel // 90) % 4
 
+    resultat_kø.put(("klar", worker_id, "", 0, ""))
+
     ferdig = 0
     while True:
-        try:
-            sti = fil_kø.get(timeout=5)
-        except Exception:
-            # Kø tom i 5s — sjekk om vi skal avslutte
-            if fil_kø.empty():
-                break
-            continue
-
-        if sti is None:  # poison pill
+        sti = fordeler.hent()
+        if sti is None:  # ingen filer igjen — GPU-siden tok resten
             break
 
         navn = os.path.basename(sti)
+        t0 = time.perf_counter()
         try:
             bilder = les_sider(sti)
             rotasjoner = [_orientering(b) for b in bilder]
@@ -450,7 +524,8 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
             skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
             ferdig += 1
             n_tokens = sum(len(ts) for ts in tokens_per_side)
-            resultat_kø.put(("ok", worker_id, navn, len(bilder), n_tokens))
+            resultat_kø.put(("ok", worker_id, navn, len(bilder),
+                             (n_tokens, time.perf_counter() - t0)))
         except Exception as e:
             resultat_kø.put(("feil", worker_id, navn, 0, repr(e)))
 
@@ -487,8 +562,10 @@ def main():
                    help="maks GPU-minnebruk i prosent før batchstørrelse reduseres (default: 75)")
     p.add_argument("--hpi", action="store_true",
                    help="aktiver High Performance Inference (TensorRT) — krever kraftig GPU")
-    p.add_argument("--cpu-ocr", type=int, default=0,
-                   help="antall ekstra CPU-prosesser for OCR (0=kun GPU, auto=basert på kjerner)")
+    p.add_argument("--cpu-ocr", type=int, nargs="?", default=0, const=-1,
+                   metavar="N",
+                   help="antall ekstra CPU-prosesser for OCR (0=kun GPU, "
+                        "--cpu-ocr uten tall = auto ut fra ledige kjerner)")
     p.add_argument("--vis-ressurser", action="store_true",
                    help="vis RAM/GPU-status for hvert dokument")
     p.add_argument("--force", action="store_true",
@@ -573,55 +650,47 @@ def main():
         os.environ["SLADD_HPI"] = "1"
 
     # ── CPU OCR-workers (parallelt med GPU) ───────────────────────
+    # Workerne må startes FØR GPU-oppvarmingen: de forkes fra denne
+    # prosessen, og en fork etter at CUDA er initialisert gir en ubrukelig
+    # CUDA-kontekst i barnet.
     cpu_ocr = args.cpu_ocr
+    if cpu_ocr < 0:  # --cpu-ocr uten tall = auto
+        ledige = _antall_cpu_kjerner() - workers - 2
+        cpu_ocr = max(min(ledige // 6, 12), 1)
     cpu_prosesser = []
-    cpu_fil_kø = None
     cpu_resultat_kø = None
-    cpu_filer_sendt = 0
 
     if cpu_ocr > 0:
-        # Splitt filer: gi en andel til CPU-workers, resten til GPU
-        # CPU er ~5-10x tregere per side, så gi dem ~40% av filene
-        # (10 CPU-workers × 0.1 GPU-hastighet ≈ 1× GPU-hastighet)
-        cpu_andel = min(0.6, cpu_ocr * 0.06)  # ~6% per worker, maks 60%
-        cpu_antall = int(len(filer) * cpu_andel)
-        cpu_filer = filer[len(filer) - cpu_antall:]  # ta fra slutten
-        filer = filer[:len(filer) - cpu_antall]       # GPU tar resten
+        mp_ctx = mp.get_context("fork")  # fordeleren deles via fork
+        fordeler = _Arbeidsfordeler(filer, ctx=mp_ctx)
+        cpu_resultat_kø = mp_ctx.Queue()
 
-        cpu_fil_kø = mp.Queue()
-        cpu_resultat_kø = mp.Queue()
-
-        # Legg filer i køen
-        for f in cpu_filer:
-            cpu_fil_kø.put(f)
-        cpu_filer_sendt = len(cpu_filer)
-
-        # Poison pills
-        for _ in range(cpu_ocr):
-            cpu_fil_kø.put(None)
-
-        # Start CPU-workers
-        # Fordel kjerner: reserver noen til GPU-pipeline (rendering + main)
+        # Fordel kjerner: reserver noen til GPU-pipelinen (rendering + main).
+        # tråder_per sendes videre som cpu_threads til Paddle — uten det
+        # tar hver worker 10 tråder og maskinen blir overtegnet.
         kjerner_til_cpu = max(_antall_cpu_kjerner() - workers - 2, cpu_ocr)
         tråder_per = max(kjerner_til_cpu // cpu_ocr, 1)
 
         for i in range(cpu_ocr):
-            p = mp.Process(
+            p_worker = mp_ctx.Process(
                 target=_cpu_worker,
-                args=(cpu_fil_kø, cpu_resultat_kø, cache_mappe, i, tråder_per),
+                args=(fordeler, cpu_resultat_kø, cache_mappe, i, tråder_per),
                 daemon=True
             )
-            p.start()
-            cpu_prosesser.append(p)
+            p_worker.start()
+            cpu_prosesser.append(p_worker)
 
         print(f"  CPU OCR: {cpu_ocr} prosesser × {tråder_per} tråder = "
-              f"{cpu_ocr * tråder_per} kjerner, {cpu_filer_sendt} filer "
-              f"({cpu_andel*100:.0f}%)")
-        print(f"  GPU:     {len(filer)} filer ({(1-cpu_andel)*100:.0f}%)")
+              f"{cpu_ocr * tråder_per} kjerner")
+        print(f"  Filer deles dynamisk mellom GPU og CPU "
+              f"({len(filer)} totalt) — raskeste side tar flest")
+    else:
+        fordeler = _Arbeidsfordeler(filer)
 
     # ── Skriv ressursstatus før start ────────────────────────────
     _skriv_ressursstatus()
-    print(f"\nStarter OCR-caching av {len(filer)} dokumenter på GPU "
+    print(f"\nStarter OCR-caching av {len(filer)} dokumenter "
+          f"({'GPU + ' + str(len(cpu_prosesser)) + ' CPU-workers' if cpu_prosesser else 'GPU'}) "
           f"(workers={workers}, prefetch={prefetch}, "
           f"ocr_batch={ocr_batch}, "
           f"minne_grense={args.minne_grense}%)\n")
@@ -648,17 +717,62 @@ def main():
     # Prefetch-kø: rendre PDF-er i bakgrunnstråder
     render_executor = ThreadPoolExecutor(max_workers=workers)
     prefetch_kø = deque()  # inneholder Future-objekter for rendrede PDF-er
-    fil_indeks = 0  # neste fil å sende til rendering
 
     def _fyll_kø():
         """Send filer til rendering så lenge køen ikke er full og minne er OK."""
-        nonlocal fil_indeks
-        while (fil_indeks < totalt
-               and len(prefetch_kø) < prefetch
-               and _er_minne_trygt(args.minne_grense)):
-            fut = render_executor.submit(_last_pdf, filer[fil_indeks])
-            prefetch_kø.append((filer[fil_indeks], fut))
-            fil_indeks += 1
+        while len(prefetch_kø) < prefetch and _er_minne_trygt(args.minne_grense):
+            sti = fordeler.hent()
+            if sti is None:
+                break
+            prefetch_kø.append((sti, render_executor.submit(_last_pdf, sti)))
+
+    # ── CPU-worker-resultater ─────────────────────────────────────
+    cpu_ferdig = 0
+    cpu_feilet = 0
+    cpu_sider = 0
+    cpu_tid = 0.0
+    cpu_avsluttet = 0
+
+    def _drener_cpu(blokkerende=False):
+        """Hent resultater fra CPU-workerne.
+
+        Må gjøres jevnlig underveis: resultatkøen ligger på en pipe med
+        ~64 KB buffer, og en full pipe stopper workerne helt.
+        """
+        nonlocal cpu_ferdig, cpu_feilet, cpu_sider, cpu_tid, cpu_avsluttet
+        if cpu_resultat_kø is None:
+            return
+        while cpu_avsluttet < len(cpu_prosesser):
+            try:
+                msg = (cpu_resultat_kø.get(timeout=30) if blokkerende
+                       else cpu_resultat_kø.get_nowait())
+            except Exception:
+                if not blokkerende:
+                    return
+                if all(not pr.is_alive() for pr in cpu_prosesser):
+                    return
+                continue
+
+            status, wid, navn, n, ekstra = msg
+            if status == "ok":
+                cpu_ferdig += 1
+                cpu_sider += n
+                if isinstance(ekstra, tuple):
+                    cpu_tid += ekstra[1]
+                if cpu_ferdig % 25 == 0:
+                    snitt_cpu = cpu_tid / max(cpu_ferdig, 1)
+                    print(f"  [CPU] {cpu_ferdig} dok, {cpu_sider} sider "
+                          f"({snitt_cpu:.1f}s/dok per worker)")
+            elif status == "feil":
+                cpu_feilet += 1
+                feilet.append((navn, ekstra))
+            elif status == "klar":
+                print(f"  [CPU {wid}] modeller lastet — jobber")
+            elif status == "worker-feil":
+                print(f"  [CPU {wid}] KRASJET: {ekstra}")
+            elif status == "ferdig":
+                cpu_avsluttet += 1
+                print(f"  [CPU {wid}] avsluttet — {n} dokumenter")
 
     # Start pre-rendering
     _fyll_kø()
@@ -671,24 +785,28 @@ def main():
     kø_dybde_sum = 0      # sum av kødybde ved batch-start (for snitt)
     neste_status = 20     # neste dokument-tall som utløser flaskehals-print
 
-    while ferdig < totalt:
+    while True:
+        # Hent unna CPU-workernes resultater før neste GPU-batch
+        _drener_cpu()
+
         # Sørg for at køen er fylt opp
         _fyll_kø()
 
         # Hvis køen er tom men vi har flere filer, vent litt og prøv igjen
         if not prefetch_kø:
-            if fil_indeks < totalt:
+            if not fordeler.tom():
                 # Minne er for høyt, vent til det frigjøres
                 print("  ⏸  Venter på ledig minne for pre-rendering...")
                 time.sleep(2)
                 _fyll_kø()
                 if not prefetch_kø:
                     # Tving gjennom én fil uansett
-                    fut = render_executor.submit(_last_pdf, filer[fil_indeks])
-                    prefetch_kø.append((filer[fil_indeks], fut))
-                    fil_indeks += 1
-            else:
-                break
+                    sti = fordeler.hent()
+                    if sti is not None:
+                        prefetch_kø.append(
+                            (sti, render_executor.submit(_last_pdf, sti)))
+            if not prefetch_kø:
+                break  # alle filer er delt ut og rendret
 
         # ── Samle en batch med dokumenter for GPU-prosessering ────
         # Bestem batchstørrelse: fast eller adaptiv
@@ -711,7 +829,7 @@ def main():
             if isinstance(resultat, Exception):
                 feilet.append((navn, repr(resultat)))
                 ferdig += 1
-                print(f"[{ferdig}/{totalt}] ✗ {navn}: {resultat!r}")
+                print(f"[{ferdig + cpu_ferdig}/{totalt}] ✗ {navn}: {resultat!r}")
                 continue
             batch_docs.append((navn, resultat))
             # Fyll køen mens vi venter på futures
@@ -757,14 +875,18 @@ def main():
                 n_tokens = sum(len(ts) for ts in tokens_per_side)
                 tid_batch = time.perf_counter() - start_batch
                 elapsed = time.perf_counter() - start_alle
-                snitt = elapsed / ferdig
-                gjenstår = snitt * (totalt - ferdig)
+                # Framdrift og ETA måles mot ALLE filer — CPU-workerne
+                # jobber på samme filliste, så bare GPU-tellingen ville
+                # gitt et estimat som er langt for pessimistisk.
+                ferdig_totalt = ferdig + cpu_ferdig
+                snitt = elapsed / max(ferdig_totalt, 1)
+                gjenstår = snitt * (totalt - ferdig_totalt)
 
                 rot_str = ""
                 if any(k != 0 for k in rotasjoner):
                     rot_str = f" rot=[{','.join(str(k * 90) + '°' for k in rotasjoner)}]"
 
-                print(f"[{ferdig}/{totalt}] ✓ {navn}: "
+                print(f"[{ferdig_totalt}/{totalt}] ✓ {navn}: "
                       f"{n_sider} side(r), {n_tokens} tokens{rot_str} — "
                       f"batch {len(batch_docs)} dok/{sum(n for _, n in dok_grenser)} sider "
                       f"på {tid_batch:.1f}s "
@@ -775,7 +897,7 @@ def main():
             for navn, _bilder in batch_docs:
                 feilet.append((navn, repr(e)))
                 ferdig += 1
-                print(f"[{ferdig}/{totalt}] ✗ {navn}: {e!r}")
+                print(f"[{ferdig + cpu_ferdig}/{totalt}] ✗ {navn}: {e!r}")
             import traceback
             traceback.print_exc()
             continue
@@ -789,7 +911,7 @@ def main():
         _frigjør_gpu_cache()
 
         # Logg adaptiv batchstørrelse og bottleneck-info
-        if ferdig >= neste_status:
+        if ferdig + cpu_ferdig >= neste_status:
             neste_status += 20
             elapsed = time.perf_counter() - start_alle
             total_tracked = tid_vente_cpu + tid_gpu
@@ -814,6 +936,10 @@ def main():
             print(f"  ⚡ Flaskehals: {flaskehals} | "
                   f"vente-CPU: {cpu_pct:.0f}% | GPU: {gpu_pct_tid:.0f}% | "
                   f"kø-dybde: {snitt_kø:.1f}{gpu_mem_str}")
+            if cpu_prosesser:
+                print(f"     Fordeling så langt: GPU {ferdig} dok / "
+                      f"CPU {cpu_ferdig} dok ({len(cpu_prosesser) - cpu_avsluttet} "
+                      f"workers aktive)")
             if adaptiv_batch:
                 print(f"     {adaptiv_batch}")
 
@@ -822,37 +948,13 @@ def main():
 
     render_executor.shutdown(wait=True)
 
-    # ── Vent på CPU-workers og samle resultater ──────────────────
-    cpu_ferdig = 0
-    cpu_feilet = 0
-    cpu_sider = 0
+    # ── Vent på CPU-workers og samle resten av resultatene ───────
     if cpu_prosesser:
-        print(f"\nGPU ferdig. Venter på {len(cpu_prosesser)} CPU-workers...")
-        # Drain result queue
-        workers_avsluttet = 0
-        while workers_avsluttet < len(cpu_prosesser):
-            try:
-                msg = cpu_resultat_kø.get(timeout=30)
-                status = msg[0]
-                if status == "ok":
-                    _, wid, navn, n_sider, n_tokens = msg
-                    cpu_ferdig += 1
-                    cpu_sider += n_sider
-                    if cpu_ferdig % 50 == 0:
-                        print(f"  [CPU] {cpu_ferdig}/{cpu_filer_sendt} ferdig")
-                elif status == "feil":
-                    _, wid, navn, _, feilmelding = msg
-                    cpu_feilet += 1
-                    feilet.append((navn, feilmelding))
-                elif status == "ferdig":
-                    workers_avsluttet += 1
-            except Exception:
-                # Timeout — sjekk om alle prosesser er døde
-                if all(not p.is_alive() for p in cpu_prosesser):
-                    break
-
-        for p in cpu_prosesser:
-            p.join(timeout=10)
+        print(f"\nGPU ferdig med sin del. Venter på {len(cpu_prosesser)} "
+              f"CPU-workers ({cpu_ferdig} dok ferdig så langt)...")
+        _drener_cpu(blokkerende=True)
+        for p_worker in cpu_prosesser:
+            p_worker.join(timeout=30)
 
         print(f"  CPU-workers ferdig: {cpu_ferdig} dok, {cpu_sider} sider, "
               f"{cpu_feilet} feilet")
@@ -889,7 +991,7 @@ def main():
         if cpu_pct > 60:
             print(f"\n  💡 CPU-rendering er flaskehalsen. Prøv --workers {workers * 2}")
         elif gpu_pct_tid > 80 and not cpu_prosesser:
-            print(f"\n  💡 GPU er flaskehalsen. Prøv --cpu-ocr 10 for parallell CPU-inferens.")
+            print(f"\n  💡 GPU er flaskehalsen. Prøv --cpu-ocr for parallell CPU-inferens.")
 
     print(f"  Cache-mappe: {cache_mappe}")
 
