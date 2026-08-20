@@ -36,6 +36,31 @@ def finn_rotasjon(bilde):
     return (vinkel // 90) % 4
 
 
+def finn_rotasjoner_batch(bilder):
+    """Kjør orienteringsdeteksjon på en liste med bilder i én batch.
+
+    Returnerer en liste med rotasjonsverdier (0-3) for hvert bilde.
+    Mye raskere enn å kalle finn_rotasjon() per bilde.
+    """
+    if not bilder:
+        return []
+    lite_bilder = [np.ascontiguousarray(b[::NEDSKALERING, ::NEDSKALERING]) for b in bilder]
+    try:
+        resultater = _hent_orient().predict(lite_bilder)
+        rotasjoner = []
+        for r in resultater:
+            vinkel = int(r["label_names"][0])
+            score = float(np.asarray(r["scores"]).reshape(-1)[0])
+            if score < MIN_KONFIDENS:
+                rotasjoner.append(0)
+            else:
+                rotasjoner.append((vinkel // 90) % 4)
+        return rotasjoner
+    except Exception as e:
+        print(f"!! batch-orienteringssjekk feilet ({e!r}) - antar 0 grader for alle")
+        return [0] * len(bilder)
+
+
 def boks_tilbake(boks, k, w0, h0):
     if not k:
         return boks

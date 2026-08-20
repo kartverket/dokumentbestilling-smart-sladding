@@ -42,8 +42,22 @@ from config import PDF_DPI, SIDER_PER_OCR_BATCH
 from file_selection import velg_filer
 from load_pdf import les_sider
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
-from orientering import finn_rotasjon
+from orientering import finn_rotasjon, finn_rotasjoner_batch
 from paddle_ocr_model_fnr import les_tokens_batched
+
+
+# ── Tidsformatering ──────────────────────────────────────────────
+
+def _fmt_tid(sekunder):
+    """Formater sekunder til lesbar h:mm:ss / m:ss / Xs."""
+    if sekunder < 0:
+        return "?"
+    s = int(sekunder)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    return f"{s // 3600}t {(s % 3600) // 60:02d}m {s % 60:02d}s"
 
 
 # ── Ressursovervåking ────────────────────────────────────────────
@@ -184,14 +198,18 @@ def main():
                    help="les fil-IDer fra en tekstfil (én per linje)")
     p.add_argument("--antall", default="alle",
                    help="antall filer når --velg er tom (tall, eller 'alle')")
-    p.add_argument("--workers", type=int, default=2,
-                   help="antall tråder for parallell PDF-rendering (default: 2)")
-    p.add_argument("--prefetch", type=int, default=2,
-                   help="antall PDF-er å pre-rendre i kø (default: 2)")
+    p.add_argument("--workers", type=int, default=4,
+                   help="antall tråder for parallell PDF-rendering (default: 4)")
+    p.add_argument("--prefetch", type=int, default=12,
+                   help="antall PDF-er å pre-rendre i kø (default: 12)")
     p.add_argument("--minne-grense", type=int, default=88,
                    help="maks RAM-bruk i prosent før pre-rendering pauser (default: 88)")
     p.add_argument("--ocr-batch", type=int, default=None,
                    help=f"sider per OCR-batch (default: {SIDER_PER_OCR_BATCH} fra config)")
+    p.add_argument("--dokument-batch", type=int, default=6,
+                   help="antall dokumenter å samle på GPU samtidig (default: 6)")
+    p.add_argument("--hpi", action="store_true",
+                   help="aktiver High Performance Inference (TensorRT) — krever kraftig GPU")
     p.add_argument("--vis-ressurser", action="store_true",
                    help="vis RAM/GPU-status for hvert dokument")
     p.add_argument("--force", action="store_true",
@@ -246,12 +264,18 @@ def main():
 
     # ── Overstyr OCR-batch fra CLI ───────────────────────────────
     ocr_batch = args.ocr_batch or SIDER_PER_OCR_BATCH
+    dokument_batch = args.dokument_batch
+
+    # ── HPI-modus (TensorRT) ──────────────────────────────────────
+    if args.hpi:
+        os.environ["SLADD_HPI"] = "1"
 
     # ── Skriv ressursstatus før start ────────────────────────────
     _skriv_ressursstatus()
     print(f"\nStarter OCR-caching av {len(filer)} dokumenter "
           f"(workers={args.workers}, prefetch={args.prefetch}, "
-          f"ocr_batch={ocr_batch}, minne_grense={args.minne_grense}%)\n")
+          f"ocr_batch={ocr_batch}, dokument_batch={dokument_batch}, "
+          f"minne_grense={args.minne_grense}%)\n")
 
     # ── Pipeline: pre-rendr PDF-er i tråder, OCR på GPU ──────────
     totalt = len(filer)
@@ -259,7 +283,6 @@ def main():
     feilet = []
     total_sider = 0
     total_tid = 0
-    start_alle = time.perf_counter()
 
     # Warm up modellene med å kjøre orientering + OCR på et dummy-bilde
     print("Varmer opp PaddleOCR-modellen...")
@@ -268,6 +291,10 @@ def main():
     finn_rotasjon(dummy)
     les_tokens_batched([dummy])
     print(f"Oppvarming ferdig ({time.perf_counter() - _warmup_start:.1f}s)\n")
+
+    # Start klokken ETTER warmup — warmup er engangskostnad og skal ikke
+    # inflate estimatet for gjenstående tid.
+    start_alle = time.perf_counter()
 
     # Prefetch-kø: rendre PDF-er i bakgrunnstråder
     render_executor = ThreadPoolExecutor(max_workers=args.workers)
@@ -306,64 +333,88 @@ def main():
             else:
                 break
 
-        # Hent neste ferdig-rendrede PDF fra køen
-        sti, fut = prefetch_kø.popleft()
-        sti, resultat = fut.result()
+        # ── Samle en batch med dokumenter for GPU-prosessering ────
+        batch_docs = []  # [(navn, bilder), ...]
+        while prefetch_kø and len(batch_docs) < dokument_batch:
+            sti, fut = prefetch_kø.popleft()
+            sti, resultat = fut.result()
+            navn = os.path.basename(sti)
 
-        navn = os.path.basename(sti)
-        ferdig += 1
+            if isinstance(resultat, Exception):
+                feilet.append((navn, repr(resultat)))
+                ferdig += 1
+                print(f"[{ferdig}/{totalt}] ✗ {navn}: {resultat!r}")
+                continue
+            batch_docs.append((navn, resultat))
+            # Fyll køen mens vi venter på futures
+            _fyll_kø()
 
-        if isinstance(resultat, Exception):
-            feilet.append((navn, repr(resultat)))
-            print(f"[{ferdig}/{totalt}] ✗ {navn}: {resultat!r}")
+        if not batch_docs:
             continue
 
-        bilder = resultat
-        n_sider = len(bilder)
-        start_dok = time.perf_counter()
+        start_batch = time.perf_counter()
 
         try:
-            # 1. Orienteringsdeteksjon
-            rotasjoner = [finn_rotasjon(b) for b in bilder]
+            # ── 1. Samle alle sider fra alle dokumenter ───────────
+            alle_bilder = []
+            dok_grenser = []  # (start_idx, antall_sider) per dokument
+            for navn, bilder in batch_docs:
+                dok_grenser.append((len(alle_bilder), len(bilder)))
+                alle_bilder.extend(bilder)
 
-            # 2. Roter bilder
-            bilder_ocr = [np.rot90(b, k) if k else b
-                          for b, k in zip(bilder, rotasjoner)]
+            # ── 2. Batch-orienteringsdeteksjon (alle sider samlet) ─
+            alle_rotasjoner = finn_rotasjoner_batch(alle_bilder)
 
-            # 3. Kjør PaddleOCR (GPU)
-            tokens_per_side = les_tokens_batched(bilder_ocr)
+            # ── 3. Roter alle bilder ──────────────────────────────
+            alle_bilder_ocr = [np.rot90(b, k) if k else b
+                               for b, k in zip(alle_bilder, alle_rotasjoner)]
 
-            # 4. Lagre cache
-            skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+            # ── 4. Kjør PaddleOCR på hele batchen (GPU) ───────────
+            alle_tokens = les_tokens_batched(alle_bilder_ocr)
 
-            # Frigjør minne eksplisitt
-            del bilder, bilder_ocr
+            # Frigjør minne
+            del alle_bilder, alle_bilder_ocr
+
+            # ── 5. Splitt resultater tilbake per dokument og lagre ─
+            for dok_idx, (navn, bilder) in enumerate(batch_docs):
+                start_idx, n_sider = dok_grenser[dok_idx]
+                rotasjoner = alle_rotasjoner[start_idx:start_idx + n_sider]
+                tokens_per_side = alle_tokens[start_idx:start_idx + n_sider]
+
+                skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+                total_sider += n_sider
+                ferdig += 1
+
+                n_tokens = sum(len(ts) for ts in tokens_per_side)
+                tid_batch = time.perf_counter() - start_batch
+                elapsed = time.perf_counter() - start_alle
+                snitt = elapsed / ferdig
+                gjenstår = snitt * (totalt - ferdig)
+
+                rot_str = ""
+                if any(k != 0 for k in rotasjoner):
+                    rot_str = f" rot=[{','.join(str(k * 90) + '°' for k in rotasjoner)}]"
+
+                print(f"[{ferdig}/{totalt}] ✓ {navn}: "
+                      f"{n_sider} side(r), {n_tokens} tokens{rot_str} — "
+                      f"batch {len(batch_docs)} dok/{sum(n for _, n in dok_grenser)} sider "
+                      f"på {tid_batch:.1f}s "
+                      f"(gått: {_fmt_tid(elapsed)}, gjenstår: {_fmt_tid(gjenstår)})")
 
         except Exception as e:
-            feilet.append((navn, repr(e)))
-            print(f"[{ferdig}/{totalt}] ✗ {navn}: {e!r}")
+            # Hele batchen feilet — logg alle dokumenter
+            for navn, _bilder in batch_docs:
+                feilet.append((navn, repr(e)))
+                ferdig += 1
+                print(f"[{ferdig}/{totalt}] ✗ {navn}: {e!r}")
             import traceback
             traceback.print_exc()
             continue
 
-        tid_dok = time.perf_counter() - start_dok
-        total_tid += tid_dok
-        total_sider += n_sider
+        tid_batch = time.perf_counter() - start_batch
+        total_tid += tid_batch
 
-        # Statistikk
-        n_tokens = sum(len(ts) for ts in tokens_per_side)
-        snitt = total_tid / ferdig
-        gjenstår = snitt * (totalt - ferdig)
-
-        rot_str = ""
-        if any(k != 0 for k in rotasjoner):
-            rot_str = f" rot=[{','.join(str(k * 90) + '°' for k in rotasjoner)}]"
-
-        print(f"[{ferdig}/{totalt}] ✓ {navn}: "
-              f"{n_sider} side(r), {n_tokens} tokens{rot_str} — "
-              f"{tid_dok:.2f}s (est. gjenstår: {gjenstår:.0f}s)")
-
-        if args.vis_ressurser and ferdig % 5 == 0:
+        if args.vis_ressurser and ferdig % 10 == 0:
             _skriv_ressursstatus()
 
     render_executor.shutdown(wait=True)
@@ -372,9 +423,12 @@ def main():
     vegg_tid = time.perf_counter() - start_alle
     print(f"\n{'=' * 60}")
     print(f"Ferdig! {ferdig} dokumenter, {total_sider} sider")
-    print(f"  OCR-tid:    {total_tid:.1f}s ({total_tid / max(ferdig, 1):.2f}s/dok, "
+    print(f"  GPU-tid:    {_fmt_tid(total_tid)} ({total_tid / max(ferdig, 1):.2f}s/dok, "
           f"{total_tid / max(total_sider, 1):.2f}s/side)")
-    print(f"  Vegg-tid:   {vegg_tid:.1f}s (inkl. rendering, I/O)")
+    print(f"  Vegg-tid:   {_fmt_tid(vegg_tid)} (inkl. rendering, I/O)")
+    if total_sider > 0:
+        print(f"  Throughput: {total_sider / vegg_tid:.1f} sider/s, "
+              f"{ferdig / vegg_tid * 3600:.0f} dok/time")
     print(f"  Cache-mappe: {cache_mappe}")
 
     if feilet:
