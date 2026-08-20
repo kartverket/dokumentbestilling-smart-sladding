@@ -392,6 +392,7 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
     orient = DocImgOrientationClassification(
         model_name="PP-LCNet_x1_0_doc_ori",
         model_dir=ori_dir,
+        device="cpu",
     )
 
     from paddle_ocr_model_fnr import _les_tokens
