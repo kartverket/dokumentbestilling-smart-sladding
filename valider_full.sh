@@ -4,7 +4,7 @@
 # Bruk (eksplisitte navngitte parametere):
 #   ./valider_full.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
 #   ./valider_full.sh modell=$SLADD_PRODVEKTER uttrekk=5           # alle dokumenter
-#   ./valider_full.sh modell=$SLADD_RUNS/mitt-run/weights/best.pt uttrekk=5 liste=jou navn=mitt-eksperiment
+#   ./valider_full.sh modell=$SLADD_VEKTER/mitt-run/mitt-run.pt uttrekk=5 liste=jou navn=mitt-eksperiment
 #
 # Parametere:
 #   modell   — sti til YOLO-vektfil (påkrevd)
@@ -66,11 +66,19 @@ if [[ -z "$UTTREKK_NR" ]]; then
 fi
 
 # ── Utled modellnavn fra stien ───────────────────────────────────
-if [[ "$MODELL" == "$SLADD_PRODVEKTER" ]]; then
-    MODELL_NAVN="yolo-yearly-10000"
-else
-    MODELL_NAVN=$(basename "$(dirname "$(dirname "$MODELL")")")
-fi
+# Publiserte modeller heter <navn>/<navn>.pt og bærer navnet sitt selv.
+# Rå treningskjøringer heter <run>/weights/best.pt — da er navnet på
+# run-mappen det eneste navnet som finnes.
+utled_modellnavn() {
+    local navn
+    navn=$(basename "$1"); navn=${navn%.pt}
+    if [[ "$navn" == best || "$navn" == last ]]; then
+        navn=$(basename "$(dirname "$(dirname "$1")")")
+    fi
+    echo "$navn"
+}
+
+MODELL_NAVN=$(utled_modellnavn "$MODELL")
 
 # ── Bygg stier ───────────────────────────────────────────────────
 UTTREKK_MAPPE="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"

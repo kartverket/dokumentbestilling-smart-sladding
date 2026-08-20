@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -7,9 +8,9 @@ from ultralytics import YOLO
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
     MIN_BOKS_AREAL, MIN_ELONGATION, MAKS_ELONGATION, MIN_KORTSIDE_PT,
-    PDF_DPI)
+    PDF_DPI, standard_vekter)
 
-YOLO_VEKTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "best.pt")
+YOLO_VEKTER = standard_vekter()
 MIN_KORTSIDE_PX = MIN_KORTSIDE_PT * PDF_DPI / 72.0
 
 _modell = None
@@ -27,12 +28,31 @@ def aktive_vekter():
     return _vekter_sti
 
 
+def modell_info():
+    """Metadataen som ble publisert sammen med vektene, hvis den finnes.
+
+    modell.json ligger ved siden av vektfilen (i vektlageret, og bygget inn
+    i imaget av ./deploy.sh). Mangler den, er modellen kopiert på egen hånd
+    og vi vet ikke hva den er trent på.
+    """
+    sti = os.path.join(os.path.dirname(os.path.abspath(_vekter_sti)), "modell.json")
+    try:
+        with open(sti, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def _hent_modell():
     global _modell
     if _modell is None:
         if not os.path.isfile(_vekter_sti):
             raise FileNotFoundError(f"Fant ikke YOLO-vekter: {_vekter_sti}")
-        print(f"Laster YOLO-vekter fra: {_vekter_sti}")
+        info = modell_info()
+        navn = info.get("navn")
+        print(f"Laster YOLO-vekter fra: {_vekter_sti}"
+              + (f"  (modell: {navn}, trent {info.get('trent', {}).get('dato', 'ukjent dato')})"
+                 if navn else "  (ingen modell.json — ukjent opphav)"))
         _modell = YOLO(_vekter_sti)
     return _modell
 

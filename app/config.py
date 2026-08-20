@@ -30,6 +30,23 @@ YOLO_CONF_GEOMETRI_TERSKEL = 0.5
 # Kun default for --maks-bredde i utils/tegn.py; ikke del av filterstien.
 MAKS_BREDDE_ELEKTRONISK_PT = 50
 
+# ---- YOLO-vekter -------------------------------------------
+# Vektene bor ikke i repoet. I containeren har ./deploy.sh bygget inn den
+# valgte modellen som weights/modell.pt; utenfor containeren peker
+# SLADD_PRODVEKTER (server.env) på en modell i vektlageret. YOLO_VEKTER
+# overstyrer begge, og --yolo-vekter overstyrer alt (utils/run.py).
+import os as _os
+
+
+def standard_vekter():
+    for var in ("YOLO_VEKTER", "SLADD_PRODVEKTER"):
+        sti = _os.environ.get(var)
+        if sti:
+            return sti
+    return _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                         "weights", "modell.pt")
+
+
 # ---- YOLO --------------------------------------------------
 YOLO_CONF          = 0.12      # predict-terskel
 YOLO_CONF_UTEN_TEKST = 0.40   # krav når Paddle ikke leste noe i boksen

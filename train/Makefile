@@ -38,21 +38,37 @@ BATCH ?= 4
 # Can either be cpu or cuda (if you have a GPU)
 DEVICE ?= cuda
 PATIENCE ?= 20
-# Name for the training run (output in <PROJECT>/<NAME>/)
-NAME ?=
-# Project directory for training output (default: runs/detect)
-PROJECT ?=
+# Name for the training run (output in <PROJECT>/<NAME>/) and, unless
+# PUBLISER_NAVN says otherwise, the name of the published model.
+NAME ?= trening_$(shell date +%Y-%m-%dT%H-%M-%S)
+# Project directory for training output. $SLADD_RUNS on the server.
+PROJECT ?= $(if $(SLADD_RUNS),$(SLADD_RUNS),runs/detect)
 # Set RESUME=1 to resume from last.pt of a previous run
 RESUME ?=
+
+# ---- Publisering --------------------------------------------
+# Vektlageret. Trening skriver rått til $(PROJECT); «publiser» lager en
+# navngitt modell med metadata her, som er det deploy.sh og valideringen
+# peker på. Se server.env.
+VEKTER ?= $(if $(SLADD_VEKTER),$(SLADD_VEKTER),vekter)
+# Navn på den publiserte modellen (default: navnet på treningskjøringen)
+PUBLISER_NAVN ?= $(NAME)
+# best (default) eller last
+PUBLISER_VEKTER ?= best
+# Sett OVERSKRIV=1 for å erstatte en modell som alt er publisert
+OVERSKRIV ?=
 
 PYTHON ?= python
 YOLO := $(shell dirname $(shell which $(PYTHON)))/yolo
 SCRIPTS := scripts
 
 .DEFAULT_GOAL := all
-.PHONY: all split train convert verify coverage smoke count clean help
+.PHONY: all split train publiser convert verify coverage smoke count clean help
 
-all: split train
+# Hele veien: datasett -> trening -> ferdig modell i vektlageret. En
+# treningskjøring som ikke er publisert er ikke til å bruke — den heter
+# best.pt som alle andre og sier ikke hva den er trent på.
+all: split train publiser
 
 # ===Treningssteg===
 
@@ -112,6 +128,28 @@ train: split $(DATASET)/data.yaml
 		$(if $(PROJECT),project=$(PROJECT)) \
 		$(if $(RESUME),resume=True)
 
+# ---- Step 6: publisering ------------------------------------
+publiser:
+	$(PYTHON) $(SCRIPTS)/publiser_modell.py \
+		--run "$(PROJECT)/$(NAME)" \
+		--navn "$(PUBLISER_NAVN)" \
+		--ut "$(VEKTER)" \
+		--vekter $(PUBLISER_VEKTER) \
+		--dataset "$(DATASET)" \
+		--info basismodell=$(MODEL) \
+		--info strategi=$(STRATEGY) \
+		--info pdfs=$(PDFS) \
+		--info labels_csv=$(CSV) \
+		--info metadata_csv=$(METADATA) \
+		--info doc_type=$(DOC_TYPE) \
+		--info per_year=$(PER_YEAR) \
+		--info year_from=$(YEAR_FROM) \
+		--info year_to=$(YEAR_TO) \
+		--info train_ratio=$(TRAIN_RATIO) \
+		--info val_ratio=$(VAL_RATIO) \
+		--info seed=$(SEED) \
+		$(if $(OVERSKRIV),--overskriv)
+
 $(DATASET)/data.yaml: $(DATASET)/.split
 	@echo "path: $(abspath $(DATASET))" > $@
 	@echo "train: images/train" >> $@
@@ -155,9 +193,11 @@ count:
 
 
 help:
-	@echo "make               split + train"
+	@echo "make               split + train + publiser"
 	@echo "make split         convert CSV/PDFs and split into train/val/test"
 	@echo "make train         train YOLO (runs split first if needed)"
+	@echo 'make publiser      copy <PROJECT>/<NAME>/weights/best.pt into $$SLADD_VEKTER'
+	@echo "                   as <navn>/<navn>.pt + modell.json (training metadata)"
 	@echo "make verify        draw labels on images for visual check"
 	@echo "make coverage      find pages without labels"
 	@echo "make smoke         3-epoch smoke test on $(MODEL)"
@@ -165,3 +205,4 @@ help:
 	@echo "make clean         remove $(DATASET)/"
 	@echo ""
 	@echo "Vars: PDFS CSV DATASET TRAIN_RATIO VAL_RATIO STRATEGY METADATA PER_YEAR DOC_TYPE YEAR_FROM YEAR_TO MODEL EPOCHS IMGSZ BATCH DEVICE PATIENCE"
+	@echo "      NAME PROJECT VEKTER PUBLISER_NAVN PUBLISER_VEKTER OVERSKRIV"

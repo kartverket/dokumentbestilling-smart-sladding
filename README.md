@@ -42,7 +42,18 @@ CPU- og GPU-bygget av Paddle er to forskjellige pakker. Du må velge **samme var
 
 ## Modeller
 
-`best.pt` (vektene til den trente YOLO-modellen) leveres separat og legges i `app/weights/weights/`. Andre vektfiler kan legges samme sted og velges per kjøring med `--yolo-vekter` (se run.py-flaggene under).
+YOLO-vektene ligger **ikke** i repoet. De bor i modellageret på serveren, `$SLADD_VEKTER` (se `server.env`), med én mappe per publisert modell:
+
+```
+$SLADD_VEKTER/yolo-yearly-10000-docs/
+  yolo-yearly-10000-docs.pt    ← vektene, navngitt etter modellen
+  modell.json                  ← hva den er trent på, med hvilke parametere
+  trening/                     ← results.csv, args.yaml, data.yaml, split_log.txt
+```
+
+Mappene lages av `make -C $SLADD_TRAIN publiser` etter en treningskjøring — se [train/README.md](train/README.md). Vektfilen heter det samme som modellen, så navnet følger med uansett hvor filen kopieres, og `modell.json` gjør at man i ettertid kan se hva en modell faktisk er trent på.
+
+`$SLADD_PRODVEKTER` peker på modellen som er standardvalget: den `./deploy.sh build` bygger inn, og den `run.py` bruker uten `--yolo-vekter`. Andre modeller velges per kjøring med `--yolo-vekter` (se run.py-flaggene under) eller per bygg med `vekter=` (se under).
 
 PaddleOCR-modellene er ferdig trente vekter fra PaddlePaddle sitt modellbibliotek og lastes ned manuelt (kjøres fra `app/`):
 
@@ -96,7 +107,7 @@ PNG-resultat lagres i `utils/visning_test/`.
 
 Produksjon kjøres som Docker-container på GPU-serveren. **Det som kjører på port 5071 er produksjon** — ingenting annet.
 
-Et image bygges én gang og får en uforanderlig tag (`<dato>-<commit>`, f.eks. `20260820-6d7e6820`). Etter det flyttes bare *hvilken* tag som kjører hvor. Prod bygger aldri selv, så det som står på 5071 endrer seg ikke av at noen bygger noe nytt, og rollback er å peke tilbake på en tag som allerede har kjørt.
+Et image bygges én gang og får en uforanderlig tag (`<dato>-<commit>-<modell>`, f.eks. `20260820-6d7e6820-yolo-yearly-10000-docs`). Etter det flyttes bare *hvilken* tag som kjører hvor. Prod bygger aldri selv, så det som står på 5071 endrer seg ikke av at noen bygger noe nytt, og rollback er å peke tilbake på en tag som allerede har kjørt.
 
 Imagene lagres **bare lokalt på serveren** — ingen registry foreløpig. Det betyr at `docker image prune -a` sletter muligheten til å rulle tilbake, og at en ny maskin må bygge alt på nytt.
 
@@ -109,14 +120,21 @@ Imagene lagres **bare lokalt på serveren** — ingen registry foreløpig. Det b
 
 ```sh
 cp .env.example .env
-git submodule update --init app/weights   # henter best.pt
+source activate.sh                        # laster server.env, som peker på modellageret
+ls $SLADD_VEKTER                          # modellene som kan bygges inn
 ```
 
 ### Normal flyt: build → test → promote
 
 ```sh
-./deploy.sh build                       # bygger f.eks. tag 20260820-6d7e6820
-./deploy.sh test 20260820-6d7e6820      # starter den på 5072 og venter på /health
+./deploy.sh build                         # modell fra $SLADD_PRODVEKTER
+./deploy.sh test 20260820-6d7e6820-yolo-yearly-10000-docs
+```
+
+En annen modell inn i imaget — samme kode, nye vekter:
+
+```sh
+./deploy.sh build vekter=$SLADD_VEKTER/uttrekk_4_jou/uttrekk_4_jou.pt
 ```
 
 Verifiser mot testporten før du promoterer:
@@ -131,7 +149,7 @@ curl -X POST http://localhost:5072/model \
 Når den ser bra ut, settes *samme tag* i prod — ingen ny bygging, altså samme bits som ble testet:
 
 ```sh
-./deploy.sh promote 20260820-6d7e6820
+./deploy.sh promote 20260820-6d7e6820-yolo-yearly-10000-docs
 ./deploy.sh stop test                   # frigi GPU-minnet testcontaineren holder
 ```
 
@@ -141,7 +159,7 @@ Når den ser bra ut, settes *samme tag* i prod — ingen ny bygging, altså samm
 
 ```sh
 ./deploy.sh status            # hva kjører hvor, og er det friskt
-./deploy.sh versions          # lokalt bygde tagger, nyest først
+./deploy.sh versions          # lokalt bygde tagger med modell, nyest først
 ./deploy.sh rollback          # tilbake til forrige tag i prod
 ./deploy.sh stop prod|test    # ta ned en container
 ./deploy.sh start prod|test   # opp igjen med taggen som står i .env
@@ -173,13 +191,16 @@ Imaget inneholder alle modellene det trenger:
   PP-OCRv6_medium_det_infer/     59 MB   ← curl i Dockerfile
   PP-OCRv6_medium_rec_infer/     73 MB   ← curl i Dockerfile
   PP-LCNet_x1_0_doc_ori_infer/  6,6 MB   ← curl i Dockerfile
-  weights/best.pt                51 MB   ← COPY fra submodulet app/weights
+  weights/modell.pt              51 MB   ← modellen ./deploy.sh build valgte
+  weights/modell.json                    ← hva den modellen er trent på
   *.py                           64 kB   ← COPY app/*.py
 ```
 
 Merk at `Dockerfile` hardkoder nedlasting av **v6**-modellene, mens `app/config.py` velger settet med `MODELL_SETT`. Bytter du til `"v5"` må Dockerfile endres tilsvarende, ellers bygges et image uten de modellene koden ber om.
 
-Vektene ligger i et eget lag fra koden. Det gjør at ti versjoner på serveren koster 51 MB vekter til sammen og ikke 51 MB hver, og at et rebuild etter en kodeendring gjenbruker alt det tunge.
+Vektene ligger i et eget lag fra koden. Det gjør at ti versjoner av samme modell koster 51 MB vekter til sammen og ikke 51 MB hver, og at et rebuild etter en kodeendring gjenbruker alt det tunge.
+
+Docker kan bare kopiere fra byggekonteksten, og vektene ligger utenfor repoet. `./deploy.sh build` legger derfor den valgte modellen i `.byggvekter/` rett før bygget og fjerner mappen etterpå. Derfor bygger heller ikke `docker build .` direkte lenger — bygg går gjennom `deploy.sh`.
 
 ### Logger
 
@@ -221,7 +242,8 @@ Gunicorns error-logg går også til stdout, så `./deploy.sh logs prod` fortsatt
 ### Verdt å vite
 
 - Prod og test deler GPU-en. Kjører du en testcontainer ved siden av prod, konkurrerer de om samme kort — kjør `./deploy.sh stop test` når du er ferdig.
-- `best.pt` kommer fra submodulet `app/weights` (repo `dokumentbestilling-smart-sladding-model`). `./deploy.sh build` nekter å bygge uten den, siden et image uten vekter starter fint og feiler først ved første `/model`-kall.
+- Hvilken modell som bygges inn er et eksplisitt valg. `./deploy.sh build` uten argumenter tar `$SLADD_PRODVEKTER`; `./deploy.sh build vekter=$SLADD_VEKTER/<modell>/<modell>.pt` tar en annen. Uten en modell nekter den å bygge, siden et image uten vekter starter fint og feiler først ved første `/model`-kall.
+- Modellnavnet står i taggen (`20260820-eb6f64dd-yolo-yearly-10000-docs`), og modellnavn + sha256 av vektfilen ligger som merkelapper på imaget. Vektene ligger utenfor repoet, så commiten alene sier ikke hva imaget inneholder — uten navnet i taggen ville samme kode med to modeller fått samme tag, og `rollback` ville rullet tilbake koden uten modellen. `./deploy.sh status` og `versions` viser modellen per tag.
 - En tag bygget på ucommittede endringer får suffikset `-dirty` og blir avvist av `./deploy.sh promote`. Commit først.
 - Modellene lastes først ved første `/model`-kall, så `/health` svarer lenge før containeren er varm.
 - Bekreft at GPU-en faktisk brukes:
@@ -246,7 +268,7 @@ python run.py [flagg]
 | `--mappe STI`            | `../uttrekk_3`                                | Mappe med PDF-er                                 |
 | `--velg FIL [FIL ...]`   | —                                             | Kjør bare disse filene (filnavn/delstreng)       |
 | `--antall N`             | `20`                                          | Antall filer når `--velg` er tom (`alle` = alle) |
-| `--yolo-vekter FIL`      | `app/weights/weights/best.pt`                 | Path til YOLO-vektfil (for å teste andre vekter) |
+| `--yolo-vekter FIL`      | `$SLADD_PRODVEKTER`                           | Path til YOLO-vektfil (for å teste andre vekter) |
 | `--csv`                  | av                                            | Skriv funne bokser til CSV                       |
 | `--csv-ut FIL`           | `sladd_koordinater.csv`                       | Filnavn for boks-CSV                             |
 | `--fasit`                | av                                            | Mål recall mot fasit-CSV                         |
@@ -265,7 +287,7 @@ python run.py [flagg]
 ```sh
 python run.py --velg 10000676.pdf --csv --fasit --tid
 python run.py --antall alle --fasit --csv --png
-python run.py --velg 10000676.pdf --yolo-vekter weights/weights/yolo-yearly-10000-docs.pt --fasit --tid
+python run.py --velg 10000676.pdf --yolo-vekter $SLADD_VEKTER/yolo-yearly-10000-docs/yolo-yearly-10000-docs.pt --fasit --tid
 ```
 
 ---

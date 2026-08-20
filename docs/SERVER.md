@@ -19,10 +19,11 @@ source /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestil
 | `SLADD_UTTREKK`    | `/data2/smartsladding-uttrekk`                  | PDFer per uttrekk               |
 | `SLADD_LABELS`     | `.../smartsladding-uttrekk-labels`              | Labels-CSVer                    |
 | `SLADD_METADATA`   | `.../smartsladding-uttrekk-metadata`            | Metadata-CSVer                  |
-| `SLADD_RUNS`       | `/data2/runs`                                   | Treningskjøringer               |
+| `SLADD_RUNS`       | `/data2/runs`                                   | Rå treningskjøringer            |
+| `SLADD_VEKTER`     | `/data2/vekter`                                 | Publiserte modeller             |
 | `SLADD_VALIDERING` | `/data2/validering`                             | Valideringsresultater           |
 | `SLADD_LISTER`     | `/data2/validering/lister`                      | Fil-ID-lister                   |
-| `SLADD_PRODVEKTER` | `.../yolo-yearly-10000-docs.pt`                 | Nåværende prod-modell           |
+| `SLADD_PRODVEKTER` | `$SLADD_VEKTER/<modell>/<modell>.pt`            | Standardmodell (prod)           |
 | `SLADD_CACHE`      | `/data2/cache`                                  | Alt derivert, per uttrekk       |
 | `SLADD_RUN`        | `.../utils/run.py`                              | Validerings-script              |
 | `SLADD_TRAIN`      | `.../train`                                     | Trenings-mappe                  |
@@ -42,9 +43,13 @@ make -C $SLADD_TRAIN \
   METADATA=$SLADD_METADATA/uttrekk_4.csv \
   DOC_TYPE=SR_JOU \
   DEVICE=cuda \
-  NAME=uttrekk_4_jou_med_negative \
-  PROJECT=$SLADD_RUNS
+  NAME=uttrekk_4_jou_med_negative
 ```
+
+Kjøringen havner i `$SLADD_RUNS/<NAME>/`, og publiseres til slutt som en ferdig
+modell i `$SLADD_VEKTER/<NAME>/` med `<NAME>.pt` og `modell.json`. Det er den
+publiserte modellen validering og `deploy.sh` peker på — ikke `best.pt` inne i
+kjøringen.
 
 ### Trening basert på en eksisterende modell
 
@@ -58,10 +63,21 @@ make -C $SLADD_TRAIN \
   DOC_TYPE=SR_JOU \
   DEVICE=cuda \
   NAME=uttrekk_4_jou_based_pat20 \
-  PROJECT=$SLADD_RUNS \
   PATIENCE=20 \
   MODEL=$SLADD_PRODVEKTER
 ```
+
+### Publisere en kjøring som ble trent uten publisering
+
+```bash
+make -C $SLADD_TRAIN publiser \
+  NAME=uttrekk_4_jou_med_negative \
+  DATASET=$SLADD_CACHE/uttrekk_4/dataset
+```
+
+`modell.json` blir bare så fullstendig som variablene du oppgir: kjør
+`publiser` med de samme `PDFS`/`CSV`/`STRATEGY`-verdiene som treningen brukte,
+ellers står de tomme i metadataen.
 
 ---
 
@@ -97,10 +113,10 @@ Det finnes to wrapper-script:
 ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
 
 # Valider en trent modell
-./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_med_negative/weights/best.pt uttrekk=5 liste=jou
+./valider_yolo.sh modell=$SLADD_VEKTER/uttrekk_4_jou_med_negative/uttrekk_4_jou_med_negative.pt uttrekk=5 liste=jou
 
 # Valider en annen modell på et annet uttrekk/doctype
-./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob
+./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob   # upublisert kjøring
 
 # Egendefinert navn på utmappen
 ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou navn=prod_test
@@ -208,6 +224,40 @@ rm -rf $SLADD_CACHE/uttrekk_5/ocr
 
 ---
 
+## Modellageret
+
+`$SLADD_VEKTER` er stedet alle ferdige modeller bor. Én mappe per modell:
+
+```
+/data2/vekter/
+  yolo-yearly-10000-docs/
+    yolo-yearly-10000-docs.pt    ← vektene
+    modell.json                  ← datasett, hyperparametre, mål, git-sha
+    trening/                     ← results.csv, args.yaml, data.yaml, split_log.txt
+  uttrekk_4_jou/
+    …
+```
+
+`$SLADD_RUNS` er arbeidsmapper: checkpoints, plott og `weights/best.pt` fra hver
+kjøring. Der heter alle modeller det samme, så ingenting utenfor treningen skal
+peke dit. `make publiser` er broen mellom de to.
+
+### Engangsjobb: flytte gamle vekter inn i lageret
+
+Vektene lå tidligere i repoet (`app/weights/weights/`, levert via et git-submodul).
+Submodulet er borte, og vekter skal aldri i git igjen. Modeller derfra flyttes inn
+i lageret med `--vektfil`, som gir en tynn `modell.json` — treningskjøringen finnes
+ikke lenger, og det står da eksplisitt i metadataen:
+
+```bash
+python $SLADD_TRAIN/scripts/publiser_modell.py \
+  --vektfil $SLADD_REPO/app/weights/weights/yolo-yearly-10000-docs.pt \
+  --navn yolo-yearly-10000-docs \
+  --ut $SLADD_VEKTER
+```
+
+Når alle modellene er flyttet, kan `app/weights/` slettes fra utsjekken.
+
 ## Filstruktur
 
 ```
@@ -218,6 +268,7 @@ valider_full.sh    ← Validering med full produksjonslogikk (OCR + YOLO)
 lag_liste.sh       ← Generer dokument-ID-lister fra metadata
 app/ocr_cache.py   ← Per-dokument OCR-cache (les/skriv)
 train/Makefile     ← Treningspipeline
+train/scripts/publiser_modell.py  ← Kjøring → ferdig modell i $SLADD_VEKTER
 ```
 
 

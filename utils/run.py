@@ -200,7 +200,7 @@ def main():
     p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
     p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
     p.add_argument("--yolo-vekter", default=None,
-                   help="path til YOLO-vektfil (best.pt); default er weights/weights/best.pt i app-mappen")
+                   help="path til YOLO-vektfil; default er $SLADD_PRODVEKTER fra server.env")
     p.add_argument("--fortsett", action="store_true",
                    help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
     p.add_argument("--resultat-mappe", default=".",

@@ -10,7 +10,10 @@
 # er borte for godt — se «prune» nedenfor.
 #
 # Bruk:
-#   ./deploy.sh build [tag]      Bygg image. Tag utledes fra git hvis den utelates.
+#   ./deploy.sh build [tag] [vekter=STI]
+#                                Bygg image. Vektene tas fra SLADD_PRODVEKTER
+#                                hvis «vekter=» utelates; tag utledes fra git
+#                                og modellnavnet.
 #   ./deploy.sh test <tag>       Start taggen på testporten (5072) og helsesjekk.
 #   ./deploy.sh promote <tag>    Sett taggen i prod (5071). Ruller tilbake ved feil.
 #   ./deploy.sh rollback         Tilbake til forrige tag som kjørte i prod.
@@ -24,10 +27,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# server.env eier serverstiene, inkludert hvor loggene skal ligge.
-# Vi mapper SLADD_LOGS -> LOG_ROOT, som er navnet compose bruker i
-# volume-monteringene. Finnes ikke filen, faller compose tilbake på
-# /data/docker.
+# server.env eier serverstiene: hvor loggene skal ligge, og hvilken modell
+# et bygg henter når ingen oppgis. Vi mapper SLADD_LOGS -> LOG_ROOT, som er
+# navnet compose bruker i volume-monteringene. Finnes ikke filen, faller
+# compose tilbake på /data/docker, og «build» krever «vekter=».
 if [[ -f server.env ]]; then
     # shellcheck source=server.env
     source ./server.env
@@ -39,6 +42,16 @@ IMAGE=${IMAGE:-smart-sladding}
 ENV_FIL=.env
 HISTORIKK=.deploy-historikk
 PROD_PORT=5071
+
+# Vektene ligger utenfor byggekonteksten. Docker kopierer bare fra
+# konteksten, så den valgte modellen stages her rett før bygget og
+# fjernes rett etter (se cmd_build).
+STAGING=.byggvekter
+
+# Hvilken modell et image ble bygget med, lest tilbake fra imaget selv.
+MERKE_MODELL=no.kartverket.smsl.modell
+MERKE_MODELL_SHA=no.kartverket.smsl.modell.sha256
+MERKE_MODELL_KILDE=no.kartverket.smsl.modell.kilde
 
 # ── hjelpere ─────────────────────────────────────────────────────────
 
@@ -65,14 +78,56 @@ sett_env() {
     mv "$tmp" "$ENV_FIL"
 }
 
-# Sorterbar og sporbar: dato + commit. "-dirty" hvis treet ikke er rent,
-# så et image bygget på ucommittede endringer aldri kan forveksles med
-# en commit — og aldri havner i prod ved et uhell (se cmd_promote).
+# Sorterbar og sporbar: dato + commit + modell. "-dirty" hvis treet ikke
+# er rent, så et image bygget på ucommittede endringer aldri kan forveksles
+# med en commit — og aldri havner i prod ved et uhell (se cmd_promote).
+#
+# Modellnavnet må stå i taggen. Vektene ligger utenfor repoet, så commiten
+# alene sier ikke lenger hva imaget inneholder: samme kode med to modeller
+# ville ellers fått samme tag, og «rollback» ville rullet tilbake koden uten
+# modellen. sha256-en av vektfilen ligger som merkelapp på imaget.
 auto_tag() {
-    local sha suffiks=""
+    local modell=$1 sha suffiks=""
     sha=$(git rev-parse --short=8 HEAD 2>/dev/null) || feil "ikke et git-repo — oppgi tag manuelt"
     git diff --quiet && git diff --cached --quiet || suffiks="-dirty"
-    echo "$(date +%Y%m%d)-${sha}${suffiks}"
+    echo "$(date +%Y%m%d)-${sha}-$(tag_slug "$modell")${suffiks}"
+}
+
+# Docker-tagger tåler bare [a-zA-Z0-9._-]. Modellnavn kommer fra mappenavn
+# på serveren og kan inneholde hva som helst.
+tag_slug() {
+    printf '%s' "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9._-]/-/g; s/--*/-/g; s/^[-._]*//; s/[-._]*$//' \
+        | cut -c1-40
+}
+
+# sha256sum finnes på Linux, shasum på macOS.
+fil_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d" " -f1
+    else
+        shasum -a 256 "$1" | cut -d" " -f1
+    fi
+}
+
+# Modellnavnet et image ble bygget med. Tomt for images bygget før
+# merkelappene fantes.
+modell_i_image() {
+    docker image inspect "${IMAGE}:${1}" \
+        --format "{{index .Config.Labels \"${MERKE_MODELL}\"}}" 2>/dev/null || true
+}
+
+# Utleder modellnavnet fra stien til vektfilen. Publiserte modeller heter
+# <navn>/<navn>.pt og er selvbeskrivende; rå ultralytics-kjøringer heter
+# <run>/weights/best.pt, og da er run-navnet det eneste navnet som finnes.
+modell_navn_fra_sti() {
+    local sti=$1 navn
+    navn=$(basename "$sti"); navn=${navn%.pt}
+    if [[ $navn == best || $navn == last ]]; then
+        navn=$(basename "$(dirname "$(dirname "$sti")")")
+    fi
+    echo "$navn"
 }
 
 image_finnes() {
@@ -132,28 +187,70 @@ helsesjekk() {
 # ── kommandoer ───────────────────────────────────────────────────────
 
 cmd_build() {
-    local tag=${1:-$(auto_tag)}
+    local tag="" vekter="" arg
+    for arg in "$@"; do
+        case $arg in
+            vekter=*) vekter=${arg#vekter=} ;;
+            -*)  feil "ukjent flagg «${arg}». Bruk: ./deploy.sh build [tag] [vekter=STI]" ;;
+            *)   [[ -z $tag ]] || feil "for mange argumenter: «${arg}»"
+                 tag=$arg ;;
+        esac
+    done
+
     local proxy=${PROXY:-http://159.162.48.7:3128}
 
-    # Submodulet app/weights har best.pt. Bygger vi uten det, får vi et
-    # image som starter fint og feiler først ved første /model-kall.
-    [[ -f app/weights/best.pt ]] \
-        || feil "app/weights/best.pt mangler. Hent modell-submodulet: git submodule update --init app/weights"
+    # Hvilken modell som bygges inn er et eksplisitt valg, men det vanlige
+    # valget står i server.env. Uten en modell får vi et image som starter
+    # fint og feiler først ved første /model-kall.
+    vekter=${vekter:-${SLADD_PRODVEKTER:-}}
+    [[ -n $vekter ]] \
+        || feil "ingen vekter valgt. Sett SLADD_PRODVEKTER i server.env, eller oppgi dem: ./deploy.sh build vekter=\$SLADD_VEKTER/<modell>/<modell>.pt"
+    [[ -f $vekter ]] \
+        || feil "finner ikke vektfilen «${vekter}». Se hva som er publisert: ls \$SLADD_VEKTER"
+
+    local bunt navn sha
+    bunt=$(cd "$(dirname "$vekter")" && pwd)
+    navn=$(modell_navn_fra_sti "$vekter")
+    sha=$(fil_sha256 "$vekter")
+    tag=${tag:-$(auto_tag "$navn")}
 
     if image_finnes "$tag"; then
         echo "${IMAGE}:${tag} finnes allerede. Bygger på nytt og overskriver taggen."
     fi
 
+    echo "Modell: ${navn}"
+    echo "  fil:    ${vekter}"
+    echo "  sha256: ${sha:0:16}…"
+
+    # Docker kopierer bare fra byggekonteksten, så modellen må innom repoet.
+    # Mappen ryddes uansett hvordan bygget ender — den skal aldri bli
+    # liggende og forveksles med et modellager.
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING"
+    trap 'rm -rf "$STAGING"' EXIT
+    cp "$vekter" "$STAGING/modell.pt"
+    if [[ -f $bunt/modell.json ]]; then
+        cp "$bunt/modell.json" "$STAGING/modell.json"
+    else
+        echo "  ADVARSEL: ingen modell.json ved siden av vektfilen. Imaget vet da ikke"
+        echo "            hva modellen er trent på. Publiser modellen med"
+        echo "            «make -C \$SLADD_TRAIN publiser» i stedet for å kopiere .pt-filen."
+    fi
+
+    echo
     echo "Bygger ${IMAGE}:${tag} ..."
     docker build \
         --build-arg HTTP_PROXY="$proxy" \
         --build-arg HTTPS_PROXY="$proxy" \
         --label org.opencontainers.image.revision="$(git rev-parse HEAD 2>/dev/null || echo ukjent)" \
         --label org.opencontainers.image.version="$tag" \
+        --label "${MERKE_MODELL}=${navn}" \
+        --label "${MERKE_MODELL_SHA}=${sha}" \
+        --label "${MERKE_MODELL_KILDE}=${vekter}" \
         -t "${IMAGE}:${tag}" .
 
     echo
-    echo "Ferdig: ${IMAGE}:${tag}"
+    echo "Ferdig: ${IMAGE}:${tag}  (modell ${navn})"
     echo "Test den:      ./deploy.sh test ${tag}"
 }
 
@@ -192,6 +289,7 @@ cmd_promote() {
 
     local forrige; forrige=$(hent_env PROD_TAG)
     echo "Prod (port ${PROD_PORT}): ${forrige:-ingenting}  ->  ${tag}"
+    echo "Modell:                  $(modell_i_image "$forrige")  ->  $(modell_i_image "$tag")"
     read -r -p "Fortsette? [j/N] " svar
     case $svar in
         j|J|ja|Ja|JA) ;;
@@ -231,10 +329,15 @@ cmd_rollback() {
 }
 
 cmd_status() {
+    local prod_tag test_tag
+    prod_tag=$(hent_env PROD_TAG || true)
+    test_tag=$(hent_env TEST_TAG || true)
+
     echo "Image: ${IMAGE}  (bare lokalt på denne serveren)"
     echo "Logger: ${LOG_ROOT:-/data/docker}  (${LOG_BACKUP_DAYS:-30} døgn historikk)"
-    echo "Prod  (port ${PROD_PORT}):  $(hent_env PROD_TAG || true)"
-    echo "Test  (port $(port_for test)):  $(hent_env TEST_TAG || true)"
+    echo "Vekter: ${SLADD_VEKTER:-(ikke satt)}  (standardmodell: ${SLADD_PRODVEKTER:-ingen})"
+    echo "Prod  (port ${PROD_PORT}):  ${prod_tag}  modell: $(modell_i_image "$prod_tag")"
+    echo "Test  (port $(port_for test)):  ${test_tag}  modell: $(modell_i_image "$test_tag")"
     echo
     docker compose --profile test ps -a --format 'table {{.Name}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || true
     echo
@@ -242,10 +345,18 @@ cmd_status() {
     tail -5 "$HISTORIKK" 2>/dev/null || echo "  (ingen)"
 }
 
+# Taggen navngir modellen, men bare i forkortet form. Merkelappen på
+# imaget er fasiten, så den leses ut per tag.
 cmd_versions() {
-    docker images "$IMAGE" \
-        --format 'table {{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' \
-        --filter 'dangling=false'
+    local tag opprettet storrelse
+    printf '%-46s %-16s %-9s %s\n' TAG ALDER STØRRELSE MODELL
+    while IFS=$'\t' read -r tag opprettet storrelse; do
+        [[ -z $tag || $tag == "<none>" ]] && continue
+        printf '%-46s %-16s %-9s %s\n' \
+            "$tag" "$opprettet" "$storrelse" "$(modell_i_image "$tag")"
+    done < <(docker images "$IMAGE" \
+                --format '{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' \
+                --filter 'dangling=false')
 }
 
 cmd_logs() {

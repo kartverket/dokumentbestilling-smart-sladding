@@ -2,9 +2,14 @@
 !app/
 !config/
 !requirements.txt
+# Modellen ./deploy.sh stager hit rett før bygget. Ligger den ikke i
+# konteksten, kan Dockerfile ikke kopiere den inn.
+!.byggvekter/
 app/logs/
 app/__pycache__/
 app/*.tar
+# Rester etter det gamle vekt-submodulet. Vektene kommer fra .byggvekter/.
+app/weights/
 # Paddle-modellene lastes ned i Dockerfile. Ligger de også i
 # byggekonteksten, blir de kopiert oppå og imaget bærer dem to ganger
 # — ~139 MB ekstra på disk per image, for ingenting.

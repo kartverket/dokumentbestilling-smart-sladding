@@ -14,7 +14,7 @@ spesifikt for OCR og YOLO.
 
 Bruk:
     python precache.py --mappe /sti/til/pdfer
-    python precache.py --mappe /sti/til/pdfer --kun yolo --yolo-vekter runs/x/weights/best.pt
+    python precache.py --mappe /sti/til/pdfer --kun yolo --yolo-vekter $SLADD_VEKTER/<modell>/<modell>.pt
     python precache.py --mappe /sti/til/pdfer --gpu-prosesser 4 --start-batch 8 --profil
 """
 
@@ -39,13 +39,13 @@ if _APP not in sys.path:
 import numpy as np
 
 import parallell_pipeline as pp
-from config import SIDER_PER_OCR_BATCH
+from config import SIDER_PER_OCR_BATCH, standard_vekter
 from file_selection import velg_filer
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 from yolo_cache import (les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache,
                         cache_mappe_for_vekter)
 
-STANDARD_VEKTER = os.path.join(_APP, "weights", "best.pt")
+STANDARD_VEKTER = standard_vekter()
 
 
 # ── Behandler (kjører i arbeidsprosessen) ────────────────────────

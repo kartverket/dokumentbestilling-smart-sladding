@@ -4,8 +4,8 @@
 # Bruk (eksplisitte navngitte parametere):
 #   ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
 #   ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5           # alle dokumenter
-#   ./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_med_negative/weights/best.pt uttrekk=5 liste=jou
-#   ./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob
+#   ./valider_yolo.sh modell=$SLADD_VEKTER/uttrekk_4_jou/uttrekk_4_jou.pt uttrekk=5 liste=jou
+#   ./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou/weights/best.pt uttrekk=4 liste=mob   # upublisert kjøring
 #
 # Se også: valider_full.sh — full produksjonslogikk (OCR + YOLO)
 #
@@ -66,13 +66,22 @@ if [[ -z "$UTTREKK_NR" ]]; then
 fi
 
 # ── Utled modellnavn fra stien ───────────────────────────────────
+# Publiserte modeller heter <navn>/<navn>.pt og bærer navnet sitt selv.
+# Rå treningskjøringer heter <run>/weights/best.pt — da er navnet på
+# run-mappen det eneste navnet som finnes.
+utled_modellnavn() {
+    local navn
+    navn=$(basename "$1"); navn=${navn%.pt}
+    if [[ "$navn" == best || "$navn" == last ]]; then
+        navn=$(basename "$(dirname "$(dirname "$1")")")
+    fi
+    echo "$navn"
+}
+
 if [[ -n "$NAVN" ]]; then
     MODELL_NAVN="$NAVN"
-elif [[ "$MODELL" == "$SLADD_PRODVEKTER" ]]; then
-    MODELL_NAVN="yolo-yearly-10000"
 else
-    # Bruk mappenavnet som inneholder weights/best.pt
-    MODELL_NAVN=$(basename "$(dirname "$(dirname "$MODELL")")")
+    MODELL_NAVN=$(utled_modellnavn "$MODELL")
 fi
 
 # ── Bygg stier ───────────────────────────────────────────────────
