@@ -145,6 +145,95 @@ def _last_pdf(sti):
         return sti, e
 
 
+# ── Auto-tuning ──────────────────────────────────────────────────
+
+def _antall_cpu_kjerner():
+    """Returner antall tilgjengelige CPU-kjerner."""
+    try:
+        return os.cpu_count() or 4
+    except Exception:
+        return 4
+
+
+def _auto_workers():
+    """Velg antall PDF-rendering-tråder basert på CPU-kjerner.
+
+    PDF-rendering (PyMuPDF) frigir GIL og kan bruke ekte parallellisme.
+    Bruk en fjerdedel av kjernene — nok til å holde GPU-en mettet uten
+    å konkurrere om I/O. Min 2, maks 16.
+    """
+    kjerner = _antall_cpu_kjerner()
+    return min(max(kjerner // 4, 2), 16)
+
+
+def _auto_prefetch():
+    """Velg prefetch-dybde basert på tilgjengelig RAM.
+
+    Hver pre-rendret PDF bruker ca. 50-200 MB RAM (avhengig av sideantall).
+    Prefetch skal være >= 2× dokument-batch for å holde GPU-en mettet.
+    """
+    _, tilg, _ = _minne_info()
+    if tilg <= 0:
+        return 16  # fallback
+    # Anta ~150 MB per PDF i snitt, bruk maks 10% av tilgjengelig RAM
+    maks_fra_ram = int(tilg * 0.10 * 1000 / 150)
+    return min(max(maks_fra_ram, 12), 64)
+
+
+def _gpu_prosent_brukt():
+    """Returner GPU-minnebruk i prosent, eller None."""
+    gpu = _gpu_minne_info()
+    if gpu and gpu[1] > 0:
+        return gpu[0] / gpu[1] * 100
+    return None
+
+
+class _AdaptivBatchStørrelse:
+    """Dynamisk GPU-batchstørrelse som tilpasser seg minnebruk.
+
+    Starter konservativt og øker gradvis så lenge GPU-minnet er under
+    en trygg grense. Reduserer umiddelbart hvis grensen overskrides.
+    """
+
+    def __init__(self, start=4, minimum=2, maksimum=16, gpu_grense_prosent=75):
+        self.nåværende = start
+        self.minimum = minimum
+        self.maksimum = maksimum
+        self.gpu_grense = gpu_grense_prosent
+        self._forrige_gpu_pct = None
+        self._stabil_teller = 0  # antall batches under grensen
+
+    def neste(self):
+        """Returner neste batchstørrelse, justert basert på GPU-minne."""
+        gpu_pct = _gpu_prosent_brukt()
+        if gpu_pct is None:
+            return self.nåværende  # kan ikke lese GPU, behold nåværende
+
+        self._forrige_gpu_pct = gpu_pct
+
+        if gpu_pct > self.gpu_grense + 5:
+            # Over grensen — krympe raskt
+            self.nåværende = max(self.minimum, self.nåværende - 2)
+            self._stabil_teller = 0
+        elif gpu_pct > self.gpu_grense:
+            # Nær grensen — krympe forsiktig
+            self.nåværende = max(self.minimum, self.nåværende - 1)
+            self._stabil_teller = 0
+        else:
+            # Under grensen — vurder å øke
+            self._stabil_teller += 1
+            if self._stabil_teller >= 3 and gpu_pct < self.gpu_grense - 15:
+                # Godt under grensen i 3+ batches — øk
+                self.nåværende = min(self.maksimum, self.nåværende + 1)
+                self._stabil_teller = 0
+
+        return self.nåværende
+
+    def __repr__(self):
+        gpu_str = f" GPU:{self._forrige_gpu_pct:.0f}%" if self._forrige_gpu_pct else ""
+        return f"dokument_batch={self.nåværende}{gpu_str}"
+
+
 # ── Hovudlogikk ──────────────────────────────────────────────────
 
 def _utled_cache_mappe(args):
@@ -213,16 +302,18 @@ def main():
                    help="les fil-IDer fra en tekstfil (én per linje)")
     p.add_argument("--antall", default="alle",
                    help="antall filer når --velg er tom (tall, eller 'alle')")
-    p.add_argument("--workers", type=int, default=4,
-                   help="antall tråder for parallell PDF-rendering (default: 4)")
-    p.add_argument("--prefetch", type=int, default=12,
-                   help="antall PDF-er å pre-rendre i kø (default: 12)")
+    p.add_argument("--workers", type=int, default=0,
+                   help="antall tråder for PDF-rendering (0=auto fra CPU-kjerner)")
+    p.add_argument("--prefetch", type=int, default=0,
+                   help="antall PDF-er å pre-rendre i kø (0=auto fra RAM)")
     p.add_argument("--minne-grense", type=int, default=88,
                    help="maks RAM-bruk i prosent før pre-rendering pauser (default: 88)")
     p.add_argument("--ocr-batch", type=int, default=None,
                    help=f"sider per OCR-batch (default: {SIDER_PER_OCR_BATCH} fra config)")
-    p.add_argument("--dokument-batch", type=int, default=6,
-                   help="antall dokumenter å samle på GPU samtidig (default: 6)")
+    p.add_argument("--dokument-batch", type=int, default=0,
+                   help="maks dokumenter per GPU-batch (0=adaptiv basert på GPU-minne)")
+    p.add_argument("--gpu-grense", type=int, default=75,
+                   help="maks GPU-minnebruk i prosent før batchstørrelse reduseres (default: 75)")
     p.add_argument("--hpi", action="store_true",
                    help="aktiver High Performance Inference (TensorRT) — krever kraftig GPU")
     p.add_argument("--vis-ressurser", action="store_true",
@@ -279,7 +370,20 @@ def main():
 
     # ── Overstyr OCR-batch fra CLI ───────────────────────────────
     ocr_batch = args.ocr_batch or SIDER_PER_OCR_BATCH
-    dokument_batch = args.dokument_batch
+
+    # ── Resolve auto-verdier ──────────────────────────────────────
+    workers = args.workers or _auto_workers()
+    prefetch = args.prefetch or _auto_prefetch()
+    dokument_batch_fast = args.dokument_batch  # 0 = adaptiv
+
+    if dokument_batch_fast:
+        adaptiv_batch = None
+        print(f"  Dokument-batch: fast {dokument_batch_fast}")
+    else:
+        adaptiv_batch = _AdaptivBatchStørrelse(
+            start=4, minimum=2, maksimum=16, gpu_grense_prosent=args.gpu_grense)
+        print(f"  Dokument-batch: adaptiv (GPU-grense {args.gpu_grense}%, "
+              f"start=4, maks=16)")
 
     # ── HPI-modus (TensorRT) ──────────────────────────────────────
     if args.hpi:
@@ -288,8 +392,8 @@ def main():
     # ── Skriv ressursstatus før start ────────────────────────────
     _skriv_ressursstatus()
     print(f"\nStarter OCR-caching av {len(filer)} dokumenter "
-          f"(workers={args.workers}, prefetch={args.prefetch}, "
-          f"ocr_batch={ocr_batch}, dokument_batch={dokument_batch}, "
+          f"(workers={workers}, prefetch={prefetch}, "
+          f"ocr_batch={ocr_batch}, "
           f"minne_grense={args.minne_grense}%)\n")
 
     # ── Pipeline: pre-rendr PDF-er i tråder, OCR på GPU ──────────
@@ -312,7 +416,7 @@ def main():
     start_alle = time.perf_counter()
 
     # Prefetch-kø: rendre PDF-er i bakgrunnstråder
-    render_executor = ThreadPoolExecutor(max_workers=args.workers)
+    render_executor = ThreadPoolExecutor(max_workers=workers)
     prefetch_kø = deque()  # inneholder Future-objekter for rendrede PDF-er
     fil_indeks = 0  # neste fil å sende til rendering
 
@@ -320,7 +424,7 @@ def main():
         """Send filer til rendering så lenge køen ikke er full og minne er OK."""
         nonlocal fil_indeks
         while (fil_indeks < totalt
-               and len(prefetch_kø) < args.prefetch
+               and len(prefetch_kø) < prefetch
                and _er_minne_trygt(args.minne_grense)):
             fut = render_executor.submit(_last_pdf, filer[fil_indeks])
             prefetch_kø.append((filer[fil_indeks], fut))
@@ -328,6 +432,13 @@ def main():
 
     # Start pre-rendering
     _fyll_kø()
+
+    # ── Bottleneck-tracking ───────────────────────────────────────
+    tid_vente_cpu = 0.0   # tid brukt på å vente på at CPU rendrer ferdig
+    tid_gpu = 0.0         # tid brukt på GPU (orientering + OCR)
+    tid_io = 0.0          # tid brukt på cache-skriving
+    antall_batches = 0
+    kø_dybde_sum = 0      # sum av kødybde ved batch-start (for snitt)
 
     while ferdig < totalt:
         # Sørg for at køen er fylt opp
@@ -349,10 +460,21 @@ def main():
                 break
 
         # ── Samle en batch med dokumenter for GPU-prosessering ────
+        # Bestem batchstørrelse: fast eller adaptiv
+        if dokument_batch_fast:
+            maks_batch = dokument_batch_fast
+        else:
+            maks_batch = adaptiv_batch.neste()
+
+        # Mål kødybde (indikator: er CPU foran eller bak GPU?)
+        kø_dybde_sum += len(prefetch_kø)
+        antall_batches += 1
+
         batch_docs = []  # [(navn, bilder), ...]
-        while prefetch_kø and len(batch_docs) < dokument_batch:
+        start_vente = time.perf_counter()
+        while prefetch_kø and len(batch_docs) < maks_batch:
             sti, fut = prefetch_kø.popleft()
-            sti, resultat = fut.result()
+            sti, resultat = fut.result()  # kan blokkere hvis CPU ikke er ferdig
             navn = os.path.basename(sti)
 
             if isinstance(resultat, Exception):
@@ -363,6 +485,7 @@ def main():
             batch_docs.append((navn, resultat))
             # Fyll køen mens vi venter på futures
             _fyll_kø()
+        tid_vente_cpu += time.perf_counter() - start_vente
 
         if not batch_docs:
             continue
@@ -428,10 +551,39 @@ def main():
 
         tid_batch = time.perf_counter() - start_batch
         total_tid += tid_batch
+        tid_gpu += tid_batch
 
         # Frigjør ubrukt cachet GPU-minne — forhindrer den gradvise veksten
         # som PaddlePaddle sin CUDA-allokator ellers viser.
         _frigjør_gpu_cache()
+
+        # Logg adaptiv batchstørrelse og bottleneck-info
+        if ferdig % 20 == 0:
+            elapsed = time.perf_counter() - start_alle
+            total_tracked = tid_vente_cpu + tid_gpu
+            if total_tracked > 0:
+                cpu_pct = tid_vente_cpu / total_tracked * 100
+                gpu_pct_tid = tid_gpu / total_tracked * 100
+            else:
+                cpu_pct = gpu_pct_tid = 0
+            snitt_kø = kø_dybde_sum / max(antall_batches, 1)
+
+            # Bestem flaskehals
+            if cpu_pct > 60:
+                flaskehals = "🔴 CPU (rendering)"
+            elif gpu_pct_tid > 80:
+                flaskehals = "🟡 GPU (OCR)"
+            else:
+                flaskehals = "🟢 balansert"
+
+            gpu_mem = _gpu_prosent_brukt()
+            gpu_mem_str = f" GPU-minne: {gpu_mem:.0f}%" if gpu_mem else ""
+
+            print(f"  ⚡ Flaskehals: {flaskehals} | "
+                  f"vente-CPU: {cpu_pct:.0f}% | GPU: {gpu_pct_tid:.0f}% | "
+                  f"kø-dybde: {snitt_kø:.1f}{gpu_mem_str}")
+            if adaptiv_batch:
+                print(f"     {adaptiv_batch}")
 
         if args.vis_ressurser and ferdig % 10 == 0:
             _skriv_ressursstatus()
@@ -448,6 +600,26 @@ def main():
     if total_sider > 0:
         print(f"  Throughput: {total_sider / vegg_tid:.1f} sider/s, "
               f"{ferdig / vegg_tid * 3600:.0f} dok/time")
+
+    # Flaskehals-analyse
+    total_tracked = tid_vente_cpu + tid_gpu
+    if total_tracked > 0:
+        cpu_pct = tid_vente_cpu / total_tracked * 100
+        gpu_pct_tid = tid_gpu / total_tracked * 100
+        overhead = vegg_tid - total_tracked
+        print(f"\n  Tidsfordeling:")
+        print(f"    Vente på CPU (rendering): {_fmt_tid(tid_vente_cpu)} ({cpu_pct:.0f}%)")
+        print(f"    GPU (orientering + OCR):  {_fmt_tid(tid_gpu)} ({gpu_pct_tid:.0f}%)")
+        if overhead > 1:
+            print(f"    Overhead (kø/IO/cache):   {_fmt_tid(overhead)}")
+        print(f"    Snitt kødybde:            {kø_dybde_sum / max(antall_batches, 1):.1f} "
+              f"(høy = GPU er flaskehals, lav = CPU er flaskehals)")
+        if cpu_pct > 60:
+            print(f"\n  💡 CPU-rendering er flaskehalsen. Prøv --workers {workers * 2}")
+        elif gpu_pct_tid > 80:
+            print(f"\n  💡 GPU er flaskehalsen. Vurder: "
+                  f"større --ocr-batch, eller kjør CPU+GPU parallelt.")
+
     print(f"  Cache-mappe: {cache_mappe}")
 
     if feilet:
