@@ -597,12 +597,16 @@ def oppsett(args, ekstra=None):
 
     # Uten et tak per prosess vokser allokatorene uavhengig til kortet er
     # fullt (målt: 30,9 av 32 GB), og da feiler den prosessen som
-    # tilfeldigvis ber om minne sist.
+    # tilfeldigvis ber om minne sist. Det som allerede er i bruk trekkes
+    # fra: kjører det en annen jobb på kortet, må vi dele på resten.
     gpu = gpu_minne_info()
     gpu_mb = None
+    opptatt = 0
     if gpu and gpu[1] > 0:
+        brukt, total = gpu
+        opptatt = brukt
         # ~700 MB per prosess går til CUDA-kontekst og modellvekter
-        gpu_mb = max((gpu[1] * args.gpu_grense / 100 - 700 * n) / n, 512)
+        gpu_mb = max((total * args.gpu_grense / 100 - brukt - 700 * n) / n, 512)
 
     opts = dict(
         n_prosesser=n,
@@ -621,7 +625,11 @@ def oppsett(args, ekstra=None):
     print(f"  Pipeliner:  {n} × (1 hovedtråd + {opts['workers']} render-tråder), "
           f"prefetch {opts['prefetch']}/prosess")
     if gpu_mb:
-        print(f"  GPU-minne:  {gpu_mb:.0f} MB per prosess (FLAGS_gpu_memory_limit_mb)")
+        print(f"  GPU-minne:  {gpu_mb:.0f} MB per prosess (FLAGS_gpu_memory_limit_mb)"
+              + (f", {opptatt} MB alt i bruk av noe annet" if opptatt > 1000 else ""))
+        if gpu_mb < 3000:
+            print(f"  !! Lite GPU-minne per prosess. Kjører det en annen jobb på "
+                  f"kortet, vent til den er ferdig eller bruk --gpu-prosesser 1")
     if args.dokument_batch:
         print(f"  Batch:      fast {args.dokument_batch} dok per prosess")
     else:

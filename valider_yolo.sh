@@ -127,11 +127,16 @@ echo ""
 # det samme arbeidet i parallelle prosesser mot samme GPU — målt 3,3×
 # på V100S — og legger det i cachen run.py leser. Etterpå er
 # valideringen nesten gratis. precache=nei hopper over steget.
+#
+# Merk «--kun begge»: --kun-yolo trenger rotasjonene, og de ligger i
+# OCR-cachen. Uten den må run.py rendre og orientere hvert dokument på
+# nytt selv med full YOLO-cache. OCR-cachen er modelluavhengig, så den
+# kostnaden tas én gang per uttrekk og betaler seg på hver kjøring.
 if [[ "$PRECACHE" == "ja" ]]; then
     echo "── Fyller cache (precache.py) ──"
     PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
         --mappe "$UTTREKK_MAPPE"
-        --kun yolo
+        --kun begge
         --yolo-vekter "$MODELL"
     )
     if [[ -n "$LISTE_FIL" ]]; then
