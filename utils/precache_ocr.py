@@ -6,23 +6,22 @@ resultatene i OCR-cachen. Ingen YOLO, ingen FNR-deteksjon, ingen
 evaluering — bare den tyngste GPU-operasjonen isolert.
 
 Arkitektur: hovedprosessen koordinerer bare, og alt arbeid skjer i
-uavhengige prosesser som henter filer fra en delt kø. Grunnen er målt:
-~77 % av tiden i én pipeline går til enkelttrådet CPU-forbehandling
-(normalisering, bildekopier), og bare ~11 % til GPU-arbeid. Én prosess
-klarer altså ikke å mette kortet — flere prosesser mot samme GPU gjør det.
+uavhengige prosesser som henter filer fra en delt teller. Grunnen er målt
+på V100S + Xeon 6230: ~77 % av tiden i én pipeline gikk til enkelttrådet
+CPU-forbehandling (normalisering, bildekopier) og bare ~11 % til
+GPU-arbeid, så kortet sto stille halve tiden. Fire prosesser mot samme
+kort ga 3,3× gjennomstrømning og mettet GPU-en (228 av 250 W).
 
-  - Pre-rendrer neste PDF(er) mens OCR-en jobber
-  - Flere parallelle GPU-pipeliner mot samme kort (--gpu-prosesser)
-  - Kan kjøre CPU-OCR i egne prosesser i tillegg (--cpu-ocr)
-  - Overvåker minne og tilpasser pipeline-dybden
-  - Hopper automatisk over allerede cachede dokumenter
+Minnestyringen følger av det: hver prosess får sitt eget tak på kortet
+(FLAGS_gpu_memory_limit_mb), batchstørrelsen finner taket selv med
+slow-start og halvering ved minnefeil, og en minnefeil koster en
+omkjøring av de samme dokumentene — aldri et tapt dokument.
 
 Bruk:
     python precache_ocr.py --mappe /sti/til/pdfer
-    python precache_ocr.py --mappe /sti/til/pdfer --gpu-prosesser 4
-    python precache_ocr.py --mappe /sti/til/pdfer --gpu-prosesser --profil
+    python precache_ocr.py --mappe /sti/til/pdfer --gpu-prosesser 4 --start-batch 8
+    python precache_ocr.py --mappe /sti/til/pdfer --profil
     python precache_ocr.py --velg-fra-fil filer.txt --mappe /sti/til/pdfer
-    python precache_ocr.py --mappe /sti/til/pdfer --gpu-prosesser 4 --cpu-ocr 4
 """
 
 import argparse
@@ -57,7 +56,7 @@ from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 
 # Merk: orientering og paddle_ocr_model_fnr importeres IKKE her. De trekker
 # inn paddle, og en fork() etter at CUDA er berørt gir ubrukelige
-# CUDA-kontekster i barneprosessene. Motorene importerer dem selv.
+# CUDA-kontekster i barneprosessene. Arbeidsprosessene importerer dem selv.
 
 
 # ── Logging ──────────────────────────────────────────────────────
@@ -225,78 +224,6 @@ def _gpu_prosent_brukt():
     return None
 
 
-class _AdaptivBatchStørrelse:
-    """Dynamisk GPU-batchstørrelse som tilpasser seg minnebruk.
-
-    Starter konservativt og øker gradvis så lenge GPU-minnet er under
-    en trygg grense. Reduserer umiddelbart hvis grensen overskrides.
-    """
-
-    def __init__(self, start=4, minimum=2, maksimum=16, gpu_grense_prosent=75):
-        self.nåværende = start
-        self.minimum = minimum
-        self.maksimum = maksimum
-        self.gpu_grense = gpu_grense_prosent
-        self._forrige_gpu_pct = None
-        self._stabil_teller = 0  # antall batches under grensen
-        self._sperre = 0         # batches uten vekst etter tom-for-minne
-
-    def oom(self):
-        """Kalles etter tom-for-minne: halver og utsett ny vekst.
-
-        nvidia-smi viser paddle-allokatorenes høyvannsmerke, ikke ledig
-        minne akkurat nå. Etter en minnefeil er den målingen upålitelig,
-        så vi holder oss nede en stund uansett hva den sier.
-        """
-        self.nåværende = max(self.minimum, self.nåværende // 2)
-        self._stabil_teller = 0
-        self._sperre = 10
-
-    def neste(self):
-        """Returner neste batchstørrelse, justert basert på GPU-minne."""
-        if self._sperre > 0:
-            self._sperre -= 1
-            return self.nåværende
-
-        gpu_pct = _gpu_prosent_brukt()
-        if gpu_pct is None:
-            return self.nåværende  # kan ikke lese GPU, behold nåværende
-
-        self._forrige_gpu_pct = gpu_pct
-
-        if gpu_pct > self.gpu_grense + 5:
-            # Over grensen — krympe raskt
-            self.nåværende = max(self.minimum, self.nåværende - 2)
-            self._stabil_teller = 0
-        elif gpu_pct > self.gpu_grense:
-            # Nær grensen — krympe forsiktig
-            self.nåværende = max(self.minimum, self.nåværende - 1)
-            self._stabil_teller = 0
-        else:
-            # Under grensen — øk aggressivt når det er mye ledig
-            self._stabil_teller += 1
-            if gpu_pct < self.gpu_grense * 0.3:
-                # Veldig lavt minne (< 30% av grensen) — øk raskt
-                self.nåværende = min(self.maksimum, self.nåværende + 3)
-            elif gpu_pct < self.gpu_grense * 0.5 and self._stabil_teller >= 2:
-                # Under halvparten av grensen — øk moderat
-                self.nåværende = min(self.maksimum, self.nåværende + 2)
-                self._stabil_teller = 0
-            elif self._stabil_teller >= 3 and gpu_pct < self.gpu_grense - 15:
-                # Godt under grensen i 3+ batches — øk forsiktig
-                self.nåværende = min(self.maksimum, self.nåværende + 1)
-                self._stabil_teller = 0
-
-        return self.nåværende
-
-    def ok(self):
-        """Batch gikk bra. (Her styres veksten av minnemålingen.)"""
-
-    def __repr__(self):
-        gpu_str = f" GPU:{self._forrige_gpu_pct:.0f}%" if self._forrige_gpu_pct else ""
-        return f"dokument_batch={self.nåværende}{gpu_str}"
-
-
 class _AIMDBatchStørrelse:
     """Batchstørrelse styrt av faktiske minnefeil, ikke av nvidia-smi.
 
@@ -304,21 +231,29 @@ class _AIMDBatchStørrelse:
     målingen ubrukelig som styringssignal: den ligger *ved* taket når alt
     går som planlagt, og en måling-styrt regulator bremser da hele tiden.
 
-    Her vokser batchen ett hakk for hver batch som går bra, og halveres når
-    prosessen går tom for minne — samme mønster som TCP. Siden en minnefeil
-    bare koster en omkjøring av samme dokumenter, presser dette kortet så
-    hardt det tåler uten å miste noe.
+    Samme mønster som TCP: dobling til første minnefeil (slow-start), så
+    halvering og forsiktig lineær vekst videre. Doblingen finner taket i
+    log₂-steg i stedet for ett hakk om gangen — 4→8→12 tar tre batcher der
+    ren lineær vekst brukte tjue. Siden en minnefeil bare koster en
+    omkjøring av de samme dokumentene, er det billig å lete oppover.
     """
 
-    def __init__(self, start=2, minimum=1, maksimum=12):
-        self.nåværende = start
+    def __init__(self, start=4, minimum=1, maksimum=12):
+        self.nåværende = max(min(start, maksimum), minimum)
         self.minimum = minimum
         self.maksimum = maksimum
         self._ok_siden = 0
         self._oom = 0
+        self._slow_start = True
 
     def neste(self):
-        if self._ok_siden >= 2 and self.nåværende < self.maksimum:
+        if self.nåværende >= self.maksimum:
+            return self.nåværende
+        if self._slow_start:
+            if self._ok_siden >= 1:
+                self.nåværende = min(self.maksimum, self.nåværende * 2)
+                self._ok_siden = 0
+        elif self._ok_siden >= 2:
             self.nåværende += 1
             self._ok_siden = 0
         return self.nåværende
@@ -328,14 +263,16 @@ class _AIMDBatchStørrelse:
 
     def oom(self):
         self.nåværende = max(self.minimum, self.nåværende // 2)
-        self._ok_siden = -4   # hold igjen noen batcher før ny vekst
+        self._slow_start = False   # over til forsiktig lineær vekst
+        self._ok_siden = -4        # hold igjen noen batcher først
         self._oom += 1
 
     def __repr__(self):
-        return f"dokument_batch={self.nåværende} (AIMD, {self._oom} minnefeil)"
+        fase = "slow-start" if self._slow_start else "lineær"
+        return f"dokument_batch={self.nåværende} (AIMD/{fase}, {self._oom} minnefeil)"
 
 
-# ── Hovudlogikk ──────────────────────────────────────────────────
+# ── Cache og filvalg ─────────────────────────────────────────────
 
 def _utled_cache_mappe(args):
     """Utled cache-mappe fra argumenter og miljøvariabler.
@@ -352,17 +289,6 @@ def _utled_cache_mappe(args):
         uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
         return os.path.join(cache_base, uttrekk_navn, "ocr")
     return None
-
-
-def _antall_cachet(filer, cache_mappe):
-    """Tell hvor mange filer som allerede har gyldig cache."""
-    n = 0
-    for f in filer:
-        navn = os.path.basename(f)
-        cachet = les_ocr_cache(cache_mappe, navn)
-        if cachet is not None:
-            n += 1
-    return n
 
 
 def _filtrer_cachet(filer, cache_mappe):
@@ -425,7 +351,7 @@ class _Profil:
         return dict(self._teller)
 
 
-# ── Arbeidsfordeling mellom GPU og CPU ───────────────────────────
+# ── Arbeidsfordeling mellom prosessene ───────────────────────────
 
 class _Arbeidsfordeler:
     """Delt filliste som GPU-hovedprosessen og CPU-workerne henter fra.
@@ -435,8 +361,8 @@ class _Arbeidsfordeler:
     fordeling gjettet på forhånd gir alltid en hale der den ene siden
     er ferdig og venter på den andre.
 
-    Telleren er en delt mp.Value; fillisten i hver worker er en
-    fork()-kopi. Derfor må CPU-workerne startes med fork-kontekst.
+    Telleren er en delt mp.Value; fillisten i hver prosess er en
+    fork()-kopi. Derfor må prosessene startes med fork-kontekst.
     """
 
     def __init__(self, filer, ctx=None):
@@ -466,11 +392,6 @@ class _Arbeidsfordeler:
             return self._lokal >= self.totalt
         return self._delt.value >= self.totalt
 
-    def utdelt(self):
-        """Antall filer delt ut så langt."""
-        return self._lokal if self._delt is None else self._delt.value
-
-
 # ── Feilmeldinger ────────────────────────────────────────────────
 
 def _kort_feil(e, maks=200):
@@ -480,10 +401,8 @@ def _kort_feil(e, maks=200):
     loggen fullstendig når flere prosesser treffer taket samtidig.
     """
     tekst = " ".join(str(e).split())
-    for markør in ("Error Message Summary:", "Error Message Summary"):
-        if markør in tekst:
-            tekst = tekst.split(markør)[-1]
-            break
+    if "Error Message Summary" in tekst:
+        tekst = tekst.split("Error Message Summary")[-1]
     tekst = tekst.strip(" -:")
     if not tekst:
         tekst = repr(e)
@@ -494,102 +413,6 @@ def _er_minnefeil(e):
     tekst = str(e)
     return ("Out of memory" in tekst or "ResourceExhausted" in tekst
             or "OutOfMemory" in tekst or isinstance(e, MemoryError))
-
-
-# ── OCR-motor per enhet ──────────────────────────────────────────
-
-def _lag_motor(device, cpu_tråder, ocr_batch, gpu_mb=None):
-    """Bygg (orienter_batch, les_tokens) for «gpu» eller «cpu».
-
-    GPU-varianten gjenbruker app-modulenes lazy singletons — paddle velger
-    GPU selv. CPU-varianten lager egne instanser med cpu_threads satt;
-    uten den tar hver prosess 10 tråder (Paddle-default) og maskinen blir
-    overtegnet.
-    """
-    if device == "gpu":
-        # Forsøk på å gi hver prosess sin egen andel av kortet. Målt:
-        # FLAGS_fraction_of_gpu_memory_to_use blir IKKE respektert av
-        # inferens-prediktoren (prosessene vokste til 31,7 av 32 GB likevel).
-        # FLAGS_gpu_memory_limit_mb settes i tillegg — virker den, feiler en
-        # prosess innenfor sitt eget budsjett i stedet for å tømme kortet for
-        # de andre. Uansett er det AIMD-regulatoren og omkjøringsstigen under
-        # som er den reelle kontrollen. Må settes før paddle rører GPU-en.
-        os.environ["FLAGS_allocator_strategy"] = "auto_growth"
-        if gpu_mb:
-            os.environ["FLAGS_gpu_memory_limit_mb"] = str(int(gpu_mb))
-
-        from orientering import finn_rotasjoner_batch
-        from paddle_ocr_model_fnr import les_tokens_batched
-
-        def orienter_batch(bilder):
-            return finn_rotasjoner_batch(bilder)
-
-        def les_tokens(bilder, batch=None):
-            return les_tokens_batched(bilder, batch_size=batch or ocr_batch)
-
-        return orienter_batch, les_tokens
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # tving CPU-modus
-    from config import NEDSKALERING, MIN_KONFIDENS, DET_SIDE_LEN, REC_BATCH
-    from paddleocr import PaddleOCR, DocImgOrientationClassification
-    from paddle_ocr_model_fnr import _les_tokens
-
-    reader = PaddleOCR(
-        lang="en",
-        device="cpu",
-        cpu_threads=cpu_tråder,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        text_det_limit_type="max",
-        text_det_limit_side_len=DET_SIDE_LEN,
-        text_recognition_batch_size=REC_BATCH,
-        text_detection_model_name="PP-OCRv6_medium_det",
-        text_recognition_model_name="PP-OCRv6_medium_rec",
-        text_detection_model_dir=os.path.join(_APP, "PP-OCRv6_medium_det_infer"),
-        text_recognition_model_dir=os.path.join(_APP, "PP-OCRv6_medium_rec_infer"),
-        enable_mkldnn=True,
-    )
-    ori_kwargs = dict(
-        model_name="PP-LCNet_x1_0_doc_ori",
-        model_dir=os.path.join(_APP, "PP-LCNet_x1_0_doc_ori_infer"),
-        device="cpu",
-    )
-    try:
-        orient = DocImgOrientationClassification(cpu_threads=cpu_tråder, **ori_kwargs)
-    except (TypeError, ValueError):
-        orient = DocImgOrientationClassification(**ori_kwargs)
-
-    def orienter_batch(bilder):
-        if not bilder:
-            return []
-        lite = [np.ascontiguousarray(b[::NEDSKALERING, ::NEDSKALERING]) for b in bilder]
-        try:
-            resultater = orient.predict(lite)
-        except Exception:
-            return [0] * len(bilder)
-        rotasjoner = []
-        for r in resultater:
-            vinkel = int(r["label_names"][0])
-            score = float(np.asarray(r["scores"]).reshape(-1)[0])
-            rotasjoner.append(0 if score < MIN_KONFIDENS else (vinkel // 90) % 4)
-        while len(rotasjoner) < len(bilder):
-            rotasjoner.append(0)
-        return rotasjoner
-
-    def les_tokens(bilder, batch=None):
-        steg = batch or ocr_batch
-        ut = []
-        for start in range(0, len(bilder), steg):
-            chunk = bilder[start:start + steg]
-            bgr = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
-            for res in (reader.predict(bgr, return_word_box=True) or []):
-                ut.append(_les_tokens(res))
-            while len(ut) < start + len(chunk):
-                ut.append([])
-        return ut
-
-    return orienter_batch, les_tokens
 
 
 # ── Pipeline-worker (én prosess = én komplett OCR-pipeline) ───────
@@ -630,7 +453,6 @@ def _pipeline(oppgave):
     kan en annen bruke GPU-en.
     """
     wid = oppgave["id"]
-    device = oppgave["device"]
     kø = oppgave["resultat_kø"]
     fordeler = oppgave["fordeler"]
     cache_mappe = oppgave["cache_mappe"]
@@ -638,30 +460,33 @@ def _pipeline(oppgave):
     prefetch = oppgave["prefetch"]
     minne_grense = oppgave["minne_grense"]
 
-    orienter_batch, les_tokens = _lag_motor(
-        device, oppgave["cpu_tråder"], ocr_batch, oppgave.get("gpu_mb"))
+    # Forsøk på å gi hver prosess sin egen andel av kortet. Målt:
+    # FLAGS_fraction_of_gpu_memory_to_use blir IKKE respektert av
+    # inferens-prediktoren, mens FLAGS_gpu_memory_limit_mb blir det —
+    # uten den vokser prosessene inn i hverandre til kortet er tomt.
+    # Må settes før paddle rører GPU-en, altså før importene under.
+    os.environ["FLAGS_allocator_strategy"] = "auto_growth"
+    if oppgave.get("gpu_mb"):
+        os.environ["FLAGS_gpu_memory_limit_mb"] = str(int(oppgave["gpu_mb"]))
+
+    from orientering import finn_rotasjoner_batch as orienter_batch
+    from paddle_ocr_model_fnr import les_tokens_batched
+
+    def les_tokens(bilder, batch=None):
+        return les_tokens_batched(bilder, batch_size=batch or ocr_batch)
 
     # Varm opp modellene — engangskostnad som ikke skal med i estimatene
     dummy = np.zeros((100, 100, 3), dtype=np.uint8)
     orienter_batch([dummy])
     les_tokens([dummy])
-    kø.put(("klar", wid, device, 0, ""))
+    kø.put(("klar", wid, "", 0, ""))
 
-    # Batchstørrelse. CPU-prosesser tar ett dokument om gangen; adaptiv
-    # styring leser GPU-minne og er meningsløs der.
-    if device == "cpu":
-        adaptiv, maks_batch_fast = None, oppgave["dokument_batch"] or 1
-    elif oppgave["dokument_batch"]:
+    if oppgave["dokument_batch"]:
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"]
-    elif oppgave.get("gpu_mb"):
-        # Hardt minnetak per prosess ⇒ minnefeil er signalet, ikke nvidia-smi
-        adaptiv = _AIMDBatchStørrelse(
-            start=2, minimum=1, maksimum=oppgave["maks_batch"])
-        maks_batch_fast = None
     else:
-        adaptiv = _AdaptivBatchStørrelse(
-            start=2, minimum=1, maksimum=oppgave["maks_batch"],
-            gpu_grense_prosent=oppgave["gpu_grense"])
+        adaptiv = _AIMDBatchStørrelse(
+            start=oppgave["start_batch"] or 4, minimum=1,
+            maksimum=oppgave["maks_batch"])
         maks_batch_fast = None
 
     profil = _Profil() if oppgave["profil"] else None
@@ -738,7 +563,7 @@ def _pipeline(oppgave):
     sist_rapport = 0
 
     def _stats(ferdig_nå):
-        return ("stats", wid, device, ferdig_nå, dict(
+        return ("stats", wid, "", ferdig_nå, dict(
             tider, kø=kø_dybde_sum / max(antall_batches, 1),
             batch=maks_batch_fast or (adaptiv.nåværende if adaptiv else 0),
             profil=profil.snapshot() if profil else None))
@@ -859,11 +684,12 @@ def main():
                    help="les fil-IDer fra en tekstfil (én per linje)")
     p.add_argument("--antall", default="alle",
                    help="antall filer når --velg er tom (tall, eller 'alle')")
-    p.add_argument("--gpu-prosesser", type=int, nargs="?", default=1, const=-1,
+    p.add_argument("--gpu-prosesser", type=int, nargs="?", default=4, const=-1,
                    metavar="N",
-                   help="antall parallelle GPU-pipeliner mot samme kort "
-                        "(1=som før, uten tall = auto). Hver prosess har sin "
-                        "egen CPU-forbehandling, som er den reelle flaskehalsen")
+                   help="antall parallelle pipeliner mot samme GPU (default: 4, "
+                        "uten tall = auto). Målt på V100S: ~77 %% av tiden i én "
+                        "pipeline er enkelttrådet CPU-forbehandling, så én "
+                        "prosess klarer ikke å mette kortet")
     p.add_argument("--workers", type=int, default=0,
                    help="tråder for PDF-rendering PER prosess (0=auto)")
     p.add_argument("--prefetch", type=int, default=0,
@@ -879,13 +705,14 @@ def main():
                         "Påvirker kun minne og hastighet, ikke resultatet")
     p.add_argument("--dokument-batch", type=int, default=0,
                    help="maks dokumenter per GPU-batch per prosess (0=adaptiv)")
-    p.add_argument("--gpu-grense", type=int, default=75,
-                   help="maks GPU-minnebruk i prosent før batchstørrelse reduseres (default: 75)")
+    p.add_argument("--start-batch", type=int, default=0,
+                   help="startverdi for den adaptive batchen (0=4). Vet du fra "
+                        "forrige kjøring hva maskinen tåler, hopp rett dit")
+    p.add_argument("--gpu-grense", type=int, default=90,
+                   help="hvor mye av GPU-minnet prosessene får dele, i prosent "
+                        "(default: 90). Deles likt mellom dem")
     p.add_argument("--hpi", action="store_true",
                    help="aktiver High Performance Inference (TensorRT) — krever kraftig GPU")
-    p.add_argument("--cpu-ocr", type=int, nargs="?", default=0, const=-1,
-                   metavar="N",
-                   help="antall CPU-OCR-prosesser i tillegg (0=ingen, uten tall = auto)")
     p.add_argument("--profil", action="store_true",
                    help="mål hvor prosessene bruker tiden (faser + stakk-prøver)")
     p.add_argument("--vis-ressurser", action="store_true",
@@ -948,41 +775,31 @@ def main():
         n_gpu = max(min(kjerner // 12, 6), 1)
     n_gpu = max(n_gpu, 1)
 
-    n_cpu = args.cpu_ocr
-    if n_cpu < 0:
-        n_cpu = max(min((kjerner - 6 * n_gpu) // 8, 8), 0)
+    # ── GPU-minne per prosess ────────────────────────────────────
+    # Uten et tak per prosess vokser allokatorene uavhengig til kortet er
+    # fullt (målt: 30,9 av 32 GB), og da feiler den prosessen som
+    # tilfeldigvis ber om minne sist.
+    gpu = _gpu_minne_info()
+    gpu_mb = None
+    if gpu and gpu[1] > 0:
+        # ~700 MB per prosess går til CUDA-kontekst og modellvekter
+        gpu_mb = max((gpu[1] * args.gpu_grense / 100 - 700 * n_gpu) / n_gpu, 512)
 
-    # ── OCR-batch ────────────────────────────────────────────────
+    # ── Sider per OCR-batch ──────────────────────────────────────
+    # Største driver av minnetoppen: deteksjonsmodellen holder
+    # aktiveringer for hele sidebatchen samtidig.
     if args.ocr_batch:
         ocr_batch = args.ocr_batch
+    elif gpu and gpu[1] >= 24000:
+        ocr_batch = max(32 // n_gpu, 4)
+    elif gpu and gpu[1] >= 16000:
+        ocr_batch = max(16 // n_gpu, 4)
     else:
-        gpu = _gpu_minne_info()
-        if gpu and gpu[1] >= 24000:
-            ocr_batch = 32
-        elif gpu and gpu[1] >= 16000:
-            ocr_batch = 16
-        else:
-            ocr_batch = SIDER_PER_OCR_BATCH
-        if n_gpu > 1:  # del GPU-minnet mellom prosessene
-            ocr_batch = max(ocr_batch // n_gpu, 4)
-
-    # ── Tråder og prefetch per prosess ───────────────────────────
-    # Del GPU-minnet mellom prosessene. Uten dette vokser allokatorene
-    # uavhengig til kortet er fullt (målt: 30,9 av 32 GB), og da feiler
-    # den prosessen som tilfeldigvis ber om minne sist.
-    gpu_mb = None
-    if n_gpu > 1:
-        gpu = _gpu_minne_info()
-        if gpu and gpu[1] > 0:
-            # ~700 MB per prosess går til CUDA-kontekst og modellvekter
-            til_deling = gpu[1] * args.gpu_grense / 100 - 700 * n_gpu
-            gpu_mb = max(til_deling / n_gpu, 512)
+        ocr_batch = SIDER_PER_OCR_BATCH
 
     workers = args.workers or min(max(kjerner // (4 * n_gpu), 2), 16)
     prefetch = args.prefetch or max(_auto_prefetch() // n_gpu, 8)
-    # Med hardt minnetak per prosess trenger ikke taket være stramt —
-    # AIMD-regulatoren og omkjøringen håndterer resten.
-    maks_batch = 12 if gpu_mb else max(16 // n_gpu, 4)
+    maks_batch = 12   # taket for AIMD; minnetaket over er den reelle grensen
 
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
@@ -993,24 +810,16 @@ def main():
     print(f"  GPU-pipeliner: {n_gpu} × (1 hovedtråd + {workers} render-tråder), "
           f"prefetch {prefetch}/prosess")
     if gpu_mb:
-        print(f"  GPU-minne:     forsøker {gpu_mb:.0f} MB per prosess "
+        print(f"  GPU-minne:     {gpu_mb:.0f} MB per prosess "
               f"(FLAGS_gpu_memory_limit_mb)")
     if args.dokument_batch:
         print(f"  Dokument-batch: fast {args.dokument_batch} per prosess")
-    elif gpu_mb:
-        print(f"  Dokument-batch: AIMD (vokser til {maks_batch}, halveres ved "
-              f"minnefeil)")
     else:
-        print(f"  Dokument-batch: adaptiv (GPU-grense {args.gpu_grense}%, "
-              f"maks {maks_batch} per prosess)")
+        print(f"  Dokument-batch: AIMD fra {args.start_batch or 4}, dobler til "
+              f"maks {maks_batch}, halveres ved minnefeil")
 
-    cpu_tråder = 1
-    if n_cpu:
-        ledige = max(kjerner - n_gpu * (workers + 1), n_cpu)
-        cpu_tråder = max(ledige // n_cpu, 1)
-        print(f"  CPU-OCR:       {n_cpu} prosesser × {cpu_tråder} tråder")
     print(f"  OCR-batch: {ocr_batch} sider  |  filene deles dynamisk mellom "
-          f"{n_gpu + n_cpu} prosess(er)")
+          f"{n_gpu} prosess(er)")
     _skriv_ressursstatus()
 
     # ── Start prosessene ─────────────────────────────────────────
@@ -1022,22 +831,19 @@ def main():
         resultat_kø=kø, fordeler=fordeler, cache_mappe=cache_mappe,
         workers=workers, prefetch=prefetch, minne_grense=args.minne_grense,
         ocr_batch=ocr_batch, dokument_batch=args.dokument_batch,
-        gpu_grense=args.gpu_grense, maks_batch=maks_batch, profil=args.profil,
-        gpu_mb=gpu_mb,
+        maks_batch=maks_batch, start_batch=args.start_batch,
+        gpu_mb=gpu_mb, profil=args.profil,
     )
     prosesser = []
-    for i in range(n_gpu + n_cpu):
-        device = "gpu" if i < n_gpu else "cpu"
-        navn = f"{'g' if device == 'gpu' else 'c'}{i if device == 'gpu' else i - n_gpu}"
-        oppgave = dict(felles, id=navn, device=device,
-                       cpu_tråder=cpu_tråder if device == "cpu" else 1)
+    for i in range(n_gpu):
+        oppgave = dict(felles, id=f"g{i}")
         pr = ctx.Process(target=_worker, args=(oppgave,), daemon=True)
         pr.start()
         prosesser.append(pr)
 
     totalt = len(filer)
     print(f"\nStarter OCR-caching av {totalt} dokumenter "
-          f"({n_gpu} GPU + {n_cpu} CPU). Laster modeller...\n")
+          f"i {n_gpu} prosess(er). Laster modeller...\n")
 
     # ── Koordinator: samle resultater og skriv framdrift ─────────
     ferdig = 0
@@ -1064,7 +870,7 @@ def main():
 
             if status == "klar":
                 klar += 1
-                print(f"  [{wid}] modeller lastet ({navn})")
+                print(f"  [{wid}] modeller lastet")
                 if klar == len(prosesser):
                     start_alle = time.perf_counter()
                     print(f"\nAlle {klar} prosesser i gang.\n")
