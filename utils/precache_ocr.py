@@ -29,7 +29,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 warnings.filterwarnings("ignore", message=".*ccache.*")
-os.environ["GLOG_minloglevel"] = "2"
+os.environ["GLOG_minloglevel"] = "3"
+os.environ["GLOG_v"] = "0"
+os.environ["FLAGS_call_stack_level"] = "0"
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))
 if _UTILS not in sys.path:
@@ -360,8 +362,14 @@ def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worke
     if _app not in sys.path:
         sys.path.insert(0, _app)
 
-    os.environ["GLOG_minloglevel"] = "2"
+    os.environ["GLOG_minloglevel"] = "3"
+    os.environ["GLOG_v"] = "0"
+    os.environ["FLAGS_call_stack_level"] = "0"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # tving CPU-modus
+
+    # Supprimér C++-nivå oneDNN-spam fra PaddlePaddle (ReduceMeanCheckIfOneDNNSupport osv.)
+    _devnull = open(os.devnull, "w")
+    os.dup2(_devnull.fileno(), 2)  # redirect stderr → /dev/null
 
     import numpy as np
     from load_pdf import les_sider
