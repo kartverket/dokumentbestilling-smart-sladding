@@ -481,6 +481,7 @@ def main():
     tid_io = 0.0          # tid brukt på cache-skriving
     antall_batches = 0
     kø_dybde_sum = 0      # sum av kødybde ved batch-start (for snitt)
+    neste_status = 20     # neste dokument-tall som utløser flaskehals-print
 
     while ferdig < totalt:
         # Sørg for at køen er fylt opp
@@ -600,7 +601,8 @@ def main():
         _frigjør_gpu_cache()
 
         # Logg adaptiv batchstørrelse og bottleneck-info
-        if ferdig % 20 == 0:
+        if ferdig >= neste_status:
+            neste_status += 20
             elapsed = time.perf_counter() - start_alle
             total_tracked = tid_vente_cpu + tid_gpu
             if total_tracked > 0:
