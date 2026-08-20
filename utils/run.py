@@ -67,8 +67,9 @@ def _sider_fra_resultat(resultat, pdf_bytes):
                     "y1": (b["y"] + b["height"]) * SKALA,
                     "kilde": b.get("kilde", "paddle"),
                 }
-                if b.get("conf") is not None:
-                    boks["conf"] = b["conf"]
+                conf = b.get("yolo_conf") or b.get("paddle_rec_score")
+                if conf is not None:
+                    boks["conf"] = conf
                 bokser.append(boks)
             sider.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
                           "bokser": bokser})

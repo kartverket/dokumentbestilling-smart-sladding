@@ -18,8 +18,8 @@ _OCR_SIFFER_MAP = str.maketrans("oOsSlIbB", "00551166")
 def _normaliser_ocr(tekst):
     return tekst.translate(_OCR_SIFFER_MAP)
 
-Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1"])
-SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn"])
+Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score", "det_score"])
+SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn", "rec_score", "det_score"])
 Treff = namedtuple("Treff", ["start", "end"])
 
 
@@ -129,16 +129,23 @@ def _les_tokens(res):
     if not res:
         return tokens
 
+    dt_scores = res.get("dt_scores") or []
+
     ord_per_linje = res.get("text_word")
     boks_per_linje = res.get("text_word_boxes")
     if ord_per_linje and boks_per_linje:
-        for ord_liste, boks_liste in zip(ord_per_linje, boks_per_linje):
-            for tekst, boks in zip(ord_liste, boks_liste):
-                if not tekst.strip():                 
+        scores_per_linje = res.get("text_word_scores") or []
+        for linje_idx, (ord_liste, boks_liste) in enumerate(zip(ord_per_linje, boks_per_linje)):
+            # Hent linje-score-liste hvis tilgjengelig
+            linje_scores = scores_per_linje[linje_idx] if linje_idx < len(scores_per_linje) else []
+            det_score = float(dt_scores[linje_idx]) if linje_idx < len(dt_scores) else None
+            for ord_idx, (tekst, boks) in enumerate(zip(ord_liste, boks_liste)):
+                if not tekst.strip():
                     continue
+                rec_score = float(linje_scores[ord_idx]) if ord_idx < len(linje_scores) else None
                 x0, y0, x1, y1 = (float(v) for v in np.asarray(boks).reshape(-1)[:4])
                 tokens.append(Token(tekst, min(x0, x1), min(y0, y1),
-                                    max(x0, x1), max(y0, y1)))
+                                    max(x0, x1), max(y0, y1), rec_score, det_score))
         if tokens:
             return tokens
     # Fallback: linjenivaa (fire hjornepunkter per boks).
@@ -146,10 +153,13 @@ def _les_tokens(res):
     polys = res.get("rec_polys")
     if polys is None:
         polys = res.get("dt_polys") or []
-    for tekst, poly in zip(tekster, polys):
+    scores = res.get("rec_scores") or []
+    for idx, (tekst, poly) in enumerate(zip(tekster, polys)):
+        rec_score = float(scores[idx]) if idx < len(scores) else None
+        det_score = float(dt_scores[idx]) if idx < len(dt_scores) else None
         pts = np.asarray(poly, dtype=float)
         tokens.append(Token(tekst, float(pts[:, 0].min()), float(pts[:, 1].min()),
-                            float(pts[:, 0].max()), float(pts[:, 1].max())))
+                            float(pts[:, 0].max()), float(pts[:, 1].max()), rec_score, det_score))
     return tokens
 
 
@@ -181,7 +191,7 @@ def _bygg_linjetekst(linje):
             if _normaliser_ocr(ch).isdigit():
                 venstre = token.x0 + bredde * posisjon / antall
                 hoyre = token.x0 + bredde * (posisjon + 1) / antall
-                kart.append(SifferBoks(venstre, hoyre, token.y0, token.y1))
+                kart.append(SifferBoks(venstre, hoyre, token.y0, token.y1, token.rec_score, token.det_score))
             else:
                 kart.append(None)
     return "".join(tegn), kart
@@ -228,7 +238,13 @@ def finn_bokser_fra_tokens(tokens):
             if boks is None:
                 continue
             cifre = re.sub(r"\D", "", _normaliser_ocr(tekst[treff.start:treff.end]))
-            bokser.append((boks, gyldig_mod11(cifre)))
+            # Beregn paddle rec_score: minimum rec_score blant involverte tokens
+            rec_scores = [sb.rec_score for sb in sifferbokser if sb.rec_score is not None]
+            rec_score = round(min(rec_scores), 3) if rec_scores else None
+            # Beregn paddle det_score: minimum det_score blant involverte tokens
+            det_scores = [sb.det_score for sb in sifferbokser if sb.det_score is not None]
+            det_score = round(min(det_scores), 3) if det_scores else None
+            bokser.append((boks, gyldig_mod11(cifre), rec_score, det_score))
     return bokser
 
 
