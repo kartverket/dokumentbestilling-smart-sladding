@@ -239,9 +239,25 @@ class _AdaptivBatchStørrelse:
         self.gpu_grense = gpu_grense_prosent
         self._forrige_gpu_pct = None
         self._stabil_teller = 0  # antall batches under grensen
+        self._sperre = 0         # batches uten vekst etter tom-for-minne
+
+    def oom(self):
+        """Kalles etter tom-for-minne: halver og utsett ny vekst.
+
+        nvidia-smi viser paddle-allokatorenes høyvannsmerke, ikke ledig
+        minne akkurat nå. Etter en minnefeil er den målingen upålitelig,
+        så vi holder oss nede en stund uansett hva den sier.
+        """
+        self.nåværende = max(self.minimum, self.nåværende // 2)
+        self._stabil_teller = 0
+        self._sperre = 10
 
     def neste(self):
         """Returner neste batchstørrelse, justert basert på GPU-minne."""
+        if self._sperre > 0:
+            self._sperre -= 1
+            return self.nåværende
+
         gpu_pct = _gpu_prosent_brukt()
         if gpu_pct is None:
             return self.nåværende  # kan ikke lese GPU, behold nåværende
@@ -273,9 +289,50 @@ class _AdaptivBatchStørrelse:
 
         return self.nåværende
 
+    def ok(self):
+        """Batch gikk bra. (Her styres veksten av minnemålingen.)"""
+
     def __repr__(self):
         gpu_str = f" GPU:{self._forrige_gpu_pct:.0f}%" if self._forrige_gpu_pct else ""
         return f"dokument_batch={self.nåværende}{gpu_str}"
+
+
+class _AIMDBatchStørrelse:
+    """Batchstørrelse styrt av faktiske minnefeil, ikke av nvidia-smi.
+
+    Når flere prosesser deler kortet med hvert sitt minnetak er den globale
+    målingen ubrukelig som styringssignal: den ligger *ved* taket når alt
+    går som planlagt, og en måling-styrt regulator bremser da hele tiden.
+
+    Her vokser batchen ett hakk for hver batch som går bra, og halveres når
+    prosessen går tom for minne — samme mønster som TCP. Siden en minnefeil
+    bare koster en omkjøring av samme dokumenter, presser dette kortet så
+    hardt det tåler uten å miste noe.
+    """
+
+    def __init__(self, start=2, minimum=1, maksimum=12):
+        self.nåværende = start
+        self.minimum = minimum
+        self.maksimum = maksimum
+        self._ok_siden = 0
+        self._oom = 0
+
+    def neste(self):
+        if self._ok_siden >= 2 and self.nåværende < self.maksimum:
+            self.nåværende += 1
+            self._ok_siden = 0
+        return self.nåværende
+
+    def ok(self):
+        self._ok_siden += 1
+
+    def oom(self):
+        self.nåværende = max(self.minimum, self.nåværende // 2)
+        self._ok_siden = -4   # hold igjen noen batcher før ny vekst
+        self._oom += 1
+
+    def __repr__(self):
+        return f"dokument_batch={self.nåværende} (AIMD, {self._oom} minnefeil)"
 
 
 # ── Hovudlogikk ──────────────────────────────────────────────────
@@ -414,9 +471,34 @@ class _Arbeidsfordeler:
         return self._lokal if self._delt is None else self._delt.value
 
 
+# ── Feilmeldinger ────────────────────────────────────────────────
+
+def _kort_feil(e, maks=200):
+    """Kort én-linjes sammendrag av en paddle-feil.
+
+    Paddle sine minnefeil er 4-5 KB C++-traceback. Uforkortet fyller de
+    loggen fullstendig når flere prosesser treffer taket samtidig.
+    """
+    tekst = " ".join(str(e).split())
+    for markør in ("Error Message Summary:", "Error Message Summary"):
+        if markør in tekst:
+            tekst = tekst.split(markør)[-1]
+            break
+    tekst = tekst.strip(" -:")
+    if not tekst:
+        tekst = repr(e)
+    return tekst[:maks]
+
+
+def _er_minnefeil(e):
+    tekst = str(e)
+    return ("Out of memory" in tekst or "ResourceExhausted" in tekst
+            or "OutOfMemory" in tekst or isinstance(e, MemoryError))
+
+
 # ── OCR-motor per enhet ──────────────────────────────────────────
 
-def _lag_motor(device, cpu_tråder, ocr_batch):
+def _lag_motor(device, cpu_tråder, ocr_batch, gpu_andel=None):
     """Bygg (orienter_batch, les_tokens) for «gpu» eller «cpu».
 
     GPU-varianten gjenbruker app-modulenes lazy singletons — paddle velger
@@ -425,14 +507,22 @@ def _lag_motor(device, cpu_tråder, ocr_batch):
     overtegnet.
     """
     if device == "gpu":
+        # Hver prosess får sin egen andel av kortet. Uten dette vokser
+        # allokatorene uavhengig av hverandre til kortet er fullt, og da
+        # feiler den prosessen som tilfeldigvis ber om minne sist.
+        # Må settes før paddle initialiserer GPU-allokatoren.
+        os.environ["FLAGS_allocator_strategy"] = "auto_growth"
+        if gpu_andel:
+            os.environ["FLAGS_fraction_of_gpu_memory_to_use"] = f"{gpu_andel:.4f}"
+
         from orientering import finn_rotasjoner_batch
         from paddle_ocr_model_fnr import les_tokens_batched
 
         def orienter_batch(bilder):
             return finn_rotasjoner_batch(bilder)
 
-        def les_tokens(bilder):
-            return les_tokens_batched(bilder, batch_size=ocr_batch)
+        def les_tokens(bilder, batch=None):
+            return les_tokens_batched(bilder, batch_size=batch or ocr_batch)
 
         return orienter_batch, les_tokens
 
@@ -484,10 +574,11 @@ def _lag_motor(device, cpu_tråder, ocr_batch):
             rotasjoner.append(0)
         return rotasjoner
 
-    def les_tokens(bilder):
+    def les_tokens(bilder, batch=None):
+        steg = batch or ocr_batch
         ut = []
-        for start in range(0, len(bilder), ocr_batch):
-            chunk = bilder[start:start + ocr_batch]
+        for start in range(0, len(bilder), steg):
+            chunk = bilder[start:start + steg]
             bgr = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
             for res in (reader.predict(bgr, return_word_box=True) or []):
                 ut.append(_les_tokens(res))
@@ -532,7 +623,7 @@ def _pipeline(oppgave):
     """Rendr PDF-er i tråder, kjør orientering + OCR i batch, skriv cache.
 
     Identisk arbeid uansett enhet — flere slike prosesser mot samme GPU er
-    hele poenget: mens én prosess står i enkelttrådet normalisering på CPU,
+    hele poenget: mens én prosess står i enkelttrådet CPU-forbehandling,
     kan en annen bruke GPU-en.
     """
     wid = oppgave["id"]
@@ -544,7 +635,8 @@ def _pipeline(oppgave):
     prefetch = oppgave["prefetch"]
     minne_grense = oppgave["minne_grense"]
 
-    orienter_batch, les_tokens = _lag_motor(device, oppgave["cpu_tråder"], ocr_batch)
+    orienter_batch, les_tokens = _lag_motor(
+        device, oppgave["cpu_tråder"], ocr_batch, oppgave.get("gpu_andel"))
 
     # Varm opp modellene — engangskostnad som ikke skal med i estimatene
     dummy = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -558,9 +650,14 @@ def _pipeline(oppgave):
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"] or 1
     elif oppgave["dokument_batch"]:
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"]
+    elif oppgave.get("gpu_andel"):
+        # Hardt minnetak per prosess ⇒ minnefeil er signalet, ikke nvidia-smi
+        adaptiv = _AIMDBatchStørrelse(
+            start=2, minimum=1, maksimum=oppgave["maks_batch"])
+        maks_batch_fast = None
     else:
         adaptiv = _AdaptivBatchStørrelse(
-            start=4, minimum=2, maksimum=oppgave["maks_batch"],
+            start=2, minimum=1, maksimum=oppgave["maks_batch"],
             gpu_grense_prosent=oppgave["gpu_grense"])
         maks_batch_fast = None
 
@@ -578,13 +675,70 @@ def _pipeline(oppgave):
                 break
             prefetch_kø.append((sti, executor.submit(_last_pdf, sti)))
 
+    tider = {"vente": 0.0, "orient": 0.0, "rot": 0.0, "ocr": 0.0, "cache": 0.0}
+
+    def _behandle(gruppe, sider_om_gangen=None):
+        """Orientering + rotasjon + OCR for en gruppe dokumenter."""
+        alle_bilder, dok_grenser = [], []
+        for _navn, bilder in gruppe:
+            dok_grenser.append((len(alle_bilder), len(bilder)))
+            alle_bilder.extend(bilder)
+
+        t0 = time.perf_counter()
+        ori_steg = sider_om_gangen or max(4 * ocr_batch, 8)
+        alle_rotasjoner = []
+        for i in range(0, len(alle_bilder), ori_steg):
+            alle_rotasjoner.extend(orienter_batch(alle_bilder[i:i + ori_steg]))
+        tider["orient"] += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        rotert = [np.rot90(b, k) if k else b
+                  for b, k in zip(alle_bilder, alle_rotasjoner)]
+        tider["rot"] += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        try:
+            alle_tokens = les_tokens(rotert, batch=sider_om_gangen)
+        finally:
+            tider["ocr"] += time.perf_counter() - t0
+            del rotert
+        return dok_grenser, alle_rotasjoner, alle_tokens
+
+    def _rapporter(gruppe, dok_grenser, rotasjoner, tokens, tid_batch):
+        """Skriv cache og meld ferdige dokumenter på køen."""
+        n = 0
+        batch_sider = sum(s for _, s in dok_grenser)
+        for idx, (navn, _bilder) in enumerate(gruppe):
+            start_idx, n_sider = dok_grenser[idx]
+            rot = rotasjoner[start_idx:start_idx + n_sider]
+            tok = tokens[start_idx:start_idx + n_sider]
+
+            t0 = time.perf_counter()
+            skriv_ocr_cache(cache_mappe, navn, rot, tok)
+            tider["cache"] += time.perf_counter() - t0
+
+            n += 1
+            kø.put(("ok", wid, navn, n_sider, {
+                "tokens": sum(len(ts) for ts in tok),
+                "rot": list(rot),
+                "batch_dok": len(gruppe),
+                "batch_sider": batch_sider,
+                "batch_tid": tid_batch,
+            }))
+        return n
+
     _fyll_kø()
 
     ferdig = 0
-    tid_vente = tid_orient = tid_rotasjon = tid_ocr = tid_cache = 0.0
     kø_dybde_sum = 0
     antall_batches = 0
     sist_rapport = 0
+
+    def _stats(ferdig_nå):
+        return ("stats", wid, device, ferdig_nå, dict(
+            tider, kø=kø_dybde_sum / max(antall_batches, 1),
+            batch=maks_batch_fast or (adaptiv.nåværende if adaptiv else 0),
+            profil=profil.snapshot() if profil else None))
 
     while True:
         _fyll_kø()
@@ -604,91 +758,71 @@ def _pipeline(oppgave):
         antall_batches += 1
 
         batch_docs = []
-        _t0 = time.perf_counter()
+        t0 = time.perf_counter()
         while prefetch_kø and len(batch_docs) < maks_batch:
             sti, fut = prefetch_kø.popleft()
             sti, resultat = fut.result()
             navn = os.path.basename(sti)
             if isinstance(resultat, Exception):
-                kø.put(("feil", wid, navn, 0, repr(resultat)))
+                kø.put(("feil", wid, navn, 0, _kort_feil(resultat)))
                 continue
             batch_docs.append((navn, resultat))
             _fyll_kø()
-        tid_vente += time.perf_counter() - _t0
+        tider["vente"] += time.perf_counter() - t0
 
         if not batch_docs:
             continue
 
-        start_batch = time.perf_counter()
-        try:
-            alle_bilder = []
-            dok_grenser = []
-            for navn, bilder in batch_docs:
-                dok_grenser.append((len(alle_bilder), len(bilder)))
-                alle_bilder.extend(bilder)
-
-            _t0 = time.perf_counter()
-            alle_rotasjoner = orienter_batch(alle_bilder)
-            tid_orient += time.perf_counter() - _t0
-
-            _t0 = time.perf_counter()
-            alle_bilder_ocr = [np.rot90(b, k) if k else b
-                               for b, k in zip(alle_bilder, alle_rotasjoner)]
-            tid_rotasjon += time.perf_counter() - _t0
-
-            _t0 = time.perf_counter()
-            alle_tokens = les_tokens(alle_bilder_ocr)
-            tid_ocr += time.perf_counter() - _t0
-
-            del alle_bilder, alle_bilder_ocr
-
-            batch_sider = sum(n for _, n in dok_grenser)
-            tid_batch = time.perf_counter() - start_batch
-            for dok_idx, (navn, bilder) in enumerate(batch_docs):
-                start_idx, n_sider = dok_grenser[dok_idx]
-                rotasjoner = alle_rotasjoner[start_idx:start_idx + n_sider]
-                tokens_per_side = alle_tokens[start_idx:start_idx + n_sider]
-
-                _t0 = time.perf_counter()
-                skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
-                tid_cache += time.perf_counter() - _t0
-
-                ferdig += 1
-                kø.put(("ok", wid, navn, n_sider, {
-                    "tokens": sum(len(ts) for ts in tokens_per_side),
-                    "rot": list(rotasjoner),
-                    "batch_dok": len(batch_docs),
-                    "batch_sider": batch_sider,
-                    "batch_tid": tid_batch,
-                }))
-        except Exception as e:
-            for navn, _bilder in batch_docs:
-                kø.put(("feil", wid, navn, 0, repr(e)))
-            continue
+        # Kjør batchen. Tom-for-minne håndteres ved å halvere gruppen og
+        # prøve igjen — et dokument skal ikke gå tapt fordi en annen
+        # prosess tilfeldigvis holdt minnet i det øyeblikket.
+        arbeid = [batch_docs]
+        while arbeid:
+            gruppe = arbeid.pop()
+            start_gruppe = time.perf_counter()
+            try:
+                dok_grenser, rot, tok = _behandle(gruppe)
+            except Exception as e:
+                _frigjør_gpu_cache()
+                minnefeil = _er_minnefeil(e)
+                if minnefeil and adaptiv:
+                    adaptiv.oom()
+                if minnefeil and len(gruppe) > 1:
+                    midt = len(gruppe) // 2
+                    arbeid.append(gruppe[midt:])
+                    arbeid.append(gruppe[:midt])
+                    kø.put(("oom", wid, "", len(gruppe),
+                            f"deler batchen (→ {midt} + {len(gruppe) - midt} dok)"))
+                    continue
+                if minnefeil:
+                    # Ett dokument alene: prøv én side om gangen
+                    try:
+                        dok_grenser, rot, tok = _behandle(gruppe, sider_om_gangen=1)
+                    except Exception as e2:
+                        _frigjør_gpu_cache()
+                        kø.put(("feil", wid, gruppe[0][0], 0, _kort_feil(e2)))
+                        continue
+                    kø.put(("oom", wid, gruppe[0][0], 1, "kjørt side for side"))
+                else:
+                    for navn, _b in gruppe:
+                        kø.put(("feil", wid, navn, 0, _kort_feil(e)))
+                    continue
+            if adaptiv:
+                adaptiv.ok()
+            ferdig += _rapporter(gruppe, dok_grenser, rot, tok,
+                                 time.perf_counter() - start_gruppe)
 
         # Frigjør cachet GPU-minne — holder minnebruken flat over tid
         _frigjør_gpu_cache()
 
         if ferdig - sist_rapport >= 20:
             sist_rapport = ferdig
-            kø.put(("stats", wid, device, ferdig, {
-                "vente": tid_vente, "orient": tid_orient, "rot": tid_rotasjon,
-                "ocr": tid_ocr, "cache": tid_cache,
-                "kø": kø_dybde_sum / max(antall_batches, 1),
-                "batch": maks_batch_fast or adaptiv.nåværende,
-                "profil": profil.snapshot() if profil else None,
-            }))
+            kø.put(_stats(ferdig))
 
     executor.shutdown(wait=True)
     if profil:
         profil.stopp()
-    kø.put(("stats", wid, device, ferdig, {
-        "vente": tid_vente, "orient": tid_orient, "rot": tid_rotasjon,
-        "ocr": tid_ocr, "cache": tid_cache,
-        "kø": kø_dybde_sum / max(antall_batches, 1),
-        "batch": maks_batch_fast or (adaptiv.nåværende if adaptiv else 0),
-        "profil": profil.snapshot() if profil else None,
-    }))
+    kø.put(_stats(ferdig))
     return ferdig
 
 
@@ -811,17 +945,40 @@ def main():
             ocr_batch = max(ocr_batch // n_gpu, SIDER_PER_OCR_BATCH)
 
     # ── Tråder og prefetch per prosess ───────────────────────────
+    # Del GPU-minnet mellom prosessene. Uten dette vokser allokatorene
+    # uavhengig til kortet er fullt (målt: 30,9 av 32 GB), og da feiler
+    # den prosessen som tilfeldigvis ber om minne sist.
+    gpu_andel = None
+    if n_gpu > 1:
+        gpu = _gpu_minne_info()
+        if gpu and gpu[1] > 0:
+            # ~700 MB per prosess går til CUDA-kontekst og modellvekter
+            til_deling = gpu[1] * args.gpu_grense / 100 - 700 * n_gpu
+            gpu_andel = max(til_deling / gpu[1] / n_gpu, 0.05)
+        else:
+            gpu_andel = (args.gpu_grense / 100) / n_gpu
+
     workers = args.workers or min(max(kjerner // (4 * n_gpu), 2), 16)
     prefetch = args.prefetch or max(_auto_prefetch() // n_gpu, 8)
-    maks_batch = max(16 // n_gpu, 4)
+    # Med hardt minnetak per prosess trenger ikke taket være stramt —
+    # AIMD-regulatoren og omkjøringen håndterer resten.
+    maks_batch = 12 if gpu_andel else max(16 // n_gpu, 4)
 
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
 
     print(f"  GPU-pipeliner: {n_gpu} × (1 hovedtråd + {workers} render-tråder), "
           f"prefetch {prefetch}/prosess")
+    if gpu_andel:
+        gpu = _gpu_minne_info()
+        mb = gpu[1] * gpu_andel if gpu else 0
+        print(f"  GPU-minne:     {100 * gpu_andel:.0f}% per prosess"
+              + (f" (~{mb:.0f} MB)" if mb else ""))
     if args.dokument_batch:
         print(f"  Dokument-batch: fast {args.dokument_batch} per prosess")
+    elif gpu_andel:
+        print(f"  Dokument-batch: AIMD (vokser til {maks_batch}, halveres ved "
+              f"minnefeil)")
     else:
         print(f"  Dokument-batch: adaptiv (GPU-grense {args.gpu_grense}%, "
               f"maks {maks_batch} per prosess)")
@@ -845,6 +1002,7 @@ def main():
         workers=workers, prefetch=prefetch, minne_grense=args.minne_grense,
         ocr_batch=ocr_batch, dokument_batch=args.dokument_batch,
         gpu_grense=args.gpu_grense, maks_batch=maks_batch, profil=args.profil,
+        gpu_andel=gpu_andel,
     )
     prosesser = []
     for i in range(n_gpu + n_cpu):
@@ -868,6 +1026,7 @@ def main():
     stats = {}
     klar = 0
     avsluttet = 0
+    oom_hendelser = 0
     start_alle = None
     neste_status = 20
     neste_ressurs = 100
@@ -894,6 +1053,11 @@ def main():
                 feilet.append((navn, data))
                 ferdig += 1
                 print(f"[{ferdig}/{totalt}] ✗ {navn} [{wid}]: {data}")
+                continue
+
+            if status == "oom":
+                oom_hendelser += 1
+                print(f"  [{wid}] GPU tom for minne på {n} dok — {data}")
                 continue
 
             if status == "worker-feil":
@@ -952,6 +1116,9 @@ def main():
         dok, sider = per_prosess[wid]
         print(f"  [{wid}] {dok} dok, {sider} sider "
               f"({100 * dok / max(ferdig, 1):.0f}%)")
+    if oom_hendelser:
+        print(f"  Tom-for-minne: {oom_hendelser} ganger (batchen ble delt og "
+              f"kjørt om — ingen dokumenter tapt av det)")
     print(f"  Vegg-tid:   {_fmt_tid(vegg_tid)}")
     if vegg_tid > 0:
         print(f"  Throughput: {total_sider / vegg_tid:.2f} sider/s, "
