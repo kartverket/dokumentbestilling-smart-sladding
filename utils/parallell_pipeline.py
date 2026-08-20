@@ -222,6 +222,14 @@ def _last_pdf(sti):
 
 # ── Batchstørrelse ───────────────────────────────────────────────
 
+# Gulv for AIMD. Gulvet styrer bare hvor lav den *vedvarende* batchen
+# kan bli mens kortet er opptatt av noe annet — selve gjenopprettingen
+# under en minnefeil deler gruppa lokalt (12→6→3→1) og går side for side
+# til slutt, uavhengig av dette tallet. Da er poenget med gulvet å gi
+# fra seg mest mulig, ikke å holde på gjennomstrømning.
+MIN_BATCH = 1
+
+
 class AIMDBatchStørrelse:
     """Batchstørrelse styrt av faktiske minnefeil, ikke av nvidia-smi.
 
@@ -229,14 +237,15 @@ class AIMDBatchStørrelse:
     målingen ubrukelig som styringssignal: den ligger *ved* taket når alt
     går som planlagt, og en måling-styrt regulator bremser da hele tiden.
 
-    Samme mønster som TCP: dobling til første minnefeil (slow-start), så
-    halvering og forsiktig lineær vekst videre. Doblingen finner taket i
-    log₂-steg — 4→8→12 tar tre batcher der lineær vekst brukte tjue. Siden
-    en minnefeil bare koster en omkjøring av de samme dokumentene, er det
-    billig å lete oppover.
+    Samme mønster som TCP, men vi starter på taket i stedet for å lete
+    oss opp til det: minnetaket per prosess er alt regnet ut fra kortet
+    (FLAGS_gpu_memory_limit_mb), så slow-start fant aldri annet enn den
+    grensen vi selv satte — den kostet bare de første minuttene på små
+    batcher. Kommer det en minnefeil likevel, typisk fordi noe annet tok
+    kortet underveis, halverer vi og vokser forsiktig lineært tilbake.
     """
 
-    def __init__(self, start=4, minimum=1, maksimum=12):
+    def __init__(self, start=12, minimum=MIN_BATCH, maksimum=12):
         self.nåværende = max(min(start, maksimum), minimum)
         self.minimum = minimum
         self.maksimum = maksimum
@@ -410,8 +419,9 @@ def _pipeline(oppgave):
     if oppgave["dokument_batch"]:
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"]
     else:
-        adaptiv = AIMDBatchStørrelse(start=oppgave["start_batch"] or 4,
-                                     minimum=1, maksimum=oppgave["maks_batch"])
+        adaptiv = AIMDBatchStørrelse(
+            start=oppgave["start_batch"] or oppgave["maks_batch"],
+            minimum=MIN_BATCH, maksimum=oppgave["maks_batch"])
         maks_batch_fast = None
 
     profil = Profil() if oppgave["profil"] else None
@@ -575,8 +585,8 @@ def legg_til_argumenter(p):
     p.add_argument("--dokument-batch", type=int, default=0,
                    help="maks dokumenter per batch per prosess (0=adaptiv)")
     p.add_argument("--start-batch", type=int, default=0,
-                   help="startverdi for den adaptive batchen (0=4). Vet du fra "
-                        "forrige kjøring hva maskinen tåler, hopp rett dit")
+                   help="startverdi for den adaptive batchen (0=maks). Sett "
+                        "den lavere om du vet at noe annet deler kortet")
     p.add_argument("--gpu-grense", type=int, default=90,
                    help="hvor mye av GPU-minnet prosessene får dele, i prosent. "
                         "Deles likt mellom dem")
@@ -633,22 +643,68 @@ def oppsett(args, ekstra=None):
     if args.dokument_batch:
         print(f"  Batch:      fast {args.dokument_batch} dok per prosess")
     else:
-        print(f"  Batch:      AIMD fra {args.start_batch or 4}, dobler til maks "
-              f"{opts['maks_batch']}, halveres ved minnefeil")
+        print(f"  Batch:      AIMD fra {args.start_batch or opts['maks_batch']} "
+              f"(maks {opts['maks_batch']}), halveres ved minnefeil "
+              f"ned mot {MIN_BATCH}")
     return opts
 
 
 # ── Koordinator ──────────────────────────────────────────────────
 
-def _skriv_status(stats, elapsed, ferdig, sider, med_profil, n_profil=12):
+class Gjennomstrømning:
+    """Farten akkurat nå, målt over et glidende vindu.
+
+    Snittet siden start kan ikke svare på «går det bra nå?». Hvert nytt
+    tall drukner i historikken, så snittet bruker en time på å ta igjen
+    virkeligheten: en kjøring som er i full fart etter fem minutter ser
+    ut til å bruke halvannen time på å komme dit, og en kjøring som
+    halverer farten halvveis ser fin ut lenge etterpå. Vinduet svarer på
+    hvordan det går nå; snittet blir stående fordi det er det anslaget
+    for gjenstående tid hviler på.
+    """
+
+    def __init__(self, vindu_sek=60, maks_punkter=512):
+        self._punkter = deque(maxlen=maks_punkter)
+        self.vindu_sek = vindu_sek
+
+    def registrer(self, t, dok, sider):
+        self._punkter.append((t, dok, sider))
+
+    def vindu(self):
+        """(sider/s, dok/s) over vinduet, eller None før vi har nok."""
+        if len(self._punkter) < 2:
+            return None
+        t1, d1, s1 = self._punkter[-1]
+        # Nyeste punkt som er minst vindu_sek gammelt. Finnes det ikke —
+        # vi er så vidt i gang — bruker vi det eldste vi har, så tallet
+        # finnes fra andre statuslinje av selv om vinduet er kort.
+        t0, d0, s0 = self._punkter[0]
+        for t, d, sd in self._punkter:
+            if t1 - t < self.vindu_sek:
+                break
+            t0, d0, s0 = t, d, sd
+        dt = t1 - t0
+        if dt <= 0:
+            return None
+        return (s1 - s0) / dt, (d1 - d0) / dt
+
+
+def _skriv_status(stats, elapsed, ferdig, sider, med_profil, n_profil=12,
+                  fart=None):
     """Fasefordeling per prosess og samlet gjennomstrømning."""
     if not stats:
         return
     gpu_mem = gpu_prosent_brukt()
     gpu_str = f" | GPU-minne: {gpu_mem:.0f}%" if gpu_mem else ""
     if elapsed > 0:
-        print(f"  ⚡ {sider / elapsed:.2f} sider/s | "
-              f"{ferdig / elapsed * 3600:.0f} dok/time{gpu_str}")
+        snitt = (f"{sider / elapsed:.2f} sider/s | "
+                 f"{ferdig / elapsed * 3600:.0f} dok/time")
+        v = fart.vindu() if fart else None
+        if v:
+            print(f"  ⚡ {v[0]:.2f} sider/s | {v[1] * 3600:.0f} dok/time"
+                  f"  (snitt siden start: {snitt}){gpu_str}")
+        else:
+            print(f"  ⚡ {snitt}{gpu_str}")
     for wid in sorted(stats):
         d = stats[wid]
         faser = {k: v for k, v in d.items()
@@ -708,6 +764,7 @@ def kjør(filer, lag_behandler, opts):
     stats = {}
     klar = avsluttet = oom_hendelser = 0
     start_alle = None
+    fart = Gjennomstrømning()
     neste_status = 20
     neste_ressurs = 100
 
@@ -751,6 +808,7 @@ def kjør(filer, lag_behandler, opts):
                 teller[1] += n
 
                 elapsed = time.perf_counter() - start_alle
+                fart.registrer(elapsed, ferdig, total_sider)
                 snitt = elapsed / max(ferdig, 1)
                 print(f"[{ferdig}/{totalt}] ✓ {navn} [{wid}]: "
                       f"{n} side(r), {data['tekst']} — "
@@ -762,7 +820,7 @@ def kjør(filer, lag_behandler, opts):
                 if ferdig >= neste_status:
                     neste_status += 20
                     _skriv_status(stats, elapsed, ferdig, total_sider,
-                                  opts["profil"])
+                                  opts["profil"], fart=fart)
                 if opts["vis_ressurser"] and ferdig >= neste_ressurs:
                     neste_ressurs += 100
                     skriv_ressursstatus()
