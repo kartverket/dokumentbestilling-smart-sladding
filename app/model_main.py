@@ -8,7 +8,7 @@ from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL)
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
-from orientering import finn_rotasjon, boks_tilbake
+from orientering import finn_rotasjoner_batch, boks_tilbake
 from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten, har_feil_ratio, er_for_tynn
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 from yolo_cache import les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache
@@ -187,7 +187,9 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
 
         if not ocr_treff:
             with _ta_tid(t, "orientering"):
-                rotasjoner = [finn_rotasjon(b) for b in bilder]
+                # Batch: ett modellkall for hele dokumentet. Per side ble
+                # GPU-en startet og stoppet én gang per side.
+                rotasjoner = finn_rotasjoner_batch(bilder)
 
         bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
 

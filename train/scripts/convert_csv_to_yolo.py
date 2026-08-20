@@ -4,6 +4,10 @@ Convert CSV with FNR bounding boxes (PDF points, top-left origin) to YOLO format
 Reads coordinates.csv, filters to ACCEPTED + ml_generated rows,
 renders each PDF page at 300 DPI, and writes normalized YOLO labels.
 
+Rendering is the whole cost here — pure CPU and disk, no GPU — so documents
+are converted in parallel processes. Each document is independent: its own
+PDF handle, its own output files.
+
 Coordinate conventions (confirmed from codebase):
   - (x, y) is the TOP-LEFT corner of the bounding box
   - Y-axis origin is TOP-LEFT (image convention, no flip needed)
@@ -12,17 +16,89 @@ Coordinate conventions (confirmed from codebase):
 """
 
 import argparse
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+import fitz
 import numpy as np
 import pandas as pd
-import fitz
-from pathlib import Path
 
 
 DPI = 300
 SCALE = DPI / 72.0
 
 
-def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
+def _default_workers():
+    """One process per physical core, roughly, capped to keep RAM sane."""
+    return min(max((os.cpu_count() or 4) // 2, 1), 32)
+
+
+def _render_document(job):
+    """Render one PDF to page images + YOLO labels. Runs in a worker process.
+
+    `job["pages"]` maps page number (1-based) to a list of (x, y, w, h) boxes
+    in PDF points. Pages not listed are rendered as negatives (empty labels).
+    Returns counters for the parent to accumulate.
+    """
+    fil_id = job["fil_id"]
+    images_dir = Path(job["images_dir"])
+    labels_dir = Path(job["labels_dir"])
+    out = {"fil_id": fil_id, "pages": 0, "boxes": 0, "negatives": 0,
+           "skipped_pages": 0, "error": None}
+
+    try:
+        doc = fitz.open(job["pdf_path"])
+    except Exception as e:
+        out["error"] = repr(e)
+        return out
+
+    try:
+        annotated = set()
+        for page_no, bokser in sorted(job["pages"].items()):
+            idx = int(page_no) - 1
+            if idx < 0 or idx >= len(doc):
+                out["skipped_pages"] += 1
+                continue
+
+            annotated.add(int(page_no))
+            pix = doc[idx].get_pixmap(dpi=DPI)
+            img_w, img_h = pix.width, pix.height
+            stem = f"{fil_id}_p{page_no}"
+            pix.save(str(images_dir / f"{stem}.png"))
+
+            arr = np.asarray(bokser, dtype=float) * SCALE
+            x_px, y_px, w_px, h_px = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+            x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
+            y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
+            bw = np.clip(w_px / img_w, 0.0, 1.0)
+            bh = np.clip(h_px / img_h, 0.0, 1.0)
+
+            lines = [f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"
+                     for xc, yc, w, h in zip(x_center, y_center, bw, bh)]
+            (labels_dir / f"{stem}.txt").write_text("\n".join(lines))
+            out["boxes"] += len(lines)
+            out["pages"] += 1
+
+        # Unannotated pages become negatives (empty label files)
+        for idx in range(len(doc)):
+            page_no = idx + 1
+            if page_no in annotated:
+                continue
+            pix = doc[idx].get_pixmap(dpi=DPI)
+            stem = f"{fil_id}_p{page_no}"
+            pix.save(str(images_dir / f"{stem}.png"))
+            (labels_dir / f"{stem}.txt").write_text("")
+            out["negatives"] += 1
+    except Exception as e:
+        out["error"] = repr(e)
+    finally:
+        doc.close()
+    return out
+
+
+def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
+            workers: int = 0):
     csv_path = Path(csv_path)
     pdf_dir = Path(pdf_dir)
     output = Path(output_dir)
@@ -52,76 +128,30 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
     print(f"Unique documents after filtering: {df['fil_revisjon_id'].nunique()}, unique pages: {df[['fil_revisjon_id', 'sidetall']].drop_duplicates().shape[0]}")
 
     missing = set()
-    done = 0
-    skipped_pages = 0
     skipped_docs = 0
-    total_boxes = 0
-    negatives = 0
+    jobs = []
 
-    for fil_id, doc_group in df.groupby("fil_revisjon_id"):
+    def _legg_til(fil_id, pages):
+        """Queue one document unless the PDF is gone or it is already done."""
+        nonlocal skipped_docs
         pdf_path = pdf_dir / f"{fil_id}.pdf"
         if not pdf_path.exists():
             missing.add(str(fil_id))
-            continue
-
-        # Hopp over dokumenter som allerede er konvertert (cache)
-        first_page = f"{fil_id}_p1.png"
-        if (images_dir / first_page).exists():
+            return
+        if (images_dir / f"{fil_id}_p1.png").exists():   # cache
             skipped_docs += 1
-            continue
+            return
+        jobs.append({"fil_id": fil_id, "pdf_path": str(pdf_path), "pages": pages,
+                     "images_dir": str(images_dir), "labels_dir": str(labels_dir)})
 
-        doc = fitz.open(pdf_path)
-        annotated_pages = set()
+    for fil_id, doc_group in df.groupby("fil_revisjon_id"):
+        pages = {
+            int(page_no): page_group[["x", "y", "width", "height"]].values.tolist()
+            for page_no, page_group in doc_group.groupby("sidetall")
+        }
+        _legg_til(fil_id, pages)
 
-        for page_no, page_group in doc_group.groupby("sidetall"):
-            idx = int(page_no) - 1
-            if idx < 0 or idx >= len(doc):
-                skipped_pages += 1
-                continue
-
-            annotated_pages.add(int(page_no))
-            page = doc[idx]
-            pix = page.get_pixmap(dpi=DPI)
-            img_w, img_h = pix.width, pix.height
-            stem = f"{fil_id}_p{page_no}"
-            pix.save(str(images_dir / f"{stem}.png"))
-
-            x_px = page_group["x"].values * SCALE
-            y_px = page_group["y"].values * SCALE
-            w_px = page_group["width"].values * SCALE
-            h_px = page_group["height"].values * SCALE
-
-            x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
-            y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
-            bw = np.clip(w_px / img_w, 0.0, 1.0)
-            bh = np.clip(h_px / img_h, 0.0, 1.0)
-
-            lines = [
-                f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"
-                for xc, yc, w, h in zip(x_center, y_center, bw, bh)
-            ]
-
-            (labels_dir / f"{stem}.txt").write_text("\n".join(lines))
-            total_boxes += len(lines)
-            done += 1
-
-        # Render unannotated pages as negatives (empty label files)
-        for idx in range(len(doc)):
-            page_no = idx + 1
-            if page_no in annotated_pages:
-                continue
-            page = doc[idx]
-            pix = page.get_pixmap(dpi=DPI)
-            stem = f"{fil_id}_p{page_no}"
-            pix.save(str(images_dir / f"{stem}.png"))
-            (labels_dir / f"{stem}.txt").write_text("")
-            negatives += 1
-
-        n_negatives_in_doc = len(doc) - len(annotated_pages)
-        doc.close()
-        print(f"  Converted {fil_id} ({len(doc_group)} boxes, {doc_group['sidetall'].nunique()} pages, {n_negatives_in_doc} negatives)")
-
-    # Render fully unlabeled documents (in ID list but not in CSV) as pure negatives
+    # Documents in the ID list but not in the CSV are pure negatives
     negative_docs = 0
     if only_ids:
         labeled_ids = set(df["fil_revisjon_id"].astype(str).unique())
@@ -129,25 +159,29 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
         if unlabeled_ids:
             print(f"Rendering {len(unlabeled_ids)} unlabeled documents as negatives...")
         for fil_id in sorted(unlabeled_ids):
-            pdf_path = pdf_dir / f"{fil_id}.pdf"
-            if not pdf_path.exists():
-                missing.add(str(fil_id))
+            før = len(jobs)
+            _legg_til(fil_id, {})
+            negative_docs += len(jobs) - før
+
+    done = total_boxes = negatives = skipped_pages = 0
+    failed = []
+    n_workers = min(workers or _default_workers(), max(len(jobs), 1))
+    print(f"Converting {len(jobs)} documents with {n_workers} processes...")
+
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_render_document, j): j["fil_id"] for j in jobs}
+        for n, fut in enumerate(as_completed(futures), start=1):
+            r = fut.result()
+            if r["error"]:
+                failed.append((r["fil_id"], r["error"]))
+                print(f"  [{n}/{len(jobs)}] FAILED {r['fil_id']}: {r['error']}")
                 continue
-            first_page = f"{fil_id}_p1.png"
-            if (images_dir / first_page).exists():
-                skipped_docs += 1
-                continue
-            doc = fitz.open(pdf_path)
-            n_pages = len(doc)
-            for idx in range(n_pages):
-                page = doc[idx]
-                pix = page.get_pixmap(dpi=DPI)
-                stem = f"{fil_id}_p{idx + 1}"
-                pix.save(str(images_dir / f"{stem}.png"))
-                (labels_dir / f"{stem}.txt").write_text("")
-                negatives += 1
-            doc.close()
-            negative_docs += 1
+            done += r["pages"]
+            total_boxes += r["boxes"]
+            negatives += r["negatives"]
+            skipped_pages += r["skipped_pages"]
+            print(f"  [{n}/{len(jobs)}] Converted {r['fil_id']} "
+                  f"({r['boxes']} boxes, {r['pages']} pages, {r['negatives']} negatives)")
 
     print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages ({negative_docs} fully negative docs)")
     if skipped_docs:
@@ -156,6 +190,10 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None):
         print(f"Missing PDFs: {len(missing)}")
     if skipped_pages:
         print(f"Skipped {skipped_pages} out-of-range pages")
+    if failed:
+        print(f"Failed: {len(failed)} documents")
+        for fil_id, err in failed[:10]:
+            print(f"  {fil_id}: {err}")
 
 
 if __name__ == "__main__":
@@ -164,6 +202,8 @@ if __name__ == "__main__":
     parser.add_argument("pdfs", help="Directory containing PDF files")
     parser.add_argument("--output", default="dataset", help="Output directory (default: dataset)")
     parser.add_argument("--ids", default=None, help="File with document IDs to convert (one per line). Converts all if not set.")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="parallel rendering processes (0 = half the cores, max 32)")
     args = parser.parse_args()
 
     only_ids = None
@@ -172,4 +212,4 @@ if __name__ == "__main__":
             only_ids = {line.strip() for line in f if line.strip()}
         print(f"Loaded {len(only_ids)} IDs from {args.ids}")
 
-    convert(args.csv, args.pdfs, args.output, only_ids=only_ids)
+    convert(args.csv, args.pdfs, args.output, only_ids=only_ids, workers=args.workers)

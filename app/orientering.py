@@ -21,26 +21,12 @@ def _hent_orient():
     return _orient
 
 
-def finn_rotasjon(bilde):
-    lite = np.ascontiguousarray(bilde[::NEDSKALERING, ::NEDSKALERING])
-    try:
-        res = _hent_orient().predict(lite)
-        r = res[0]
-        vinkel = int(r["label_names"][0])            # "0"/"90"/"180"/"270"
-        score = float(np.asarray(r["scores"]).reshape(-1)[0])
-    except Exception as e:
-        print(f"!! orienteringssjekk feilet ({e!r}) - antar 0 grader")
-        return 0
-    if score < MIN_KONFIDENS:
-        return 0
-    return (vinkel // 90) % 4
-
-
 def finn_rotasjoner_batch(bilder):
     """Kjør orienteringsdeteksjon på en liste med bilder i én batch.
 
     Returnerer en liste med rotasjonsverdier (0-3) for hvert bilde.
-    Mye raskere enn å kalle finn_rotasjon() per bilde.
+    Ett modellkall for hele listen — per bilde ble GPU-en startet og
+    stoppet én gang per side.
     """
     if not bilder:
         return []
