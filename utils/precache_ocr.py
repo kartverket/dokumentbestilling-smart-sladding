@@ -25,6 +25,7 @@ import time
 import warnings
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 warnings.filterwarnings("ignore", message=".*ccache.*")
 os.environ["GLOG_minloglevel"] = "2"
@@ -44,6 +45,45 @@ from load_pdf import les_sider
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 from orientering import finn_rotasjon, finn_rotasjoner_batch
 from paddle_ocr_model_fnr import les_tokens_batched
+
+
+# ── Logging ──────────────────────────────────────────────────────
+
+_LOG_DIR = "/data2/tmp"
+
+
+class _Tee:
+    """Skriv til både konsoll og loggfil samtidig."""
+
+    def __init__(self, loggfil_sti):
+        self._stdout = sys.stdout
+        self._fil = open(loggfil_sti, "a", encoding="utf-8")
+
+    def write(self, data):
+        self._stdout.write(data)
+        self._fil.write(data)
+        self._fil.flush()
+
+    def flush(self):
+        self._stdout.flush()
+        self._fil.flush()
+
+    def fileno(self):
+        return self._stdout.fileno()
+
+
+def _setup_loggfil():
+    """Sett opp tee-logging til /data2/tmp/precache_ocr_<tidsstempel>.log."""
+    try:
+        os.makedirs(_LOG_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        loggfil = os.path.join(_LOG_DIR, f"precache_ocr_{ts}.log")
+        sys.stdout = _Tee(loggfil)
+        print(f"Loggfil: {loggfil}")
+        return loggfil
+    except OSError as e:
+        print(f"Advarsel: Kunne ikke opprette loggfil i {_LOG_DIR}: {e}")
+        return None
 
 
 # ── Tidsformatering ──────────────────────────────────────────────
@@ -289,6 +329,8 @@ def _skriv_ressursstatus():
 
 
 def main():
+    _setup_loggfil()
+
     p = argparse.ArgumentParser(
         description="Forhåndscache PaddleOCR-resultater. Kjører kun orientering + OCR, "
                     "lagrer til OCR-cache. Ingen YOLO eller FNR-deteksjon.")
