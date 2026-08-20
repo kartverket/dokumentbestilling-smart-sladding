@@ -260,10 +260,17 @@ class _AdaptivBatchStørrelse:
             self.nåværende = max(self.minimum, self.nåværende - 1)
             self._stabil_teller = 0
         else:
-            # Under grensen — vurder å øke
+            # Under grensen — øk aggressivt når det er mye ledig
             self._stabil_teller += 1
-            if self._stabil_teller >= 3 and gpu_pct < self.gpu_grense - 15:
-                # Godt under grensen i 3+ batches — øk
+            if gpu_pct < self.gpu_grense * 0.3:
+                # Veldig lavt minne (< 30% av grensen) — øk raskt
+                self.nåværende = min(self.maksimum, self.nåværende + 3)
+            elif gpu_pct < self.gpu_grense * 0.5 and self._stabil_teller >= 2:
+                # Under halvparten av grensen — øk moderat
+                self.nåværende = min(self.maksimum, self.nåværende + 2)
+                self._stabil_teller = 0
+            elif self._stabil_teller >= 3 and gpu_pct < self.gpu_grense - 15:
+                # Godt under grensen i 3+ batches — øk forsiktig
                 self.nåværende = min(self.maksimum, self.nåværende + 1)
                 self._stabil_teller = 0
 
@@ -411,7 +418,17 @@ def main():
         return 0
 
     # ── Overstyr OCR-batch fra CLI ───────────────────────────────
-    ocr_batch = args.ocr_batch or SIDER_PER_OCR_BATCH
+    if args.ocr_batch:
+        ocr_batch = args.ocr_batch
+    else:
+        # Auto-skalér basert på GPU-minne. Mer ledig GPU = større batches.
+        gpu = _gpu_minne_info()
+        if gpu and gpu[1] >= 24000:       # 24GB+ GPU
+            ocr_batch = 32
+        elif gpu and gpu[1] >= 16000:     # 16GB+ GPU
+            ocr_batch = 16
+        else:
+            ocr_batch = SIDER_PER_OCR_BATCH
 
     # ── Resolve auto-verdier ──────────────────────────────────────
     workers = args.workers or _auto_workers()
@@ -551,7 +568,7 @@ def main():
                                for b, k in zip(alle_bilder, alle_rotasjoner)]
 
             # ── 4. Kjør PaddleOCR på hele batchen (GPU) ───────────
-            alle_tokens = les_tokens_batched(alle_bilder_ocr)
+            alle_tokens = les_tokens_batched(alle_bilder_ocr, batch_size=ocr_batch)
 
             # Frigjør minne
             del alle_bilder, alle_bilder_ocr

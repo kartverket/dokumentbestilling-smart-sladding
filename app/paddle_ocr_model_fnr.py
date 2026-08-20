@@ -266,12 +266,13 @@ def ocr_linjer_fra_tokens(tokens):
     return linjer_ut
 
 
-def les_tokens_batched(bilder):
+def les_tokens_batched(bilder, batch_size=None):
     reader = _hent_reader()
+    chunk_size = batch_size or SIDER_PER_OCR_BATCH
 
     tokens_per_side = []
-    for start in range(0, len(bilder), SIDER_PER_OCR_BATCH):
-        chunk = bilder[start:start + SIDER_PER_OCR_BATCH]
+    for start in range(0, len(bilder), chunk_size):
+        chunk = bilder[start:start + chunk_size]
         bgr_chunk = [np.ascontiguousarray(b[:, :, ::-1]) for b in chunk]
         resultater = reader.predict(bgr_chunk, return_word_box=True) or []
         for res in resultater:
