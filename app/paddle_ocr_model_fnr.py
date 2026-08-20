@@ -18,8 +18,8 @@ _OCR_SIFFER_MAP = str.maketrans("oOsSlIbB", "00551166")
 def _normaliser_ocr(tekst):
     return tekst.translate(_OCR_SIFFER_MAP)
 
-Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score", "det_score"])
-SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn", "rec_score", "det_score"])
+Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score"])
+SifferBoks = namedtuple("SifferBoks", ["venstre", "hoyre", "topp", "bunn", "rec_score"])
 Treff = namedtuple("Treff", ["start", "end"])
 
 
@@ -124,42 +124,13 @@ def finn_fnr(tekst):
     return treff
 
 
-_har_logget_keys = False
-
-
 def _les_tokens(res):
     tokens = []
     if not res:
         return tokens
 
-    # PaddleOCR 3.7+ / PP-OCRv6 returnerer IKKE dt_scores (deteksjonskonfidens).
-    # Feltet eksisterer ikke i resultatet. det_score blir dermed None for alle
-    # tokens — det påvirker ikke pipeline-logikk (brukes kun som valgfri metadata).
-    dt_scores = res.get("dt_scores") or []
-
-    # ── Diagnostikk: logg ukjente felt én gang ──────────────────
-    global _har_logget_keys
-    if not _har_logget_keys:
-        _har_logget_keys = True
-        # doc_preprocessor_res: kan inneholde orientering (slipper finn_rotasjon?)
-        dpr = res.get("doc_preprocessor_res")
-        print(f"[OCR felt] doc_preprocessor_res: {type(dpr).__name__} = "
-              f"{str(dpr)[:200] if dpr else None}")
-        # text_word_region: linje-tilhørighet per ord
-        twr = res.get("text_word_region")
-        print(f"[OCR felt] text_word_region (første 3): "
-              f"{twr[:3] if twr and hasattr(twr, '__getitem__') else twr}")
-        # rec_boxes: gjenkjenningsbokser
-        rb = res.get("rec_boxes")
-        print(f"[OCR felt] rec_boxes (første 2): "
-              f"{rb[:2] if rb and hasattr(rb, '__getitem__') else rb}")
-    # ── Slutt diagnostikk ───────────────────────────────────────
-
     ord_per_linje = res.get("text_word")
     boks_per_linje = res.get("text_word_boxes")
-    # text_word_region: kartlegger hvert ord til sin overordnede linje/region.
-    # Kan potensielt erstatte heuristisk linjegruppering i _grupper_til_linjer().
-    ord_regioner = res.get("text_word_region") or []
     if ord_per_linje and boks_per_linje:
         scores_per_linje = res.get("text_word_scores") or []
         # Fallback: PaddleOCR 3.7+ gir ikke alltid per-ord-score, men har
@@ -170,7 +141,6 @@ def _les_tokens(res):
             linje_scores = scores_per_linje[linje_idx] if linje_idx < len(scores_per_linje) else []
             # Fallback til linje-nivå rec_score
             fallback_rec = float(linje_rec_scores[linje_idx]) if linje_idx < len(linje_rec_scores) else None
-            det_score = float(dt_scores[linje_idx]) if linje_idx < len(dt_scores) else None
             for ord_idx, (tekst, boks) in enumerate(zip(ord_liste, boks_liste)):
                 if not tekst.strip():
                     continue
@@ -180,7 +150,7 @@ def _les_tokens(res):
                     rec_score = fallback_rec
                 x0, y0, x1, y1 = (float(v) for v in np.asarray(boks).reshape(-1)[:4])
                 tokens.append(Token(tekst, min(x0, x1), min(y0, y1),
-                                    max(x0, x1), max(y0, y1), rec_score, det_score))
+                                    max(x0, x1), max(y0, y1), rec_score))
         if tokens:
             return tokens
     # Fallback: linjenivaa (fire hjornepunkter per boks).
@@ -191,10 +161,9 @@ def _les_tokens(res):
     scores = res.get("rec_scores") or []
     for idx, (tekst, poly) in enumerate(zip(tekster, polys)):
         rec_score = float(scores[idx]) if idx < len(scores) else None
-        det_score = float(dt_scores[idx]) if idx < len(dt_scores) else None
         pts = np.asarray(poly, dtype=float)
         tokens.append(Token(tekst, float(pts[:, 0].min()), float(pts[:, 1].min()),
-                            float(pts[:, 0].max()), float(pts[:, 1].max()), rec_score, det_score))
+                            float(pts[:, 0].max()), float(pts[:, 1].max()), rec_score))
     return tokens
 
 
@@ -226,7 +195,7 @@ def _bygg_linjetekst(linje):
             if _normaliser_ocr(ch).isdigit():
                 venstre = token.x0 + bredde * posisjon / antall
                 hoyre = token.x0 + bredde * (posisjon + 1) / antall
-                kart.append(SifferBoks(venstre, hoyre, token.y0, token.y1, token.rec_score, token.det_score))
+                kart.append(SifferBoks(venstre, hoyre, token.y0, token.y1, token.rec_score))
             else:
                 kart.append(None)
     return "".join(tegn), kart
@@ -276,10 +245,7 @@ def finn_bokser_fra_tokens(tokens):
             # Beregn paddle rec_score: minimum rec_score blant involverte tokens
             rec_scores = [sb.rec_score for sb in sifferbokser if sb.rec_score is not None]
             rec_score = round(min(rec_scores), 3) if rec_scores else None
-            # Beregn paddle det_score: minimum det_score blant involverte tokens
-            det_scores = [sb.det_score for sb in sifferbokser if sb.det_score is not None]
-            det_score = round(min(det_scores), 3) if det_scores else None
-            bokser.append((boks, gyldig_mod11(cifre), rec_score, det_score))
+            bokser.append((boks, gyldig_mod11(cifre), rec_score))
     return bokser
 
 

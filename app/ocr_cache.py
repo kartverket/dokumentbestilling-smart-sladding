@@ -23,7 +23,7 @@ Filformat per dokument:
           "side": 1,
           "rotasjon": 0,
           "tokens": [
-            {"tekst": "ord", "x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0, "rec_score": 0.95, "det_score": 0.98},
+            {"tekst": "ord", "x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0, "rec_score": 0.95},
             ...
           ]
         }
@@ -39,7 +39,7 @@ from config import MODELL_SETT, PDF_DPI
 
 # Identisk med Token i paddle_ocr_model_fnr.py — definert her separat
 # for å unngå å importere PaddleOCR bare for å lese cache.
-Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score", "det_score"])
+Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score"])
 
 CACHE_VERSJON = 2
 
@@ -78,7 +78,7 @@ def les_cache(cache_mappe, doc_navn):
     for side in data["sider"]:
         rotasjoner.append(side["rotasjon"])
         tokens = [
-            Token(t["tekst"], t["x0"], t["y0"], t["x1"], t["y1"], t.get("rec_score"), t.get("det_score"))
+            Token(t["tekst"], t["x0"], t["y0"], t["x1"], t["y1"], t.get("rec_score"))
             for t in side["tokens"]
         ]
         tokens_per_side.append(tokens)
@@ -98,7 +98,7 @@ def skriv_cache(cache_mappe, doc_navn, rotasjoner, tokens_per_side):
             "rotasjon": rot,
             "tokens": [
                 {"tekst": t.tekst, "x0": t.x0, "y0": t.y0, "x1": t.x1, "y1": t.y1,
-                 "rec_score": t.rec_score, "det_score": t.det_score}
+                 "rec_score": t.rec_score}
                 for t in tokens
             ],
         })

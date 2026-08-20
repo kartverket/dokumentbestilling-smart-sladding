@@ -43,8 +43,8 @@ def _finn_bokser_kun_yolo(yolo_bokser):
         if not er_for_liten(yb) and (
                 _hopp_over_geometrifilter(round(conf, 3), "yolo")
                 or (not har_feil_ratio(yb) and not er_for_tynn(yb))):
-            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
-    return [(tuple(boks), kilde, yc, prs, pds) for boks, kilde, yc, prs, pds in bokser]
+            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None])
+    return [(tuple(boks), kilde, yc, prs) for boks, kilde, yc, prs in bokser]
 
 
 def _finn_bokser_med_kilde(tokens, yolo_bokser):
@@ -53,10 +53,10 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
     elektronisk tinglyste dokumenter behandles.
 
-    Intern struktur per boks: [boks, kilde, yolo_conf, paddle_rec_score, paddle_det_score]
+    Intern struktur per boks: [boks, kilde, yolo_conf, paddle_rec_score]
     """
-    bokser = [[boks, "paddle", None, rec_score, det_score]
-              for (boks, _mod11, rec_score, det_score) in finn_bokser_fra_tokens(tokens)]
+    bokser = [[boks, "paddle", None, rec_score]
+              for (boks, _mod11, rec_score) in finn_bokser_fra_tokens(tokens)]
 
     for (x0, y0, x1, y1, conf) in yolo_bokser:
         yb = (x0, y0, x1, y1)
@@ -66,7 +66,7 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
                 par[1] = "begge"
                 par[2] = round(conf, 3)           # yolo_conf
         elif kilde := _godta_yolo_boks(tokens, yb, conf):
-            bokser.append([yb, kilde, round(conf, 3), None, None])
+            bokser.append([yb, kilde, round(conf, 3), None])
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
@@ -76,7 +76,7 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
                   or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0]))
               )]
 
-    return [(tuple(boks), kilde, yc, prs, pds) for boks, kilde, yc, prs, pds in bokser]
+    return [(tuple(boks), kilde, yc, prs) for boks, kilde, yc, prs in bokser]
 
 
 def _godta_yolo_boks(tokens, boks, conf):
@@ -90,15 +90,13 @@ def _godta_yolo_boks(tokens, boks, conf):
 def _bygg_side(si, storrelse, tokens, bokser_med_kilde, k, med_linjer):
     w, h = storrelse
     bokser = []
-    for boks, kilde, yolo_conf, paddle_rec_score, paddle_det_score in bokser_med_kilde:
+    for boks, kilde, yolo_conf, paddle_rec_score in bokser_med_kilde:
         x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
         b = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": kilde}
         if yolo_conf is not None:
             b["yolo_conf"] = yolo_conf
         if paddle_rec_score is not None:
             b["paddle_rec_score"] = paddle_rec_score
-        if paddle_det_score is not None:
-            b["paddle_det_score"] = paddle_det_score
         bokser.append(b)
     side = {"side": si, "bilde_bredde": w, "bilde_hoyde": h, "bokser": bokser}
     if med_linjer:
@@ -145,8 +143,6 @@ def _til_flat(sider, sidefelt):
                 d["yolo_conf"] = b["yolo_conf"]
             if "paddle_rec_score" in b:
                 d["paddle_rec_score"] = b["paddle_rec_score"]
-            if "paddle_det_score" in b:
-                d["paddle_det_score"] = b["paddle_det_score"]
             ut.append(d)
     return ut
 
