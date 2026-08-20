@@ -119,15 +119,20 @@ def _last_pdf(sti):
 # ── Hovudlogikk ──────────────────────────────────────────────────
 
 def _utled_cache_mappe(args):
-    """Utled cache-mappe fra argumenter og miljøvariabler."""
+    """Utled cache-mappe fra argumenter og miljøvariabler.
+
+    Prioritet:
+      1. Eksplisitt --cache
+      2. $SLADD_CACHE/<uttrekk-navn>/ocr/  (server-standard: /data2/cache)
+      3. Feil — krever at én av de to er satt
+    """
     if args.cache:
         return args.cache
     cache_base = os.environ.get("SLADD_CACHE")
     if cache_base:
         uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
         return os.path.join(cache_base, uttrekk_navn, "ocr")
-    # Fallback: lag cache-mappe ved siden av PDF-mappen
-    return os.path.join(args.mappe, "..", "ocr_cache")
+    return None
 
 
 def _antall_cachet(filer, cache_mappe):
@@ -203,6 +208,10 @@ def main():
         return 1
 
     cache_mappe = _utled_cache_mappe(args)
+    if not cache_mappe:
+        print("FEIL: Ingen cache-mappe angitt. Bruk --cache eller sett $SLADD_CACHE "
+              "(server-standard: /data2/cache).")
+        return 1
     os.makedirs(cache_mappe, exist_ok=True)
 
     # ── Bygg filliste ────────────────────────────────────────────
@@ -381,4 +390,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main() or 0)
+
+
 

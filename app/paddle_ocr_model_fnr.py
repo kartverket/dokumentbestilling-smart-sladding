@@ -135,14 +135,22 @@ def _les_tokens(res):
     boks_per_linje = res.get("text_word_boxes")
     if ord_per_linje and boks_per_linje:
         scores_per_linje = res.get("text_word_scores") or []
+        # Fallback: PaddleOCR 3.7+ gir ikke alltid per-ord-score, men har
+        # linje-nivå rec_scores. Bruk linjescoren for alle ord i linjen.
+        linje_rec_scores = res.get("rec_scores") or []
         for linje_idx, (ord_liste, boks_liste) in enumerate(zip(ord_per_linje, boks_per_linje)):
-            # Hent linje-score-liste hvis tilgjengelig
+            # Per-ord-scores hvis tilgjengelig, ellers tom
             linje_scores = scores_per_linje[linje_idx] if linje_idx < len(scores_per_linje) else []
+            # Fallback til linje-nivå rec_score
+            fallback_rec = float(linje_rec_scores[linje_idx]) if linje_idx < len(linje_rec_scores) else None
             det_score = float(dt_scores[linje_idx]) if linje_idx < len(dt_scores) else None
             for ord_idx, (tekst, boks) in enumerate(zip(ord_liste, boks_liste)):
                 if not tekst.strip():
                     continue
-                rec_score = float(linje_scores[ord_idx]) if ord_idx < len(linje_scores) else None
+                if ord_idx < len(linje_scores):
+                    rec_score = float(linje_scores[ord_idx])
+                else:
+                    rec_score = fallback_rec
                 x0, y0, x1, y1 = (float(v) for v in np.asarray(boks).reshape(-1)[:4])
                 tokens.append(Token(tekst, min(x0, x1), min(y0, y1),
                                     max(x0, x1), max(y0, y1), rec_score, det_score))
