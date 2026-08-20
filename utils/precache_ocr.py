@@ -338,12 +338,20 @@ def _skriv_ressursstatus():
 
 # ── CPU OCR-worker (multiprocessing) ─────────────────────────────
 
-def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id):
+def _cpu_worker(fil_kø, resultat_kø, cache_mappe, worker_id, tråder_per_worker):
     """Prosess som kjører PaddleOCR på CPU for ett dokument om gangen.
 
     Hver worker har sin egen PaddleOCR-instans med device='cpu' og mkldnn.
     Leser filstier fra fil_kø, skriver resultater til resultat_kø.
     """
+    # Begrens tråder per prosess — forhindrer oversubscription
+    tr = str(tråder_per_worker)
+    os.environ["OMP_NUM_THREADS"] = tr
+    os.environ["MKL_NUM_THREADS"] = tr
+    os.environ["OPENBLAS_NUM_THREADS"] = tr
+    os.environ["VECLIB_MAXIMUM_THREADS"] = tr
+    os.environ["NUMEXPR_NUM_THREADS"] = tr
+
     # Sett opp paths
     _utils = os.path.dirname(os.path.abspath(__file__))
     _app = os.path.join(_utils, "..", "app")
@@ -584,17 +592,22 @@ def main():
             cpu_fil_kø.put(None)
 
         # Start CPU-workers
+        # Fordel kjerner: reserver noen til GPU-pipeline (rendering + main)
+        kjerner_til_cpu = max(_antall_cpu_kjerner() - workers - 2, cpu_ocr)
+        tråder_per = max(kjerner_til_cpu // cpu_ocr, 1)
+
         for i in range(cpu_ocr):
             p = mp.Process(
                 target=_cpu_worker,
-                args=(cpu_fil_kø, cpu_resultat_kø, cache_mappe, i),
+                args=(cpu_fil_kø, cpu_resultat_kø, cache_mappe, i, tråder_per),
                 daemon=True
             )
             p.start()
             cpu_prosesser.append(p)
 
-        print(f"  CPU OCR: {cpu_ocr} prosesser, {cpu_filer_sendt} filer "
-              f"({cpu_andel*100:.0f}% av totalt)")
+        print(f"  CPU OCR: {cpu_ocr} prosesser × {tråder_per} tråder = "
+              f"{cpu_ocr * tråder_per} kjerner, {cpu_filer_sendt} filer "
+              f"({cpu_andel*100:.0f}%)")
         print(f"  GPU:     {len(filer)} filer ({(1-cpu_andel)*100:.0f}%)")
 
     # ── Skriv ressursstatus før start ────────────────────────────
