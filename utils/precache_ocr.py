@@ -24,6 +24,7 @@ import argparse
 import multiprocessing as mp
 import os
 import sys
+import threading
 import time
 import warnings
 from collections import deque
@@ -340,6 +341,47 @@ def _skriv_ressursstatus():
         print(f"  Ressurser: {' | '.join(deler)}")
 
 
+# ── Samplende profiler (py-spy-erstatning uten nettverk) ─────────
+
+class _Profil:
+    """Teller hvor hovedtråden står, ved å ta stakk-prøver utenfra.
+
+    Den innerste Python-rammen sier hva tiden går til: paddle sine
+    run/infer-kall er GPU-arbeid, mens resize, unclip, boxes_from_bitmap,
+    rot90 og ascontiguousarray er enkelttrådet CPU-arbeid som GPU-en må
+    vente på. Trengs fordi py-spy krever nettverk for å installeres.
+    """
+
+    def __init__(self, intervall=0.01):
+        self._intervall = intervall
+        self._teller = {}
+        self._hovedtråd = threading.get_ident()
+        self._stopp = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._løkke, daemon=True).start()
+
+    def _løkke(self):
+        while not self._stopp.wait(self._intervall):
+            ramme = sys._current_frames().get(self._hovedtråd)
+            if ramme is None:
+                continue
+            kode = ramme.f_code
+            nøkkel = f"{kode.co_name}  ({os.path.basename(kode.co_filename)}:{ramme.f_lineno})"
+            self._teller[nøkkel] = self._teller.get(nøkkel, 0) + 1
+
+    def stopp(self):
+        self._stopp.set()
+
+    def skriv(self, n=12, tittel="Profil (hovedtråden)"):
+        totalt = sum(self._teller.values())
+        if not totalt:
+            return
+        print(f"     {tittel} — {totalt} prøver:")
+        for navn, ant in sorted(self._teller.items(), key=lambda kv: -kv[1])[:n]:
+            print(f"       {100 * ant / totalt:5.1f}%  {navn}")
+
+
 # ── Arbeidsfordeling mellom GPU og CPU ───────────────────────────
 
 class _Arbeidsfordeler:
@@ -566,6 +608,8 @@ def main():
                    metavar="N",
                    help="antall ekstra CPU-prosesser for OCR (0=kun GPU, "
                         "--cpu-ocr uten tall = auto ut fra ledige kjerner)")
+    p.add_argument("--profil", action="store_true",
+                   help="mål hvor hovedtråden bruker tiden (faser + stakk-prøver)")
     p.add_argument("--vis-ressurser", action="store_true",
                    help="vis RAM/GPU-status for hvert dokument")
     p.add_argument("--force", action="store_true",
@@ -785,6 +829,20 @@ def main():
     kø_dybde_sum = 0      # sum av kødybde ved batch-start (for snitt)
     neste_status = 20     # neste dokument-tall som utløser flaskehals-print
 
+    # ── Fasefordeling inne i batch-blokken ────────────────────────
+    # GPU-en kan bare jobbe mens vi står i orientering/OCR. Rotasjon og
+    # cache-skriving er enkelttrådet CPU-arbeid der GPU-en står stille.
+    tid_orient = 0.0
+    tid_rotasjon = 0.0
+    tid_ocr = 0.0
+    tid_cache = 0.0
+    profil = None
+    if args.profil:
+        profil = _Profil()
+        profil.start()
+        print("Profilering aktiv (stakk-prøver hvert 10. ms)\n")
+    neste_profil = 100
+
     while True:
         # Hent unna CPU-workernes resultater før neste GPU-batch
         _drener_cpu()
@@ -850,14 +908,20 @@ def main():
                 alle_bilder.extend(bilder)
 
             # ── 2. Batch-orienteringsdeteksjon (alle sider samlet) ─
+            _t0 = time.perf_counter()
             alle_rotasjoner = finn_rotasjoner_batch(alle_bilder)
+            tid_orient += time.perf_counter() - _t0
 
             # ── 3. Roter alle bilder ──────────────────────────────
+            _t0 = time.perf_counter()
             alle_bilder_ocr = [np.rot90(b, k) if k else b
                                for b, k in zip(alle_bilder, alle_rotasjoner)]
+            tid_rotasjon += time.perf_counter() - _t0
 
             # ── 4. Kjør PaddleOCR på hele batchen (GPU) ───────────
+            _t0 = time.perf_counter()
             alle_tokens = les_tokens_batched(alle_bilder_ocr, batch_size=ocr_batch)
+            tid_ocr += time.perf_counter() - _t0
 
             # Frigjør minne
             del alle_bilder, alle_bilder_ocr
@@ -868,7 +932,9 @@ def main():
                 rotasjoner = alle_rotasjoner[start_idx:start_idx + n_sider]
                 tokens_per_side = alle_tokens[start_idx:start_idx + n_sider]
 
+                _t0 = time.perf_counter()
                 skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+                tid_cache += time.perf_counter() - _t0
                 total_sider += n_sider
                 ferdig += 1
 
@@ -943,6 +1009,17 @@ def main():
             if adaptiv_batch:
                 print(f"     {adaptiv_batch}")
 
+            fase_sum = tid_orient + tid_rotasjon + tid_ocr + tid_cache
+            if fase_sum > 0:
+                print(f"     Batch-faser: orientering {100*tid_orient/fase_sum:.0f}% | "
+                      f"rotasjon {100*tid_rotasjon/fase_sum:.0f}% | "
+                      f"OCR {100*tid_ocr/fase_sum:.0f}% | "
+                      f"cache {100*tid_cache/fase_sum:.0f}%")
+
+        if profil and ferdig + cpu_ferdig >= neste_profil:
+            neste_profil += 100
+            profil.skriv()
+
         if args.vis_ressurser and ferdig % 10 == 0:
             _skriv_ressursstatus()
 
@@ -992,6 +1069,21 @@ def main():
             print(f"\n  💡 CPU-rendering er flaskehalsen. Prøv --workers {workers * 2}")
         elif gpu_pct_tid > 80 and not cpu_prosesser:
             print(f"\n  💡 GPU er flaskehalsen. Prøv --cpu-ocr for parallell CPU-inferens.")
+
+    fase_sum = tid_orient + tid_rotasjon + tid_ocr + tid_cache
+    if fase_sum > 0:
+        print(f"\n  Batch-faser (hovedtråden, {_fmt_tid(fase_sum)} totalt):")
+        print(f"    Orientering (GPU):        {_fmt_tid(tid_orient)} "
+              f"({100*tid_orient/fase_sum:.0f}%)")
+        print(f"    Rotasjon (CPU, 1 tråd):   {_fmt_tid(tid_rotasjon)} "
+              f"({100*tid_rotasjon/fase_sum:.0f}%)")
+        print(f"    OCR (GPU + CPU pre/post): {_fmt_tid(tid_ocr)} "
+              f"({100*tid_ocr/fase_sum:.0f}%)")
+        print(f"    Cache-skriving (CPU):     {_fmt_tid(tid_cache)} "
+              f"({100*tid_cache/fase_sum:.0f}%)")
+    if profil:
+        profil.stopp()
+        profil.skriv(n=20, tittel="Profil (hovedtråden, hele kjøringen)")
 
     print(f"  Cache-mappe: {cache_mappe}")
 
