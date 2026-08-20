@@ -498,7 +498,7 @@ def _er_minnefeil(e):
 
 # ── OCR-motor per enhet ──────────────────────────────────────────
 
-def _lag_motor(device, cpu_tråder, ocr_batch, gpu_andel=None):
+def _lag_motor(device, cpu_tråder, ocr_batch, gpu_mb=None):
     """Bygg (orienter_batch, les_tokens) for «gpu» eller «cpu».
 
     GPU-varianten gjenbruker app-modulenes lazy singletons — paddle velger
@@ -507,13 +507,16 @@ def _lag_motor(device, cpu_tråder, ocr_batch, gpu_andel=None):
     overtegnet.
     """
     if device == "gpu":
-        # Hver prosess får sin egen andel av kortet. Uten dette vokser
-        # allokatorene uavhengig av hverandre til kortet er fullt, og da
-        # feiler den prosessen som tilfeldigvis ber om minne sist.
-        # Må settes før paddle initialiserer GPU-allokatoren.
+        # Forsøk på å gi hver prosess sin egen andel av kortet. Målt:
+        # FLAGS_fraction_of_gpu_memory_to_use blir IKKE respektert av
+        # inferens-prediktoren (prosessene vokste til 31,7 av 32 GB likevel).
+        # FLAGS_gpu_memory_limit_mb settes i tillegg — virker den, feiler en
+        # prosess innenfor sitt eget budsjett i stedet for å tømme kortet for
+        # de andre. Uansett er det AIMD-regulatoren og omkjøringsstigen under
+        # som er den reelle kontrollen. Må settes før paddle rører GPU-en.
         os.environ["FLAGS_allocator_strategy"] = "auto_growth"
-        if gpu_andel:
-            os.environ["FLAGS_fraction_of_gpu_memory_to_use"] = f"{gpu_andel:.4f}"
+        if gpu_mb:
+            os.environ["FLAGS_gpu_memory_limit_mb"] = str(int(gpu_mb))
 
         from orientering import finn_rotasjoner_batch
         from paddle_ocr_model_fnr import les_tokens_batched
@@ -636,7 +639,7 @@ def _pipeline(oppgave):
     minne_grense = oppgave["minne_grense"]
 
     orienter_batch, les_tokens = _lag_motor(
-        device, oppgave["cpu_tråder"], ocr_batch, oppgave.get("gpu_andel"))
+        device, oppgave["cpu_tråder"], ocr_batch, oppgave.get("gpu_mb"))
 
     # Varm opp modellene — engangskostnad som ikke skal med i estimatene
     dummy = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -650,7 +653,7 @@ def _pipeline(oppgave):
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"] or 1
     elif oppgave["dokument_batch"]:
         adaptiv, maks_batch_fast = None, oppgave["dokument_batch"]
-    elif oppgave.get("gpu_andel"):
+    elif oppgave.get("gpu_mb"):
         # Hardt minnetak per prosess ⇒ minnefeil er signalet, ikke nvidia-smi
         adaptiv = _AIMDBatchStørrelse(
             start=2, minimum=1, maksimum=oppgave["maks_batch"])
@@ -795,14 +798,28 @@ def _pipeline(oppgave):
                             f"deler batchen (→ {midt} + {len(gruppe) - midt} dok)"))
                     continue
                 if minnefeil:
-                    # Ett dokument alene: prøv én side om gangen
-                    try:
-                        dok_grenser, rot, tok = _behandle(gruppe, sider_om_gangen=1)
-                    except Exception as e2:
+                    # Ett dokument alene. Trykket er forbigående — de andre
+                    # prosessene frigir minne fortløpende — så her venter vi
+                    # heller enn å gi opp dokumentet.
+                    resultat = None
+                    siste = e
+                    for forsøk, pause in enumerate((0, 5, 15, 45), start=1):
+                        if pause:
+                            time.sleep(pause)
                         _frigjør_gpu_cache()
-                        kø.put(("feil", wid, gruppe[0][0], 0, _kort_feil(e2)))
+                        try:
+                            resultat = _behandle(gruppe, sider_om_gangen=1)
+                            break
+                        except Exception as e2:
+                            siste = e2
+                            if not _er_minnefeil(e2):
+                                break
+                    if resultat is None:
+                        kø.put(("feil", wid, gruppe[0][0], 0, _kort_feil(siste)))
                         continue
-                    kø.put(("oom", wid, gruppe[0][0], 1, "kjørt side for side"))
+                    dok_grenser, rot, tok = resultat
+                    kø.put(("oom", wid, gruppe[0][0], 1,
+                            f"side for side, klarte det på forsøk {forsøk}"))
                 else:
                     for navn, _b in gruppe:
                         kø.put(("feil", wid, navn, 0, _kort_feil(e)))
@@ -854,7 +871,12 @@ def main():
     p.add_argument("--minne-grense", type=int, default=88,
                    help="maks RAM-bruk i prosent før pre-rendering pauser (default: 88)")
     p.add_argument("--ocr-batch", type=int, default=None,
-                   help=f"sider per OCR-batch (default: {SIDER_PER_OCR_BATCH} fra config)")
+                   help=f"sider per OCR-batch (default: {SIDER_PER_OCR_BATCH} fra config). "
+                        "Dette er den største driveren av GPU-minnetoppen — "
+                        "deteksjonsmodellen holder aktiveringer for hele batchen")
+    p.add_argument("--rec-batch", type=int, default=0,
+                   help="tekstlinjer per gjenkjennings-batch (0=config-default). "
+                        "Påvirker kun minne og hastighet, ikke resultatet")
     p.add_argument("--dokument-batch", type=int, default=0,
                    help="maks dokumenter per GPU-batch per prosess (0=adaptiv)")
     p.add_argument("--gpu-grense", type=int, default=75,
@@ -942,41 +964,40 @@ def main():
         else:
             ocr_batch = SIDER_PER_OCR_BATCH
         if n_gpu > 1:  # del GPU-minnet mellom prosessene
-            ocr_batch = max(ocr_batch // n_gpu, SIDER_PER_OCR_BATCH)
+            ocr_batch = max(ocr_batch // n_gpu, 4)
 
     # ── Tråder og prefetch per prosess ───────────────────────────
     # Del GPU-minnet mellom prosessene. Uten dette vokser allokatorene
     # uavhengig til kortet er fullt (målt: 30,9 av 32 GB), og da feiler
     # den prosessen som tilfeldigvis ber om minne sist.
-    gpu_andel = None
+    gpu_mb = None
     if n_gpu > 1:
         gpu = _gpu_minne_info()
         if gpu and gpu[1] > 0:
             # ~700 MB per prosess går til CUDA-kontekst og modellvekter
             til_deling = gpu[1] * args.gpu_grense / 100 - 700 * n_gpu
-            gpu_andel = max(til_deling / gpu[1] / n_gpu, 0.05)
-        else:
-            gpu_andel = (args.gpu_grense / 100) / n_gpu
+            gpu_mb = max(til_deling / n_gpu, 512)
 
     workers = args.workers or min(max(kjerner // (4 * n_gpu), 2), 16)
     prefetch = args.prefetch or max(_auto_prefetch() // n_gpu, 8)
     # Med hardt minnetak per prosess trenger ikke taket være stramt —
     # AIMD-regulatoren og omkjøringen håndterer resten.
-    maks_batch = 12 if gpu_andel else max(16 // n_gpu, 4)
+    maks_batch = 12 if gpu_mb else max(16 // n_gpu, 4)
 
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
+    if args.rec_batch:
+        # Leses av app/paddle_ocr_model_fnr.py når prediktoren bygges
+        os.environ["SLADD_REC_BATCH"] = str(args.rec_batch)
 
     print(f"  GPU-pipeliner: {n_gpu} × (1 hovedtråd + {workers} render-tråder), "
           f"prefetch {prefetch}/prosess")
-    if gpu_andel:
-        gpu = _gpu_minne_info()
-        mb = gpu[1] * gpu_andel if gpu else 0
-        print(f"  GPU-minne:     {100 * gpu_andel:.0f}% per prosess"
-              + (f" (~{mb:.0f} MB)" if mb else ""))
+    if gpu_mb:
+        print(f"  GPU-minne:     forsøker {gpu_mb:.0f} MB per prosess "
+              f"(FLAGS_gpu_memory_limit_mb)")
     if args.dokument_batch:
         print(f"  Dokument-batch: fast {args.dokument_batch} per prosess")
-    elif gpu_andel:
+    elif gpu_mb:
         print(f"  Dokument-batch: AIMD (vokser til {maks_batch}, halveres ved "
               f"minnefeil)")
     else:
@@ -1002,7 +1023,7 @@ def main():
         workers=workers, prefetch=prefetch, minne_grense=args.minne_grense,
         ocr_batch=ocr_batch, dokument_batch=args.dokument_batch,
         gpu_grense=args.gpu_grense, maks_batch=maks_batch, profil=args.profil,
-        gpu_andel=gpu_andel,
+        gpu_mb=gpu_mb,
     )
     prosesser = []
     for i in range(n_gpu + n_cpu):

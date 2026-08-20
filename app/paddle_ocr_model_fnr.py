@@ -58,8 +58,12 @@ def _hent_reader():
             use_textline_orientation=False,
             text_det_limit_type="max",
             text_det_limit_side_len=DET_SIDE_LEN,
-            # paa GPU taaler vi stoerre rec-batch -> bedre gjennomstroemning
-            text_recognition_batch_size=REC_BATCH * 2 if gpu else REC_BATCH,
+            # paa GPU taaler vi stoerre rec-batch -> bedre gjennomstroemning.
+            # SLADD_REC_BATCH kan senke den naar flere prosesser deler kortet;
+            # batchstoerrelsen paavirker minnebruk og fart, ikke resultatet.
+            text_recognition_batch_size=int(
+                os.environ.get("SLADD_REC_BATCH")
+                or (REC_BATCH * 2 if gpu else REC_BATCH)),
         )
         kwargs["text_detection_model_name"] = DET_MODELL
         kwargs["text_recognition_model_name"] = REC_MODELL
