@@ -128,20 +128,38 @@ _har_logget_keys = False
 
 
 def _les_tokens(res):
-    global _har_logget_keys
     tokens = []
     if not res:
         return tokens
 
+    # PaddleOCR 3.7+ / PP-OCRv6 returnerer IKKE dt_scores (deteksjonskonfidens).
+    # Feltet eksisterer ikke i resultatet. det_score blir dermed None for alle
+    # tokens — det påvirker ikke pipeline-logikk (brukes kun som valgfri metadata).
+    dt_scores = res.get("dt_scores") or []
+
+    # ── Diagnostikk: logg ukjente felt én gang ──────────────────
+    global _har_logget_keys
     if not _har_logget_keys:
         _har_logget_keys = True
-        print(f"[OCR debug] Resultat-nøkler: {list(res.keys()) if hasattr(res, 'keys') else type(res)}")
-
-    # dt_scores kan hete forskjellig avhengig av PaddleOCR-versjon
-    dt_scores = res.get("dt_scores") or res.get("det_scores") or res.get("scores") or []
+        # doc_preprocessor_res: kan inneholde orientering (slipper finn_rotasjon?)
+        dpr = res.get("doc_preprocessor_res")
+        print(f"[OCR felt] doc_preprocessor_res: {type(dpr).__name__} = "
+              f"{str(dpr)[:200] if dpr else None}")
+        # text_word_region: linje-tilhørighet per ord
+        twr = res.get("text_word_region")
+        print(f"[OCR felt] text_word_region (første 3): "
+              f"{twr[:3] if twr and hasattr(twr, '__getitem__') else twr}")
+        # rec_boxes: gjenkjenningsbokser
+        rb = res.get("rec_boxes")
+        print(f"[OCR felt] rec_boxes (første 2): "
+              f"{rb[:2] if rb and hasattr(rb, '__getitem__') else rb}")
+    # ── Slutt diagnostikk ───────────────────────────────────────
 
     ord_per_linje = res.get("text_word")
     boks_per_linje = res.get("text_word_boxes")
+    # text_word_region: kartlegger hvert ord til sin overordnede linje/region.
+    # Kan potensielt erstatte heuristisk linjegruppering i _grupper_til_linjer().
+    ord_regioner = res.get("text_word_region") or []
     if ord_per_linje and boks_per_linje:
         scores_per_linje = res.get("text_word_scores") or []
         # Fallback: PaddleOCR 3.7+ gir ikke alltid per-ord-score, men har
