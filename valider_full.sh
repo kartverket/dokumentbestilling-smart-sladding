@@ -9,7 +9,8 @@
 # Parametere:
 #   modell   — sti til YOLO-vektfil (påkrevd)
 #   uttrekk  — uttrekk-nummer å validere på (påkrevd)
-#   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
+#   liste    — navn på ID-listen (valgfri; uten = alle dokumenter MED fasit
+#              — dokumenter uten labels hoppes alltid over)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
 #   bilder   — 'nei'/0 for å hoppe over feilbildene, eller et tall N for å
@@ -122,6 +123,32 @@ fi
 if [[ ! -d "$UTTREKK_MAPPE" ]]; then
     echo "FEIL: Uttrekk-mappe finnes ikke: $UTTREKK_MAPPE"
     exit 1
+fi
+
+# ── Begrens til labelte dokumenter ──────────────────────────────
+# Uten liste kjøres ellers ALT i mappa, også dokumenter uten fasit — da
+# teller sammendraget hver prediksjon på dem som «overflod» uansett hvor
+# riktige de er. Generer en liste fra fasit-CSV-en (REJECTED-rader gir
+# ingen brukbar fasit og holdes utenfor, som i filter_felles.les_fasit).
+# Merk: listen er IKKE en kjorte-liste — den inneholder også labelte
+# dokumenter der PDF-en mangler i mappa, og de blir aldri kjørt.
+if [[ -z "$LISTE_FIL" ]]; then
+    mkdir -p "$UT_MAPPE"
+    LISTE_FIL="$UT_MAPPE/labelte_dokumenter.txt"
+    python - "$FASIT" > "$LISTE_FIL" <<'PYEOF'
+import csv, sys
+dokumenter = set()
+with open(sys.argv[1], newline="", encoding="utf-8-sig") as f:
+    for rad in csv.DictReader(f):
+        if (rad.get("ml_status") or "").strip().upper() == "REJECTED":
+            continue
+        try:
+            dokumenter.add(int(rad["fil_revisjon_id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+print("\n".join(str(n) for n in sorted(dokumenter)))
+PYEOF
+    echo "Begrenser til $(wc -l < "$LISTE_FIL") labelte dokumenter fra $(basename "$FASIT")"
 fi
 
 # ── Vis hva som kjøres ──────────────────────────────────────────
