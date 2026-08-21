@@ -163,9 +163,14 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
                          sort_key, felt=STD_FELT, hoder=STD_HODER,
                          tittel=None, kun_kilde=None, bare_front=True,
                          maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None,
-                         csv_rader=None, maks_rader=None):
+                         csv_rader=None, maks_rader=None, etikett_prefiks=""):
     """Sweeper alle kombinasjoner. kun_kilde: filtrer bare den kilden,
-    men mål effekten globalt (dekning kommer fra alle kilder samlet)."""
+    men mål effekten globalt (dekning kommer fra alle kilder samlet).
+
+    etikett_prefiks merker radene i den samlede Pareto-tabellen. De fire
+    aksene betyr ulike ting i ulike rutenett, og «av/6/av/av» er ikke til å
+    tyde uten å vite hvilket rutenett raden kom fra.
+    """
     kandidater = ds.per_kilde[kun_kilde] if kun_kilde else None
 
     filter_info = ""
@@ -185,7 +190,8 @@ def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
     for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
         kw = dict(zip(felt, (min_e, maks_h, maks_b, c_t)))
         m = evaluer(ds, lag_filter(**kw), kostnad=kostnad, kandidater=kandidater)
-        etikett = (f"{_g(min_e)}/{_g(maks_h)}/{_g(maks_b)}/{_g(c_t)}"
+        etikett = (etikett_prefiks
+                   + f"{_g(min_e)}/{_g(maks_h)}/{_g(maks_b)}/{_g(c_t)}"
                    + (f" [{kun_kilde}]" if kun_kilde else ""))
         rader.append(Rad(m, etikett, {kun_kilde: kw} if kun_kilde else {None: kw}))
         if csv_rader is not None:
@@ -911,7 +917,7 @@ def main():
                 hoder=("s.min", "løp", "des", "rec≥"),
                 tittel="OCR-TREKK KOMBINERT: sifferkrav "
                        "(treffer kun «yolo» med tekst)",
-                **felles)
+                etikett_prefiks="ocr-siffer ", **felles)
             ocr_rader += _sweep_kombinasjoner(
                 ds, [None, 6, 7, 9, 11], [None, 1], [None, 1],
                 [None, 0.80, 0.90, 0.95, 0.98],
@@ -920,7 +926,7 @@ def main():
                 hoder=("løp", "fnr", "des", "rec≥"),
                 tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
                        "(treffer kun «yolo» med tekst)",
-                **felles)
+                etikett_prefiks="ocr-fnr ", **felles)
             alle_rader += ocr_rader
 
         STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",
