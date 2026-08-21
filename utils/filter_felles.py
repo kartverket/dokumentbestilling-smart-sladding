@@ -518,13 +518,15 @@ GEOMETRI_PARAMETRE = ("min_elongation", "maks_elongation",
 
 # Strengere varianter av snill_sjekk. Se _ocr_grunn for semantikken.
 OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
-                 "krev_fnr_kandidat", "avvis_desimal", "rec_veto")
+                 "krev_fnr_kandidat", "avvis_desimal", "rec_veto",
+                 "ocr_conf_fritak")
 
 FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 
 
 def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
-               krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None):
+               krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None,
+               ocr_conf_fritak=None):
     """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
 
     Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
@@ -539,8 +541,17 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
     Paddle leste boksen sikkert (rec_min >= verdien). Leste den dårlig, er
     fraværet av et fnr ikke bevis for noe, og boksen beholdes som i dag.
     Uten rec_veto gjelder reglene uansett lesekvalitet.
+
+    ocr_conf_fritak speiler conf-porten i geometrifilteret: er
+    deteksjons-conf >= verdien, stoler vi på boksen og OCR-reglene viker.
+    Manuell gjennomgang av avvis_desimal-tapene (uttrekk 6) viste at ekte
+    fnr som rammes nesten alle har conf >= 0.5, mens koordinater og
+    kontonumre ligger under 0.4.
     """
     if p.get("har_tokens") is None or not p["har_tokens"]:
+        return None
+    if ocr_conf_fritak is not None and p.get("conf") is not None \
+            and p["conf"] >= ocr_conf_fritak:
         return None
     if rec_veto is not None:
         rec = p.get("rec_min")
@@ -683,7 +694,8 @@ def parse_per_kilde(spec_liste):
     OCR-regler (gjelder kun kilde «yolo», se _ocr_grunn):
     smin = min siffer, bmaks = maks bokstaver, rmin = min sifferløp,
     fnr = 1 krever 11-sifret fnr-kandidat, des = 1 avviser desimaltall,
-    rveto = OCR-reglene gjelder først når rec_min >= verdien.
+    rveto = OCR-reglene gjelder først når rec_min >= verdien,
+    cfritak = OCR-reglene viker når deteksjons-conf >= verdien.
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -696,6 +708,7 @@ def parse_per_kilde(spec_liste):
         "smin": "min_siffer",       "bmaks": "maks_bokstaver",
         "rmin": "min_siffer_run",   "fnr": "krev_fnr_kandidat",
         "des": "avvis_desimal",     "rveto": "rec_veto",
+        "cfritak": "ocr_conf_fritak",
     }
     resultat = {}
     for spec in spec_liste:

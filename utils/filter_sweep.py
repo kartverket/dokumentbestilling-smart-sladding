@@ -124,6 +124,7 @@ PARAM_KODER = (
     ("krev_fnr_kandidat", "fnr", "--krev-fnr-kandidat"),
     ("avvis_desimal", "des", "--avvis-desimal"),
     ("rec_veto", "rveto", "--rec-veto"),
+    ("ocr_conf_fritak", "cfritak", "--ocr-conf-fritak"),
 )
 
 
@@ -878,6 +879,12 @@ def main():
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"avvis_desimal": 1, "rec_veto": v},
                             args.kostnad)
+            _sweep_en_param(ds, "AVVIS_DESIMAL + CONF-FRITAK — desimalregelen "
+                                "(rec_veto 0.98) viker når deteksjons-conf ≥ V",
+                            [None, 0.40, 0.45, 0.50, 0.60, 0.70],
+                            lambda v: {"avvis_desimal": 1, "rec_veto": 0.98,
+                                       "ocr_conf_fritak": v},
+                            args.kostnad)
 
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
@@ -927,6 +934,18 @@ def main():
                 tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-fnr ", **felles)
+            # Desimalregelen med conf-fritak: manuell gjennomgang viste at
+            # tapene nesten alle har høy deteksjons-conf, mens koordinatene
+            # regelen skal fjerne ligger lavt. Fjerde akse er en dummy.
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 1], [None, 0.90, 0.95, 0.98],
+                [None, 0.40, 0.45, 0.50, 0.60, 0.70], [None],
+                felt=("avvis_desimal", "rec_veto", "ocr_conf_fritak",
+                      "min_siffer"),
+                hoder=("des", "rec≥", "cfrit", "-"),
+                tittel="OCR-TREKK KOMBINERT: desimalregel med conf-fritak "
+                       "(treffer kun «yolo» med tekst)",
+                etikett_prefiks="ocr-cfrit ", **felles)
             alle_rader += ocr_rader
 
         STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",

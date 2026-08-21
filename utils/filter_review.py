@@ -86,7 +86,8 @@ def _etikett(kwargs):
                         ("min_siffer_run", "løp≥{:g}"),
                         ("krev_fnr_kandidat", "fnr-kandidat"),
                         ("avvis_desimal", "ikke-desimal"),
-                        ("rec_veto", "rec≥{:g}→gjelder")):
+                        ("rec_veto", "rec≥{:g}→gjelder"),
+                        ("ocr_conf_fritak", "c≥{:g}→OCR-fritak")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -108,7 +109,8 @@ def _mappenavn(kwargs):
                          ("min_siffer", "smin"), ("maks_bokstaver", "bmaks"),
                          ("min_siffer_run", "rmin"),
                          ("krev_fnr_kandidat", "fnr"),
-                         ("avvis_desimal", "des"), ("rec_veto", "rveto")):
+                         ("avvis_desimal", "des"), ("rec_veto", "rveto"),
+                         ("ocr_conf_fritak", "cfritak")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1047,6 +1049,10 @@ def main():
                      help="Slå OCR-reglene over på først når rec_min ≥ V. "
                           "Under V leste Paddle dårlig, og fraværet av et fnr "
                           "er ikke bevis for noe.")
+    ocr.add_argument("--ocr-conf-fritak", type=float, default=None,
+                     dest="ocr_conf_fritak",
+                     help="OCR-reglene viker for bokser med deteksjons-conf "
+                          "≥ V — sikker YOLO-deteksjon overstyrer tekstbevis.")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
