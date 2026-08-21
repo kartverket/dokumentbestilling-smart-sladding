@@ -427,7 +427,85 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
               f"— én per tapt boks, samme rekkefølge som tapt.csv")
 
 
-def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None):
+# ── OCR-tekstlag for triage ───────────────────────────────────
+# «Hva leste Paddle her?» kan ikke besvares fra originalsiden alene. Med
+# --ocr-tekst falmes originalen og pipelinens CACHEDE tokens tegnes oppå i
+# sine posisjoner — nøyaktig det OCR-en faktisk så, med rec-score som farge.
+# Tokens ligger i det ROTERTE bildets pikselrom (siden pipelinen OCR-er den
+# roterte siden); prediksjoner og fasit ligger i sidens uroterte rom og
+# transformeres frem med inversen av orientering.boks_tilbake.
+
+OCR_REC_HOY = (0, 115, 0)        # grønn = rec >= 0.98
+OCR_REC_MID = (25, 45, 170)      # blå   = 0.90 <= rec < 0.98
+OCR_REC_LAV = (200, 30, 30)      # rød   = rec < 0.90
+OCR_REC_UKJ = (130, 130, 130)    # grå   = uten rec-score
+
+_FONTER = {}
+_OCR_LES_CACHE = None
+
+
+def _font_str(px):
+    px = max(9, min(int(px), 44))
+    if px not in _FONTER:
+        _FONTER[px] = ImageFont.load_default(size=px)
+    return _FONTER[px]
+
+
+def _rec_farge(rec):
+    if rec is None:
+        return OCR_REC_UKJ
+    if rec >= 0.98:
+        return OCR_REC_HOY
+    if rec >= 0.90:
+        return OCR_REC_MID
+    return OCR_REC_LAV
+
+
+def _rekt_frem(r, k, w0, h0):
+    """Urotert pikselrekt → rotert rom (invers av orientering.boks_tilbake)."""
+    if not k:
+        return list(r)
+    x0, y0, x1, y1 = r
+    if k == 1:
+        pts = [(y0, w0 - x0), (y1, w0 - x1)]
+    elif k == 2:
+        pts = [(w0 - x0, h0 - y0), (w0 - x1, h0 - y1)]
+    else:
+        pts = [(h0 - y0, x0), (h0 - y1, x1)]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _ocr_les_cache(ocr_mappe, navn):
+    """Les (rotasjoner, tokens_per_side) fra pipelinens OCR-cache."""
+    global _OCR_LES_CACHE
+    if _OCR_LES_CACHE is None:
+        app = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "app"))
+        if app not in sys.path:
+            sys.path.insert(0, app)
+        from ocr_cache import les_cache
+        _OCR_LES_CACHE = les_cache
+    return _OCR_LES_CACHE(ocr_mappe, navn)
+
+
+def _tegn_tokens(tegner, tokens, srx, sry):
+    """Tegner hvert token i sin boks, skalert til boksen, farget etter rec."""
+    for t in tokens:
+        if not t.tekst.strip():
+            continue
+        r = [t.x0 * srx, t.y0 * sry, t.x1 * srx, t.y1 * sry]
+        farge = _rec_farge(t.rec_score)
+        tegner.rectangle(r, outline=farge + (70,), width=1)
+        str_h = (r[3] - r[1]) * 0.8
+        str_b = (r[2] - r[0]) / (max(len(t.tekst), 1) * 0.55)
+        tegner.text((r[0] + 1, r[1]), t.tekst, fill=farge + (255,),
+                    font=_font_str(min(str_h, str_b)))
+
+
+def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None,
+               ocr_mappe=None, ocr_opacity=0.15):
     """Tegner ALLE BOM-prediksjoner, uavhengig av filter.
 
     En BOM-boks treffer ingen fasit-boks, men fasit er menneskeskapt: den kan
@@ -493,27 +571,50 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None):
             print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
             continue
 
+        cache = _ocr_les_cache(ocr_mappe, navn) if ocr_mappe else None
+        if ocr_mappe and cache is None:
+            print(f"  ⚠ Ingen OCR-cache for {navn} — tegner uten tekstlag")
+
         for si in sorted(per_fil[navn]):
             if not 1 <= si <= len(dok):
                 continue
             side_pred = per_side[(navn, si)]
             bilde = _render_side(dok, si)
+            w0, h0 = bilde.width, bilde.height
+            k, tokens = 0, []
+            if cache:
+                rotasjoner, tokens_per_side = cache
+                if si <= len(rotasjoner):
+                    k = rotasjoner[si - 1] or 0
+                    tokens = tokens_per_side[si - 1]
+                if k:
+                    # Samme rotasjon som pipelinen OCR-et med (np.rot90 = CCW)
+                    bilde = bilde.rotate(90 * k, expand=True)
+                bilde = Image.blend(
+                    Image.new("RGB", bilde.size, (255, 255, 255)),
+                    bilde, ocr_opacity)
             base = bilde.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
             tegner = ImageDraw.Draw(overlay)
-            sx = bilde.width / side_pred[0]["bw"]
-            sy = bilde.height / side_pred[0]["bh"]
+            sx = w0 / side_pred[0]["bw"]
+            sy = h0 / side_pred[0]["bh"]
+            if cache and tokens:
+                bw, bh = side_pred[0]["bw"], side_pred[0]["bh"]
+                rot_w, rot_h = (bh, bw) if k % 2 else (bw, bh)
+                _tegn_tokens(tegner, tokens,
+                             base.width / rot_w, base.height / rot_h)
 
             for fb in fasit_per_side.get((dok_nr(navn), si), ()):
                 fx0, fy0, fx1, fy1 = fb["boks"]
-                tegner.rectangle([fx0 * SKALA * sx, fy0 * SKALA * sy,
-                                  fx1 * SKALA * sx, fy1 * SKALA * sy],
-                                 outline=FASIT, width=2)
+                r = _rekt_frem([fx0 * SKALA * sx, fy0 * SKALA * sy,
+                                fx1 * SKALA * sx, fy1 * SKALA * sy], k, w0, h0)
+                tegner.rectangle(r, outline=FASIT, width=2)
 
             kilder_her = set()
             for p in side_pred:
                 px = p["px"]
-                r = [px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy]
+                r = _rekt_frem([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
+                               k, w0, h0)
                 if p["klasse"] == "BOM":
                     kilder_her.add(p["kilde"])
                     tegner.rectangle(r, outline=BOM, width=4)
@@ -545,6 +646,10 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None):
     print("  Spørsmålet per oransje boks: står det et fødselsnummer der?")
     print("    ja  → saksbehandleren bommet, modellen har rett (ikke oversladding)")
     print("    nei → reell oversladding")
+    if ocr_mappe:
+        print("  Tekstlag: Paddles cachede tokens oppå falmet original —")
+        print("    grønn = rec ≥ 0.98, blå = 0.90–0.98, rød = < 0.90, "
+              "grå = uten score.")
 
 
 BAND_FASIT = (30, 120, 255, 255)     # blå   = fasit (saksbehandlerens sladding)
@@ -1375,6 +1480,19 @@ def main():
                         "først. Med verdi (begge/paddle/yolo) tegnes kun den "
                         "kilden. Svarer på om de er oversladding eller "
                         "fødselsnumre saksbehandleren bommet på.")
+    p.add_argument("--ocr-tekst", action="store_true", dest="ocr_tekst",
+                   help="--bom: falm originalen og tegn Paddles cachede "
+                        "OCR-tokens oppå, farget etter rec-score (grønn "
+                        "≥0.98, blå ≥0.90, rød <0.90). Viser hva OCR "
+                        "faktisk leste der boksen ble satt.")
+    p.add_argument("--ocr-cache", default=None, metavar="STI",
+                   dest="ocr_cache",
+                   help="OCR-cache-mappe for --ocr-tekst "
+                        "(default: $SLADD_CACHE/<mappenavn>/ocr)")
+    p.add_argument("--ocr-opacity", type=float, default=0.15,
+                   dest="ocr_opacity", metavar="ANDEL",
+                   help="Opacity for originalen bak tekstlaget "
+                        "(default 0.15)")
     p.add_argument("--udekket", action="store_true",
                    help="Gjennomgangs-modus: katalogiser og tegn fasit-bokser "
                         "modellen ikke dekker (godt nok). Splitter på "
@@ -1485,9 +1603,23 @@ def main():
                                     if args.utsnitt_margin != 60.0 else 25.0),
                     ut_csv=args.band_csv)
     elif args.bom:
+        ocr_mappe = None
+        if args.ocr_tekst:
+            ocr_mappe = args.ocr_cache
+            if not ocr_mappe:
+                base = os.environ.get("SLADD_CACHE")
+                if not base:
+                    p.error("--ocr-tekst: oppgi --ocr-cache, eller sett "
+                            "$SLADD_CACHE (source activate.sh)")
+                ocr_mappe = os.path.join(
+                    base, os.path.basename(os.path.normpath(args.mappe)),
+                    "ocr")
+            if not os.path.isdir(ocr_mappe):
+                p.error(f"--ocr-tekst: finner ikke cache-mappen {ocr_mappe}")
         triage_bom(ds, args.mappe, args.ut_mappe, velg=args.velg,
                    maks_sider=args.maks_sider,
-                   kilde=None if args.bom == "alle" else args.bom)
+                   kilde=None if args.bom == "alle" else args.bom,
+                   ocr_mappe=ocr_mappe, ocr_opacity=args.ocr_opacity)
     elif args.per_kilde:
         per_kilde = parse_per_kilde(args.per_kilde)
         ukjente = set(per_kilde) - {k.lower() for k in ds.kilder()}
