@@ -94,7 +94,7 @@ AVVIS_DESIMAL_CONF_FRITAK = 0.6    # conf ≥ dette overstyrer regelen
 TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
               "rec_min_linje", "n_siffer_linje", "siffer_run",
               "har_fnr_kandidat", "har_desimal_naer",
-              "har_00_run", "har_orgnr", "har_org_ord")
+              "har_00_run", "har_orgnr", "har_org_ord", "lang_run")
 
 # Konfidens-gulv YOLO-cachen skrives med (utils/run.py --yolo-cache). Må ligge
 # under alle terskler man vil kunne endre uten å invalidere cachen: bokser

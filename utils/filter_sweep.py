@@ -128,6 +128,8 @@ PARAM_KODER = (
     ("avvis_00_run", "r00", "--avvis-00-run"),
     ("avvis_orgnr", "orgnr", "--avvis-orgnr"),
     ("avvis_org_ord", "orgord", "--avvis-org-ord"),
+    ("linje_veto", "lveto", "--linje-veto"),
+    ("avvis_run_6_10", "run610", "--avvis-run-6-10"),
 )
 
 
@@ -909,6 +911,21 @@ def main():
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"avvis_org_ord": 2, "rec_veto": v},
                             args.kostnad)
+            _sweep_en_param(ds, "KREV_FNR_KANDIDAT + LINJE_VETO — som "
+                                "fnr-kandidat (rec_veto 0.98), men regelen "
+                                "gjelder først når HELE linjen er lest med "
+                                "rec_min_linje ≥ V",
+                            [None, 0.90, 0.95, 0.98, 0.99],
+                            lambda v: {"krev_fnr_kandidat": 1,
+                                       "rec_veto": 0.98, "linje_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "AVVIS_RUN_6_10 — boksen dekker et sifferløp "
+                                "på 6-10 (dagboknr/beløp/koordinat), med "
+                                "rec_veto 0.98 og linje_veto ≥ V",
+                            [None, 0.90, 0.95, 0.98, 0.99],
+                            lambda v: {"avvis_run_6_10": 1,
+                                       "rec_veto": 0.98, "linje_veto": v},
+                            args.kostnad)
 
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
@@ -958,6 +975,20 @@ def main():
                 tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-fnr ", **felles)
+            # Linjebevis-reglene: fnr-kandidat og løpelengde 6-10, portet
+            # på lesekvaliteten til hele linjen. Fjerde akse er cfritak så
+            # høy YOLO-conf kan verne ekte fnr.
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 1], [None, 1], [None, 0.95, 0.98, 0.99],
+                [None, 0.5, 0.6],
+                felt=("krev_fnr_kandidat", "avvis_run_6_10", "linje_veto",
+                      "ocr_conf_fritak"),
+                hoder=("fnr", "r610", "linje≥", "cfrit"),
+                tittel="OCR-TREKK KOMBINERT: linjebevis — fnr-kandidat og "
+                       "løpelengde med linje-veto (linje-vetoet omfatter "
+                       "boksens tokens og er dermed strengere enn rec_veto; "
+                       "treffer kun «yolo» med tekst)",
+                etikett_prefiks="ocr-linje ", **felles)
             # Orgnummer-reglene: 00-paddede løp, orgnr-mod11 og
             # selskapsform-ord, mot rec_veto. Konkurrerer i samme
             # Pareto-front som resten.

@@ -44,6 +44,11 @@ Trekk per boks:
                       8/9 og består orgnr-kontrollsifferet (mod11)
     har_org_ord       1 hvis boksens linje eller nabolinjene inneholder
                       selskapsform-ord (AS, Borettslag, Sameie, Org.nr, …)
+    lang_run          lengste sifferløp MED luker (samme lukeregler som
+                      finn_fnr: ≤2 tegn av « .-,_») som overlapper boksen.
+                      En ekte fnr-sladding dekker siste 5 av et 11-løp;
+                      dekker boksen slutten av et 6-sifret løp («19510/382769»
+                      → sladd på 82769), kan det ikke være et fnr
 
 MERK om har_fnr_kandidat: finn_fnr godtar «.» og «,» som luke mellom
 sifferbiter, fordi OCR deler opp et fnr på den måten. På en koordinatlinje syr
@@ -227,6 +232,7 @@ def trekk_for_boks(tokens, linjer, boks):
         "har_00_run": 0,
         "har_orgnr": 0,
         "har_org_ord": 0,
+        "lang_run": 0,
     }
 
     # Uavhengig av egen linje: ordene kan stå på linjen over/under.
@@ -244,6 +250,9 @@ def trekk_for_boks(tokens, linjer, boks):
     trekk["har_desimal_naer"] = _har_desimal(tekst, kart, boks)
     trekk["har_00_run"] = _har_00_run(tekst, kart, boks)
     trekk["har_orgnr"] = _har_orgnr(tekst, kart, boks)
+    trekk["lang_run"] = max(
+        (len(cifre) for start, slutt, cifre in _tall_runs(tekst)
+         if _spenner_over(kart, start, slutt, boks)), default=0)
     trekk["har_fnr_kandidat"] = 1 if any(
         _spenner_over(kart, tr.start, tr.end, boks)
         for tr in finn_fnr(tekst, krev_mod11=False)) else 0

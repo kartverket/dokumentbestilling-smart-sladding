@@ -520,7 +520,8 @@ GEOMETRI_PARAMETRE = ("min_elongation", "maks_elongation",
 OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
                  "krev_fnr_kandidat", "avvis_desimal", "rec_veto",
                  "ocr_conf_fritak",
-                 "avvis_00_run", "avvis_orgnr", "avvis_org_ord")
+                 "avvis_00_run", "avvis_orgnr", "avvis_org_ord",
+                 "linje_veto", "avvis_run_6_10")
 
 FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 
@@ -528,7 +529,8 @@ FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
                krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None,
                ocr_conf_fritak=None,
-               avvis_00_run=None, avvis_orgnr=None, avvis_org_ord=None):
+               avvis_00_run=None, avvis_orgnr=None, avvis_org_ord=None,
+               linje_veto=None, avvis_run_6_10=None):
     """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
 
     Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
@@ -559,6 +561,13 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
         rec = p.get("rec_min")
         if rec is None or rec < rec_veto:
             return None
+    # linje_veto er rec_veto for HELE linjen: fnr-kandidat- og løpelengde-
+    # trekkene avhenger av at nabotallene på linjen er riktig lest, ikke bare
+    # sifrene i selve boksen.
+    if linje_veto is not None:
+        rec_linje = p.get("rec_min_linje")
+        if rec_linje is None or rec_linje < linje_veto:
+            return None
 
     if min_siffer is not None and (p["n_siffer"] or 0) < min_siffer:
         return f"siffer {p['n_siffer']:.0f} < {min_siffer:g}"
@@ -580,6 +589,13 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
     if avvis_org_ord and p.get("har_org_ord") \
             and (avvis_org_ord < 2 or not p.get("har_fnr_kandidat")):
         return "org-ord nær boksen"
+    # 6-10 siffer med luker er for langt til å være et nakent personnummer og
+    # for kort til å være et fnr — dagboknr, beløp, koordinat. ≤5 røres ikke
+    # (kan være siste 5 av et fnr der resten står utenfor linjen), 11+ heller
+    # ikke (håndteres av fnr-kandidat-regelen).
+    if avvis_run_6_10 and p.get("lang_run") is not None \
+            and 6 <= p["lang_run"] <= 10:
+        return f"sifferløp på {p['lang_run']:.0f} kan ikke være fnr"
     return None
 
 
@@ -709,7 +725,9 @@ def parse_per_kilde(spec_liste):
     rveto = OCR-reglene gjelder først når rec_min >= verdien,
     cfritak = OCR-reglene viker når deteksjons-conf >= verdien,
     r00 = 1 avviser 00-paddede løp, orgnr = 1 avviser gyldige orgnr,
-    orgord = 1 avviser ved org-ord nær boksen (2 = kun uten fnr-kandidat).
+    orgord = 1 avviser ved org-ord nær boksen (2 = kun uten fnr-kandidat),
+    lveto = OCR-reglene gjelder først når rec_min_linje >= verdien,
+    run610 = 1 avviser bokser over sifferløp på 6-10.
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -725,6 +743,7 @@ def parse_per_kilde(spec_liste):
         "cfritak": "ocr_conf_fritak",
         "r00": "avvis_00_run",      "orgnr": "avvis_orgnr",
         "orgord": "avvis_org_ord",
+        "lveto": "linje_veto",      "run610": "avvis_run_6_10",
     }
     resultat = {}
     for spec in spec_liste:

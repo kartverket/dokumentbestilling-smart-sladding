@@ -90,7 +90,9 @@ def _etikett(kwargs):
                         ("ocr_conf_fritak", "c≥{:g}→OCR-fritak"),
                         ("avvis_00_run", "ikke-00-løp"),
                         ("avvis_orgnr", "ikke-orgnr"),
-                        ("avvis_org_ord", "ikke-org-ord({:g})")):
+                        ("avvis_org_ord", "ikke-org-ord({:g})"),
+                        ("linje_veto", "linjerec≥{:g}→gjelder"),
+                        ("avvis_run_6_10", "ikke-run-6-10")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -115,7 +117,8 @@ def _mappenavn(kwargs):
                          ("avvis_desimal", "des"), ("rec_veto", "rveto"),
                          ("ocr_conf_fritak", "cfritak"),
                          ("avvis_00_run", "r00"), ("avvis_orgnr", "orgnr"),
-                         ("avvis_org_ord", "orgord")):
+                         ("avvis_org_ord", "orgord"),
+                         ("linje_veto", "lveto"), ("avvis_run_6_10", "run610")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1330,6 +1333,16 @@ def main():
                      help="Forkast bokser med selskapsform-ord nær seg "
                           "(AS, Borettslag, Org.nr, …). 1=alltid, 2=kun når "
                           "boksen også mangler fnr-kandidat")
+    ocr.add_argument("--linje-veto", type=float, default=None,
+                     dest="linje_veto",
+                     help="Slå OCR-reglene på først når rec_min_linje ≥ V — "
+                          "fnr-kandidat og løpelengde avhenger av at HELE "
+                          "linjen er riktig lest, ikke bare boksen")
+    ocr.add_argument("--avvis-run-6-10", action="store_const", const=1,
+                     default=None, dest="avvis_run_6_10",
+                     help="Forkast bokser over sifferløp på 6-10 (med luker) "
+                          "— for langt for nakent personnummer, for kort for "
+                          "fnr: dagboknr, beløp, koordinat")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
