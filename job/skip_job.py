@@ -20,8 +20,9 @@ def hentDokumenterTilSladding():
         dokumentnummer = ident.get('dokumentnummer')
         embetenummer = ident.get('embetenummer')
 
+        docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
+
         er_elektronisk_tinglyst = dokument.get('erElektroniskTinglyst')
-        # Bruk er_elektronisk_tinglyst til det du trenger
         if er_elektronisk_tinglyst:
             logging.info(f'Dokument {docid} er elektronisk tinglyst')
 
@@ -34,8 +35,6 @@ def hentDokumenterTilSladding():
         if dokumentStatus.text != '"KLAR_FOR_BEHANDLING"':
             logging.info(f'Status fra dokument: {dokumentaar}_{dokumentnummer}_{embetenummer} er endret til {dokumentStatus.text}. Hopper over.')
             continue
-
-        docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
         document_url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
 
