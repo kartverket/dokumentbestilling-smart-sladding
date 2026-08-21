@@ -1338,11 +1338,11 @@ def main():
                      help="Slå OCR-reglene på først når rec_min_linje ≥ V — "
                           "fnr-kandidat og løpelengde avhenger av at HELE "
                           "linjen er riktig lest, ikke bare boksen")
-    ocr.add_argument("--avvis-run-6-10", action="store_const", const=1,
-                     default=None, dest="avvis_run_6_10",
-                     help="Forkast bokser over sifferløp på 6-10 (med luker) "
-                          "— for langt for nakent personnummer, for kort for "
-                          "fnr: dagboknr, beløp, koordinat")
+    ocr.add_argument("--avvis-run-6-10", type=float, nargs="?", const=1,
+                     default=None, dest="avvis_run_6_10", metavar="MAKS",
+                     help="Forkast bokser over sifferløp på 6..MAKS (med "
+                          "luker); uten verdi = 6..10. Bruk 9: 10-løp er "
+                          "ofte fnr med ensifret dag/måned eller mistet tegn")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')

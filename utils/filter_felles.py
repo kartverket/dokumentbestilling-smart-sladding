@@ -589,13 +589,17 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
     if avvis_org_ord and p.get("har_org_ord") \
             and (avvis_org_ord < 2 or not p.get("har_fnr_kandidat")):
         return "org-ord nær boksen"
-    # 6-10 siffer med luker er for langt til å være et nakent personnummer og
-    # for kort til å være et fnr — dagboknr, beløp, koordinat. ≤5 røres ikke
-    # (kan være siste 5 av et fnr der resten står utenfor linjen), 11+ heller
-    # ikke (håndteres av fnr-kandidat-regelen).
-    if avvis_run_6_10 and p.get("lang_run") is not None \
-            and 6 <= p["lang_run"] <= 10:
-        return f"sifferløp på {p['lang_run']:.0f} kan ikke være fnr"
+    # Sifferløp med luker som er for langt til å være et nakent personnummer
+    # og for kort til å være et fnr — dagboknr, beløp, koordinat. ≤5 røres
+    # ikke (kan være siste 5 av et fnr der resten står utenfor linjen), 11+
+    # heller ikke (håndteres av fnr-kandidat-regelen). Verdien er øvre grense
+    # for båndet (6..V); 1 betyr 6..10 (historisk). Manuell gjennomgang på
+    # uttrekk 6 viste at 10-løp OFTE er ekte fnr — skrevet med ensifret
+    # dag/måned eller med ett tegn mistet i OCR — så 9 er tryggeste grense.
+    if avvis_run_6_10 and p.get("lang_run") is not None:
+        maks = 10 if avvis_run_6_10 == 1 else avvis_run_6_10
+        if 6 <= p["lang_run"] <= maks:
+            return f"sifferløp på {p['lang_run']:.0f} kan ikke være fnr"
     return None
 
 
@@ -727,7 +731,7 @@ def parse_per_kilde(spec_liste):
     r00 = 1 avviser 00-paddede løp, orgnr = 1 avviser gyldige orgnr,
     orgord = 1 avviser ved org-ord nær boksen (2 = kun uten fnr-kandidat),
     lveto = OCR-reglene gjelder først når rec_min_linje >= verdien,
-    run610 = 1 avviser bokser over sifferløp på 6-10.
+    run610 = øvre grense: avviser bokser over sifferløp på 6..V (1 = 6..10).
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",

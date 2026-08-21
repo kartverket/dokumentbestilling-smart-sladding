@@ -222,8 +222,10 @@ def trekk_for_boks(tokens, linjer, boks):
         "har_tokens": 1 if i_boks else 0,
         "n_siffer": n_siffer,
         "n_bokstaver": n_bokstaver,
-        "rec_min": round(min(rec), 3) if rec else None,
-        "rec_median": round(statistics.median(rec), 3) if rec else None,
+        # 5 desimaler, ikke 3: scorene metter mot 1, og terskler som 0.9999
+        # er meningsløse hvis alt over 0.9995 avrundes til 1.0.
+        "rec_min": round(min(rec), 5) if rec else None,
+        "rec_median": round(statistics.median(rec), 5) if rec else None,
         "rec_min_linje": None,
         "n_siffer_linje": 0,
         "siffer_run": 0,
@@ -244,7 +246,7 @@ def trekk_for_boks(tokens, linjer, boks):
     linje_tokens, tekst, kart = post
 
     rec_linje = _rec_verdier(linje_tokens)
-    trekk["rec_min_linje"] = round(min(rec_linje), 3) if rec_linje else None
+    trekk["rec_min_linje"] = round(min(rec_linje), 5) if rec_linje else None
     trekk["n_siffer_linje"] = sum(ch.isdigit() for ch in tekst)
     trekk["siffer_run"] = _siffer_run(tekst, kart, boks)
     trekk["har_desimal_naer"] = _har_desimal(tekst, kart, boks)
