@@ -131,6 +131,8 @@ PARAM_KODER = (
     ("linje_veto", "lveto", "--linje-veto"),
     ("avvis_run_6_10", "run610", "--avvis-run-6-10"),
     ("uten_tekst_conf", "utconf", "--uten-tekst-conf"),
+    ("maks_luke", "luke", "--maks-luke"),
+    ("avvis_desimal_luke", "desluke", "--avvis-desimal-luke"),
 )
 
 
@@ -948,6 +950,33 @@ def main():
                             lambda v: {"uten_tekst_conf": v},
                             args.kostnad)
 
+        # ── Vindu-trekk: paddle-bokser sydd over desimaler/kolonnegap ──
+        n_vindu = sum(1 for x in ds.pred if x.get("maks_luke") is not None)
+        if not n_vindu:
+            print("\n(ingen vindu-trekk i resultat-CSV-en — paddle-vindu-"
+                  "sweepen hoppes over. Kjør run.py på nytt for å få dem.)")
+        else:
+            print(f"\n{'═' * 145}")
+            print("PADDLE-VINDU — 11-siffer-vinduet boksen ble bygget fra")
+            print(f"  {n_vindu} paddle/begge-bokser med vindu-trekk er i "
+                  f"spill; alt annet er urørt")
+            print(f"{'═' * 145}")
+            _sweep_en_param(ds, "MAKS_LUKE — største fysiske luke mellom "
+                                "nabosiffer i vinduet, i sifferbredder. "
+                                "Koordinat-søm («6626630.58 549810.29») og "
+                                "skisse-mål gir store luker; et ekte fnr "
+                                "ligger kant i kant",
+                            [1.5, 2, 3, 4, 6, 8, 12],
+                            lambda v: {"maks_luke": v}, args.kostnad)
+            _sweep_en_param(ds, "AVVIS_DESIMAL_LUKE — en luke i vinduet "
+                                "inneholder desimalskille (. eller ,)",
+                            [1],
+                            lambda v: {"avvis_desimal_luke": v}, args.kostnad)
+            _sweep_en_param(ds, "DESIMAL_LUKE + MAKS_LUKE kombinert",
+                            [None, 1.5, 2, 3, 4, 6],
+                            lambda v: {"avvis_desimal_luke": 1,
+                                       "maks_luke": v}, args.kostnad)
+
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
 
@@ -1058,6 +1087,18 @@ def main():
                 tittel="OCR-TREKK KOMBINERT: desimalregel med conf-fritak "
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-cfrit ", **felles)
+            # Paddle-vinduet: bokser fra 11-vinduer sydd over desimal-
+            # skiller og kolonnegap. Treffer paddle/begge — de eneste med
+            # vindu-trekk; yolo-bokser er urørt uansett verdier her.
+            if any(x.get("maks_luke") is not None for x in ds.pred):
+                ocr_rader += _sweep_kombinasjoner(
+                    ds, [None, 1], [None, 1.5, 2, 3, 4, 6, 8], [None], [None],
+                    felt=("avvis_desimal_luke", "maks_luke",
+                          "min_siffer", "rec_veto"),
+                    hoder=("desluke", "luke≥", "-", "-"),
+                    tittel="PADDLE-VINDU KOMBINERT: desimal-luke og fysisk "
+                           "lukebredde (treffer paddle/begge)",
+                    etikett_prefiks="p-vindu ", **felles)
             alle_rader += ocr_rader
 
         STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",

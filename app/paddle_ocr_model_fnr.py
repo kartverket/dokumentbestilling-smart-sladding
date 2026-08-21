@@ -259,6 +259,31 @@ def _sladdeboks(sifferbokser):
 
 
 
+def _vindu_trekk(vindu, sifferbokser):
+    """Trekk ved 11-siffer-vinduet en sladdeboks ble bygget fra.
+
+    Skrives til resultat-CSV-en (TREKK_FELT) så etterfiltre kan feies uten ny
+    kjøring. Et ekte fnr har fysisk sammenhengende siffer og aldri
+    desimalskille i lukene. Koordinat- og målekolonner («6626630.58
+    549810.29») syr derimot sammen vinduer på tvers av desimalpunktum og
+    kolonnegap — lukereglene tillater det (≤2 tegn av « .-,_»), og
+    linjeteksten har alltid nøyaktig ETT mellomrom mellom tokens uansett
+    fysisk avstand, så selv tall i hver sin ende av en skisse sys sammen.
+
+      maks_luke        største horisontale avstand mellom to nabosiffer,
+                       målt i median sifferbredde (0 = kant i kant)
+      har_desimal_luke 1 hvis en luke inneholder «.» eller «,»
+    """
+    har_desimal = int(any(ch in ".," for g in re.findall(r"\D+", vindu)
+                          for ch in g))
+    bredder = sorted(b.hoyre - b.venstre for b in sifferbokser)
+    median = bredder[len(bredder) // 2] or 1.0
+    gap = max((sifferbokser[i + 1].venstre - sifferbokser[i].hoyre
+               for i in range(len(sifferbokser) - 1)), default=0.0)
+    return {"maks_luke": round(max(gap, 0.0) / median, 2),
+            "har_desimal_luke": har_desimal}
+
+
 def finn_bokser_fra_tokens(tokens, linjer=None):
     """Sladdebokser fra OCR-tokens.
 
@@ -272,11 +297,13 @@ def finn_bokser_fra_tokens(tokens, linjer=None):
             boks = _sladdeboks(sifferbokser)
             if boks is None:
                 continue
-            cifre = re.sub(r"\D", "", _normaliser_ocr(tekst[treff.start:treff.end]))
+            vindu = _normaliser_ocr(tekst[treff.start:treff.end])
+            cifre = re.sub(r"\D", "", vindu)
             # Beregn paddle rec_score: minimum rec_score blant involverte tokens
             rec_scores = [sb.rec_score for sb in sifferbokser if sb.rec_score is not None]
             rec_score = round(min(rec_scores), 3) if rec_scores else None
-            bokser.append((boks, gyldig_mod11(cifre), rec_score))
+            bokser.append((boks, gyldig_mod11(cifre), rec_score,
+                           _vindu_trekk(vindu, sifferbokser)))
     return bokser
 
 

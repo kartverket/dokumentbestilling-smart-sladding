@@ -110,10 +110,17 @@ LINJEBEVIS_RUN_MAKS    = 8     # sifferløp 6..8 forkastes
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
 # utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.
+# De to siste er VINDU-trekk og finnes kun for paddle/begge-bokser: de
+# beskriver 11-siffer-vinduet boksen ble bygget fra (paddle_ocr_model_fnr.
+# _vindu_trekk). maks_luke = største fysiske avstand mellom to nabosiffer i
+# vinduet, i median sifferbredde; har_desimal_luke = 1 når en luke inneholder
+# desimalskille (. eller ,). Ekte fnr har verken store luker eller desimaler —
+# koordinat- og målekolonner («6626630.58 549810.29») har begge.
 TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
               "rec_min_linje", "n_siffer_linje", "siffer_run",
               "har_fnr_kandidat", "har_desimal_naer",
-              "har_00_run", "har_orgnr", "har_org_ord", "lang_run")
+              "har_00_run", "har_orgnr", "har_org_ord", "lang_run",
+              "maks_luke", "har_desimal_luke")
 
 # Konfidens-gulv YOLO-cachen skrives med (utils/run.py --yolo-cache). Må ligge
 # under alle terskler man vil kunne endre uten å invalidere cachen: bokser

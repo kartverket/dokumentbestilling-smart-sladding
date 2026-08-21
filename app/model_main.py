@@ -109,8 +109,9 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     # deles av både fnr-søket og trekk-beregningen for hver YOLO-boks.
     linjer = bygg_linjer(tokens) if tokens else []
 
-    bokser = [[boks, "paddle", None, rec_score, None]
-              for (boks, _mod11, rec_score) in finn_bokser_fra_tokens(tokens, linjer)]
+    bokser = [[boks, "paddle", None, rec_score, vindu_trekk]
+              for (boks, _mod11, rec_score, vindu_trekk)
+              in finn_bokser_fra_tokens(tokens, linjer)]
 
     for (x0, y0, x1, y1, conf) in yolo_bokser:
         yb = (x0, y0, x1, y1)
@@ -131,8 +132,9 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
         elif kilde := _godta_yolo_boks(tokens, yb, conf):
             # Trekkene beskriver hva snill_sjekk hadde å gå på, og skrives til
             # resultat-CSV-en så strengere varianter kan feies uten ny kjøring.
-            # Se boks_trekk: kun «yolo» får trekk — «yolo_vertikal» leser ikke
-            # tokens, og paddle/begge styres ikke av denne regelen.
+            # Se boks_trekk: «yolo» får tekst-trekkene — «yolo_vertikal»
+            # leser ikke tokens. Paddle/begge bærer i stedet VINDU-trekkene
+            # (maks_luke/har_desimal_luke) fra finn_bokser_fra_tokens.
             trekk = trekk_for_boks(tokens, linjer, yb) if kilde == "yolo" else None
             bokser.append([yb, kilde, round(conf, 3), None, trekk])
 

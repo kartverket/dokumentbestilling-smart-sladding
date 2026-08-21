@@ -40,7 +40,9 @@ except ImportError:  # kjøring utenfor repoet
     PDF_DPI = 300
     TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
                   "rec_min_linje", "n_siffer_linje", "siffer_run",
-                  "har_fnr_kandidat", "har_desimal_naer")
+                  "har_fnr_kandidat", "har_desimal_naer",
+                  "har_00_run", "har_orgnr", "har_org_ord", "lang_run",
+                  "maks_luke", "har_desimal_luke")
 
 SKALA = PDF_DPI / 72.0   # PDF-punkt → piksel
 
@@ -526,7 +528,8 @@ OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
                  "krev_fnr_kandidat", "avvis_desimal", "rec_veto",
                  "ocr_conf_fritak",
                  "avvis_00_run", "avvis_orgnr", "avvis_org_ord",
-                 "linje_veto", "avvis_run_6_10", "uten_tekst_conf")
+                 "linje_veto", "avvis_run_6_10", "uten_tekst_conf",
+                 "maks_luke", "avvis_desimal_luke")
 
 FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 
@@ -535,14 +538,18 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
                krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None,
                ocr_conf_fritak=None,
                avvis_00_run=None, avvis_orgnr=None, avvis_org_ord=None,
-               linje_veto=None, avvis_run_6_10=None, uten_tekst_conf=None):
+               linje_veto=None, avvis_run_6_10=None, uten_tekst_conf=None,
+               maks_luke=None, avvis_desimal_luke=None):
     """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
 
     Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
     bare der den regelen gjelder:
 
-      * Boksen må ha trekk. Bare kilde «yolo» får trekk (app/boks_trekk.py);
-        paddle, «begge» og «yolo_vertikal» har None og røres ikke.
+      * Boksen må ha trekk. Bare kilde «yolo» får tekst-trekk
+        (app/boks_trekk.py); «yolo_vertikal» har None og røres ikke.
+        Unntak: VINDU-reglene (maks_luke/avvis_desimal_luke) treffer
+        paddle/begge — de eneste med vindu-trekk — og sjekkes derfor før
+        tekstgaten.
       * har_tokens må være 1. Bokser uten tekst styres av
         YOLO_CONF_UTEN_TEKST, ikke av snill_sjekk.
 
@@ -566,6 +573,15 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
             and not p["har_tokens"]:
         if p.get("conf") is None or p["conf"] < uten_tekst_conf:
             return f"uten tekst og conf < {uten_tekst_conf:g}"
+    # Vindu-reglene: paddle/begge-bokser bygges fra et 11-siffer-vindu med
+    # luker. Ekte fnr har fysisk sammenhengende siffer uten desimalskille;
+    # koordinat-/målekolonner sys sammen over «.» og kolonnegap. Må stå FØR
+    # tekstgaten under — paddle-bokser har ikke har_tokens.
+    if avvis_desimal_luke and p.get("har_desimal_luke"):
+        return "desimalskille i luke i 11-vinduet"
+    if maks_luke is not None and p.get("maks_luke") is not None \
+            and p["maks_luke"] >= maks_luke:
+        return f"luke {p['maks_luke']:g} ≥ {maks_luke:g} sifferbredder"
     if p.get("har_tokens") is None or not p["har_tokens"]:
         return None
     if ocr_conf_fritak is not None and p.get("conf") is not None \
@@ -747,6 +763,10 @@ def parse_per_kilde(spec_liste):
     lveto = OCR-reglene gjelder først når rec_min_linje >= verdien,
     run610 = øvre grense: avviser bokser over sifferløp på 6..V (1 = 6..10),
     utconf = bokser UTEN tekst krever conf >= verdien (prod: 0.40).
+
+    Vindu-regler (gjelder paddle/begge — bokser bygget fra 11-siffer-vindu):
+    luke = avvis når største fysiske luke i vinduet >= V sifferbredder,
+    desluke = 1 avviser vinduer sydd over et desimalskille (. eller ,).
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -764,6 +784,7 @@ def parse_per_kilde(spec_liste):
         "orgord": "avvis_org_ord",
         "lveto": "linje_veto",      "run610": "avvis_run_6_10",
         "utconf": "uten_tekst_conf",
+        "luke": "maks_luke",        "desluke": "avvis_desimal_luke",
     }
     resultat = {}
     for spec in spec_liste:

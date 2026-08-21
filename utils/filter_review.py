@@ -93,7 +93,9 @@ def _etikett(kwargs):
                         ("avvis_org_ord", "ikke-org-ord({:g})"),
                         ("linje_veto", "linjerec≥{:g}→gjelder"),
                         ("avvis_run_6_10", "ikke-run-6-10"),
-                        ("uten_tekst_conf", "utenTekst-c≥{:g}")):
+                        ("uten_tekst_conf", "utenTekst-c≥{:g}"),
+                        ("maks_luke", "luke<{:g}"),
+                        ("avvis_desimal_luke", "ikke-desimal-luke")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -120,7 +122,9 @@ def _mappenavn(kwargs):
                          ("avvis_00_run", "r00"), ("avvis_orgnr", "orgnr"),
                          ("avvis_org_ord", "orgord"),
                          ("linje_veto", "lveto"), ("avvis_run_6_10", "run610"),
-                         ("uten_tekst_conf", "utconf")):
+                         ("uten_tekst_conf", "utconf"),
+                         ("maks_luke", "luke"),
+                         ("avvis_desimal_luke", "desluke")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1466,6 +1470,15 @@ def main():
                      help="Bokser UTEN tekst (har_tokens=0) krever conf ≥ V "
                           "— strengere enn prods YOLO_CONF_UTEN_TEKST (0.40)")
 
+    ocr.add_argument("--maks-luke", type=float, default=None,
+                     dest="maks_luke", metavar="BREDDER",
+                     help="Forkast paddle/begge-bokser der største fysiske "
+                          "luke i 11-siffer-vinduet er ≥ V sifferbredder — "
+                          "vinduer sydd på tvers av kolonnegap")
+    ocr.add_argument("--avvis-desimal-luke", action="store_const", const=1,
+                     default=None, dest="avvis_desimal_luke",
+                     help="Forkast paddle/begge-bokser der 11-vinduet er "
+                          "sydd over et desimalskille (. eller ,)")
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
     p.add_argument("--mot-fasit", action="store_true", dest="mot_fasit",
