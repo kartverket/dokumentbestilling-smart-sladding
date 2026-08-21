@@ -1250,8 +1250,16 @@ def main():
                    help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
     p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
                    help=f"SLURV-grense (default: {STD_SLURV_FAKTOR})")
-    p.add_argument("--inkluder-ulabelte", action="store_true",
-                   help="Ta med dokumenter som ikke finnes i fasit-CSV-en")
+    p.add_argument("--inkluder-ulabelte", action="store_true", default=True,
+                   help="(default på) Ta med kjørte dokumenter uten rader i "
+                        "fasit-CSV-en — labels-filen dekker hele uttrekket, "
+                        "så de er gjennomgått med null fnr og prediksjoner "
+                        "der er ekte oversladdinger")
+    p.add_argument("--ekskluder-ulabelte", dest="inkluder_ulabelte",
+                   action="store_false",
+                   help="Gammel oppførsel: hold dokumenter uten fasit-rader "
+                        "utenfor scope (for eldre labels-filer som ikke "
+                        "dekket hele uttrekket)")
 
     p.add_argument("--kjorte-liste", default=None, metavar="FIL",
                    help="Fil med dokumentene modellen har kjørt på (ett navn "

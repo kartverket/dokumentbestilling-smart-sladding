@@ -672,10 +672,16 @@ def main():
     p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
                    help="Pred-areal > faktor × dekket fasit-areal ⇒ SLURV "
                         f"(default: {STD_SLURV_FAKTOR})")
-    p.add_argument("--inkluder-ulabelte", action="store_true",
-                   help="Ta med prediksjoner på dokumenter som ikke finnes i "
-                        "fasit-CSV-en (default: ekskluderes, siden de ellers "
-                        "blåser opp oversladdingstallene)")
+    p.add_argument("--inkluder-ulabelte", action="store_true", default=True,
+                   help="(default på) Ta med prediksjoner på kjørte "
+                        "dokumenter uten rader i fasit-CSV-en — labels-filen "
+                        "dekker hele uttrekket, så de er gjennomgått med "
+                        "null fnr og prediksjoner der er ekte oversladdinger")
+    p.add_argument("--ekskluder-ulabelte", dest="inkluder_ulabelte",
+                   action="store_false",
+                   help="Gammel oppførsel: hold dokumenter uten fasit-rader "
+                        "utenfor scope (for eldre labels-filer som ikke "
+                        "dekket hele uttrekket)")
     p.add_argument("--form-pst", type=float, default=0.1, metavar="P",
                    help="Persentil for form-grensen utledet fra TREFF-bokser: "
                         "nedre grense = pP, øvre = p(100-P). Lavere = mer "

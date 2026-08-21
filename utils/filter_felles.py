@@ -146,32 +146,18 @@ def les_fasit(sti):
     """Leser fasit-labels (ACCEPTED + manuell, ekskluderer REJECTED).
 
     Returnerer dict: (dok_nr, side) -> [(x0, y0, x1, y1), ...] i PDF-punkt.
-
-    Dokumenter som forekommer i CSV-en uten en eneste gyldig boks — alle
-    radene REJECTED, eller rader uten koordinater — får en TOM oppføring.
-    De er gjennomgått med fasit «null fnr», ikke ulabelte: prediksjoner der
-    er ekte oversladdinger og skal telles i scope, ikke ekskluderes som
-    «dokument mangler i fasit».
     """
     fasit = defaultdict(list)
     with open(sti, newline="", encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
+            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
+                continue
             try:
                 nr = int(r["fil_revisjon_id"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            try:
                 side = int(r["sidetall"])
-            except (TypeError, ValueError, KeyError):
-                side = 1
-            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
-                fasit[(nr, side)]        # marker dokumentet som labelt
-                continue
-            try:
                 x, y = float(r["x"]), float(r["y"])
                 w, h = float(r["width"]), float(r["height"])
             except (TypeError, ValueError, KeyError):
-                fasit[(nr, side)]        # labelt, men raden har ingen boks
                 continue
             x0, x1 = sorted((x, x + w))
             y0, y1 = sorted((y, y + h))
@@ -394,7 +380,12 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
     labelte_dok = {nr for (nr, _side) in fasit}
     kjorte = (set(kjorte_dok) if kjorte_dok is not None
               else {p["dok_nr"] for p in pred})
-    scope_dok = labelte_dok & kjorte
+    # Med inkluder_ulabelte er scope alle KJØRTE dokumenter: labels-filen
+    # dekker hele uttrekket, så et kjørt dokument uten fasit-rader er
+    # gjennomgått med null fnr — prediksjonene der er BOM og skal både
+    # telles og være med i holdout-splitten (splitt_dokumenter deler over
+    # scope_dok; uten dette falt de ut av begge settene).
+    scope_dok = kjorte if inkluder_ulabelte else labelte_dok & kjorte
 
     # Sidestørrelse i punkt, utledet fra pikselstørrelsen i resultat-CSV-en
     side_str = {}
@@ -880,8 +871,9 @@ def skriv_oppsummering(ds, skriv=print):
     skriv(f"Prediksjoner: {len(ds.pred)} i scope"
           + (f"  ({len(ds.utenfor)} ekskludert — dokument mangler i fasit)"
              if ds.utenfor else ""))
-    skriv(f"Scope:        {len(ds.scope_dok)} dokumenter "
-          f"(labelt OG kjørt)")
+    skriv(f"Scope:        {len(ds.scope_dok)} dokumenter"
+          + ("  (labelt OG kjørt)" if ds.utenfor else
+             "  (alle kjørte — dokumenter uten fasit-rader teller som null fnr)"))
     if ds.n_dok_ukjort:
         skriv(f"              {ds.n_dok_ukjort} labelte dokumenter er ikke "
               f"kjørt — {ds.n_fasit_ukjort} fasit-bokser holdt utenfor")
