@@ -417,9 +417,16 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
                 "horisontal": (x1 - x0) >= (y1 - y0),
             })
 
+    # Prediksjoner avgrenses til scope_dok — IKKE bare til labelte/alle.
+    # Med en eksplisitt --kjorte-liste (f.eks. én rettsstiftelsestype) ville
+    # den gamle betingelsen (labelte eller inkluder_ulabelte) sluppet inn
+    # alle prediksjoner i CSV-en, mens fasiten deres ble holdt utenfor —
+    # treff utenfor listen ble da talt som BOM (presisjon 1 %, meningsløse
+    # sweep-gevinster). scope_dok bærer allerede begge modusene: alle kjørte
+    # med inkluder_ulabelte, ellers labelte ∩ kjørte.
     innenfor, utenfor = [], []
     for p in pred:
-        if p["dok_nr"] in labelte_dok or inkluder_ulabelte:
+        if p["dok_nr"] in scope_dok:
             innenfor.append(p)
         else:
             utenfor.append(p)
