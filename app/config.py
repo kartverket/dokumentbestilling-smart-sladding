@@ -122,6 +122,27 @@ LINJEBEVIS_RUN_MAKS    = 8     # sifferløp 6..8 forkastes
 VINDU_MAKS_LUKE          = 8.0   # sifferbredder, luker utenfor posisjon 2/4/6
 VINDU_AVVIS_DESIMAL_LUKE = True  # desimalskille i luke utenfor 2/4/6
 
+# ── Regelprofil per rettsstiftelsestype ──────────────────────────
+# Koordinat-familien: jordskifte, målebrev, grensejustering, massetransport,
+# skjønn og jordsameie — dokumenter som er kart, måltabeller og koordinat-
+# lister. Målt på uttrekk 6: 221 dokumenter, 865 prediksjoner, presisjon
+# 21 % — mot 88,5 % ellers. I disse dokumentene aktiveres koordfam-regelen
+# (_koordfam_forkaster): YOLO-bokser med lest tekst forkastes når linjen
+# mangler 11-sifret fnr-kandidat eller tallet har desimalskille. Globalt
+# koster den regelen hundrevis av ekte fnr; innenfor familien er den målt
+# til 576 fjernede oversladdinger mot 0 ekte fnr (5 «tap» var fasit-støy,
+# manuelt bekreftet). Dokumentets koder kommer fra skip-jobben via
+# dokumentbestilling-API-et; mangler de, gjelder dagens globale oppførsel.
+KOORDFAM_KODER = frozenset((
+    "SR_JOU",   # Jordskifte
+    "AH_JOU",   # Jordskifte (annen hjemmel)
+    "KA_MOB",   # Målebrev
+    "KA_GRE",   # Grensejustering
+    "TR_MAS",   # Massetransport
+    "SR_SKN",   # Skjønn
+    "JS_JSA",   # Opprettelse av jordsameie
+))
+
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
 # utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.

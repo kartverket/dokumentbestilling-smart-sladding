@@ -29,8 +29,16 @@ def get_bounding_boxes():
 
     try:
         elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
+        # Kommaseparerte XX_YYY-koder fra grunnboken, f.eks.
+        # ?rettsstiftelsestyper=SR_JOU,SR_BSK — aktiverer regelprofiler per
+        # dokumenttype (se KOORDFAM_KODER i config). Utelatt/tom = som før.
+        rettsstiftelsestyper = [k.strip() for k in
+                                request.args.get('rettsstiftelsestyper', '')
+                                .split(',') if k.strip()]
         pdf_file_stream = request.get_data()
-        bounding_boxes_result = model_main.run_model_on_pdf_bytes(pdf_file_stream, elektronisk_tinglyst=elektronisk_tinglyst)
+        bounding_boxes_result = model_main.run_model_on_pdf_bytes(
+            pdf_file_stream, elektronisk_tinglyst=elektronisk_tinglyst,
+            rettsstiftelsestyper=rettsstiftelsestyper)
 
         return jsonify(bounding_boxes_result)
 

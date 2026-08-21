@@ -12,6 +12,9 @@
 #   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
+#   metadata — 'ja' for å sende rettsstiftelsestyper fra
+#              $SLADD_METADATA/uttrekk_N.csv (regelprofiler som i prod),
+#              eller en eksplisitt sti. Uten = global oppførsel.
 #   bilder   — 'nei'/0 for å hoppe over feilbildene, eller et tall N for å
 #              tegne maks N dokumenter (default: alle). Sammendrag og
 #              resultat.csv påvirkes ikke — de beregnes fra boksene alene.
@@ -40,6 +43,7 @@ LISTE=""
 NAVN=""
 PRECACHE="ja"
 BILDER="alle"
+METADATA=""
 PROSESSER=""
 EKSTRA_FLAGG=()
 
@@ -50,6 +54,7 @@ for arg in "$@"; do
         liste=*)   LISTE="${arg#liste=}" ;;
         navn=*)    NAVN="${arg#navn=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
+        metadata=*) METADATA="${arg#metadata=}" ;;
         bilder=*)  BILDER="${arg#bilder=}" ;;
         prosesser=*) PROSESSER="${arg#prosesser=}" ;;
         -*)        EKSTRA_FLAGG+=("$arg") ;;
@@ -185,6 +190,17 @@ if [[ -n "$LISTE_FIL" ]]; then
     CMD+=(--velg-fra-fil "$LISTE_FIL")
 else
     CMD+=(--antall alle)
+fi
+
+if [[ -n "$METADATA" ]]; then
+    if [[ "$METADATA" == "ja" || "$METADATA" == "auto" ]]; then
+        METADATA="$SLADD_METADATA/uttrekk_${UTTREKK_NR}.csv"
+    fi
+    if [[ ! -f "$METADATA" ]]; then
+        echo "FEIL: Finner ikke metadata-CSV: $METADATA"
+        exit 1
+    fi
+    CMD+=(--metadata-csv "$METADATA")
 fi
 
 if [[ "$BILDER" != "alle" ]]; then

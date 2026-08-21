@@ -112,7 +112,7 @@ def _les_filer_fra_fil(sti):
 
 
 def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
-                        kun_yolo, med_linjer):
+                        kun_yolo, med_linjer, rettsstiftelsestyper=None):
     """Behandle ett dokument i en arbeiderprosess — kun fra cache.
 
     Ved cache-treff er dokumentet ren CPU (JSON-lesing + matching), så det kan
@@ -130,7 +130,7 @@ def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
             pdf_bytes, skriv_tid=False, med_linjer=med_linjer, navn=navn,
             elektronisk_tinglyst=elektronisk_tinglyst, kun_yolo=kun_yolo,
             cache_mappe=ocr_cache, yolo_cache_mappe=yolo_cache,
-            kun_cache=True)
+            kun_cache=True, rettsstiftelsestyper=rettsstiftelsestyper)
         if resultat is None:
             return ("miss", navn, None, 0.0)
         sider = _sider_fra_resultat(resultat, pdf_bytes)
@@ -281,6 +281,12 @@ def main():
                         "utledet fra --mappe. Sett til eksplisitt sti for å overstyre.")
     p.add_argument("--no-yolo-cache", action="store_true",
                    help="deaktiver YOLO-cache helt")
+    p.add_argument("--metadata-csv", default=None, metavar="FIL",
+                   help="metadata-CSV med rettsstiftelsestyper per dokument "
+                        "(uttrekk_N.csv). Aktiverer regelprofiler per "
+                        "dokumenttype (KOORDFAM_KODER i config) slik prod "
+                        "gjør når skip-jobben sender kodene; uten = global "
+                        "oppførsel")
     args = p.parse_args()
 
     # ── Utled cache-stier ────────────────────────────────────────
@@ -300,6 +306,10 @@ def main():
     # ── Tidlig validering av inputfiler ─────────────────────────
     if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
         print(f"FEIL: --velg-fra-fil ikke funnet: {args.velg_fra_fil}")
+        return
+
+    if args.metadata_csv and not os.path.isfile(args.metadata_csv):
+        print(f"FEIL: --metadata-csv ikke funnet: {args.metadata_csv}")
         return
 
     if (args.fasit or args.kun_feil) and not os.path.isfile(args.fasit_csv):
@@ -494,6 +504,18 @@ def main():
 
         print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
 
+    # ── Rettsstiftelsestyper per dokument (regelprofiler som i prod) ──
+    rs_per_dok = {}
+    if args.metadata_csv:
+        from rettsstiftelse_stat import les_metadata
+        meta, _besk = les_metadata(args.metadata_csv)
+        rs_per_dok = {dok: koder for dok, (koder, _el) in meta.items()}
+        print(f"Metadata: rettsstiftelsestyper for {len(rs_per_dok)} "
+              f"dokumenter — regelprofiler (KOORDFAM_KODER) aktive som i prod")
+
+    def rs_for(navn):
+        return rs_per_dok.get(_dok_nr(navn)) if rs_per_dok else None
+
     def kjør_i_hovedprosess(pdf_bytes, navn):
         """Full kjøring med modeller ved behov. Returnerer sider, None ved feil."""
         try:
@@ -501,7 +523,8 @@ def main():
                                               elektronisk_tinglyst=args.elektronisk_tinglyst,
                                               kun_yolo=args.kun_yolo,
                                               cache_mappe=args.ocr_cache,
-                                              yolo_cache_mappe=args.yolo_cache)
+                                              yolo_cache_mappe=args.yolo_cache,
+                                              rettsstiftelsestyper=rs_for(navn))
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()
@@ -519,7 +542,8 @@ def main():
             futures = [pool.submit(_behandle_fra_cache, fil,
                                    args.ocr_cache, args.yolo_cache,
                                    args.elektronisk_tinglyst, args.kun_yolo,
-                                   args.ocr_logg)
+                                   args.ocr_logg,
+                                   rs_for(os.path.basename(fil)))
                        for fil in filer]
             for i, (fil, fut) in enumerate(zip(filer, futures), start=1):
                 status, navn, nyttelast, tid_brukt = fut.result()

@@ -10,7 +10,8 @@ from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     AVVIS_DESIMAL_REC_VETO_LAV, AVVIS_DESIMAL_CONF_TAK_LAV,
                     LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
                     LINJEBEVIS_RUN_MAKS,
-                    VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE)
+                    VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE,
+                    KOORDFAM_KODER)
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
                                   ocr_linjer_fra_tokens, bygg_linjer)
@@ -86,6 +87,22 @@ def _linjebevis_forkaster(trekk, conf):
     return bool(trekk.get("har_orgnr"))
 
 
+def _koordfam_forkaster(trekk):
+    """Koordinat-dokument: tall uten fnr-bevis er koordinater, ikke fnr.
+
+    Speiler _ocr_grunn i utils/filter_felles.py med krev_fnr_kandidat=1 og
+    avvis_desimal=1, uten veto/fritak. Gjelder KUN når dokumentets
+    rettsstiftelsestyper treffer KOORDFAM_KODER — globalt koster de samme
+    reglene hundrevis av ekte fnr. Som resten av OCR-reglene rører den bare
+    yolo-bokser med lest tekst (har_tokens).
+    """
+    if not trekk or not trekk.get("har_tokens"):
+        return False
+    if not trekk.get("har_fnr_kandidat"):
+        return True
+    return bool(trekk.get("har_desimal_naer"))
+
+
 def _paddle_vindu_forkaster(trekk):
     """11-vinduet boksen ble bygget fra er en søm, ikke et fnr.
 
@@ -115,7 +132,7 @@ def _finn_bokser_kun_yolo(yolo_bokser):
     return [tuple(par) for par in bokser]
 
 
-def _finn_bokser_med_kilde(tokens, yolo_bokser):
+def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False):
     """Slå sammen Paddle- og YOLO-bokser.
 
     En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
@@ -162,7 +179,8 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     bokser = [par for par in bokser
               if not (par[1] == "yolo"
                       and (_desimalregel_forkaster(par[4], par[2])
-                           or _linjebevis_forkaster(par[4], par[2])))
+                           or _linjebevis_forkaster(par[4], par[2])
+                           or (koordfam and _koordfam_forkaster(par[4]))))
               and not (par[1] == "paddle"
                        and _paddle_vindu_forkaster(par[4]))]
 
@@ -259,11 +277,18 @@ def _til_flat(sider, sidefelt):
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
                            elektronisk_tinglyst=False, kun_yolo=False,
                            cache_mappe=None, yolo_cache_mappe=None,
-                           kun_cache=False):
+                           kun_cache=False, rettsstiftelsestyper=None):
     """kun_cache=True: returner None i stedet for å kjøre modeller ved
     cache-miss. Lar arbeiderprosesser uten GPU behandle cache-treff og
-    sende missene tilbake til en prosess som har modellene."""
+    sende missene tilbake til en prosess som har modellene.
+
+    rettsstiftelsestyper: dokumentets XX_YYY-koder fra grunnboken (liste av
+    strenger). Aktiverer regelprofiler per dokumenttype (KOORDFAM_KODER i
+    config). None/tom liste = dagens globale oppførsel, så manglende
+    metadata aldri kan koste recall."""
     t = {}
+    koordfam = bool(KOORDFAM_KODER.intersection(
+        k.strip().upper() for k in (rettsstiftelsestyper or ()) if k))
     bruker_yolo = kun_yolo or not elektronisk_tinglyst
     yolo_cache = bool(yolo_cache_mappe and navn and bruker_yolo)
 
@@ -360,7 +385,8 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             if kun_yolo:
                 bokser_med_kilde = _finn_bokser_kun_yolo(yolo_bokser)
             else:
-                bokser_med_kilde = _finn_bokser_med_kilde(tokens, yolo_bokser)
+                bokser_med_kilde = _finn_bokser_med_kilde(tokens, yolo_bokser,
+                                                          koordfam=koordfam)
 
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si + 1, sidemaal[si], tokens, bokser_med_kilde,

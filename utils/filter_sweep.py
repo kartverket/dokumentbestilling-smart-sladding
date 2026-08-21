@@ -136,6 +136,12 @@ PARAM_KODER = (
 )
 
 
+# CLI-flagg som er av/på (store_const) og ikke tar noen verdi
+_FLAGG_UTEN_VERDI = frozenset(("krev_fnr_kandidat", "avvis_desimal",
+                               "avvis_00_run", "avvis_orgnr",
+                               "avvis_desimal_luke"))
+
+
 def review_kommando(spec):
     """Gjenskaper filteret som argumenter til filter_review.py."""
     def _par(kw):
@@ -144,7 +150,9 @@ def review_kommando(spec):
                         if kw.get(navn) is not None)
     if None in spec:
         kw = spec[None]
-        biter = [f"{flagg} {kw[navn]:g}" for navn, _kort, flagg in PARAM_KODER
+        biter = [flagg if navn in _FLAGG_UTEN_VERDI
+                 else f"{flagg} {kw[navn]:g}"
+                 for navn, _kort, flagg in PARAM_KODER
                  if kw.get(navn) is not None]
         return " ".join(biter) or "(ingen filter)"
     biter = [f'"{k}:{_par(kw)}"' for k, kw in sorted(spec.items()) if _par(kw)]
