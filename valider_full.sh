@@ -15,6 +15,8 @@
 #   bilder   — 'nei'/0 for å hoppe over feilbildene, eller et tall N for å
 #              tegne maks N dokumenter (default: alle). Sammendrag og
 #              resultat.csv påvirkes ikke — de beregnes fra boksene alene.
+#   prosesser— antall arbeiderprosesser for cache-treff i valideringen
+#              (default: auto = min(8, kjerner); 1 = sekvensielt)
 #
 # Bruker OCR- og YOLO-cache ($SLADD_CACHE) for å unngå å kjøre OCR og YOLO på nytt.
 # YOLO-cachen er per vektfil. Treffer begge, hoppes også PDF-renderingen over,
@@ -38,6 +40,7 @@ LISTE=""
 NAVN=""
 PRECACHE="ja"
 BILDER="alle"
+PROSESSER=""
 EKSTRA_FLAGG=()
 
 for arg in "$@"; do
@@ -48,10 +51,11 @@ for arg in "$@"; do
         navn=*)    NAVN="${arg#navn=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
         bilder=*)  BILDER="${arg#bilder=}" ;;
+        prosesser=*) PROSESSER="${arg#prosesser=}" ;;
         -*)        EKSTRA_FLAGG+=("$arg") ;;
         *)
             echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS] [precache=nei]"
+            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS] [precache=nei] [bilder=N] [prosesser=N]"
             exit 1
             ;;
     esac
@@ -192,6 +196,14 @@ if [[ "$BILDER" != "alle" ]]; then
         exit 1
     fi
     CMD+=(--maks-feilbilder "$BILDER")
+fi
+
+if [[ -n "$PROSESSER" ]]; then
+    if ! [[ "$PROSESSER" =~ ^[0-9]+$ ]]; then
+        echo "FEIL: prosesser= må være et tall (fikk: $PROSESSER)"
+        exit 1
+    fi
+    CMD+=(--prosesser "$PROSESSER")
 fi
 
 # ── Kjør full validering (produksjonslogikk) ─────────────────────

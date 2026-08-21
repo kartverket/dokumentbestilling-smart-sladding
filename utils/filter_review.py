@@ -306,13 +306,18 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
         fasit_indekser_per_side[(fb["dok_nr"], fb["side"])].append(j)
     fasit_per_side = fasit_indekser_per_side
 
+    # Tegn i samme rekkefølge som rangeringen (verst først), så tapt-sidene
+    # ligger klare tidlig i kjøringen — ikke alfabetisk etter filnavn.
+    # Sidene grupperes fortsatt per fil, så hver PDF åpnes bare én gang.
+    rang = {(navn, si): i for i, (_, _, _, navn, si) in enumerate(aktuelle)}
     per_fil = defaultdict(list)
     for (_, _, _, navn, si) in aktuelle:
         per_fil[navn].append(si)
 
     telling = defaultdict(int)
     n_tegnet = 0
-    for navn in sorted(per_fil):
+    for navn in sorted(per_fil,
+                       key=lambda n: min(rang[(n, s)] for s in per_fil[n])):
         sti = os.path.join(mappe, navn)
         if not os.path.isfile(sti):
             print(f"  ⚠ Finner ikke {sti}, hopper over")
@@ -323,7 +328,7 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
             print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
             continue
 
-        for si in sorted(per_fil[navn]):
+        for si in sorted(per_fil[navn], key=lambda s: rang[(navn, s)]):
             if not 1 <= si <= len(dok):
                 continue
             side_pred = per_side[(navn, si)]
@@ -558,13 +563,17 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None,
     for fb in ds.fasit_bokser:
         fasit_per_side[(fb["dok_nr"], fb["side"])].append(fb)
 
+    # Tegn i rangert rekkefølge (begge-sidene først), gruppert per fil så
+    # hver PDF fortsatt bare åpnes én gang.
+    rang = {nokkel: i for i, (nokkel, _) in enumerate(rangert)}
     per_fil = defaultdict(list)
     for (navn, si), _ in rangert:
         per_fil[navn].append(si)
 
     telling = defaultdict(int)
     n_tegnet = 0
-    for navn in sorted(per_fil):
+    for navn in sorted(per_fil,
+                       key=lambda n: min(rang[(n, s)] for s in per_fil[n])):
         sti = os.path.join(mappe, navn)
         if not os.path.isfile(sti):
             print(f"  ⚠ Finner ikke {sti}, hopper over")
@@ -579,7 +588,7 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None,
         if ocr_mappe and cache is None:
             print(f"  ⚠ Ingen OCR-cache for {navn} — tegner uten tekstlag")
 
-        for si in sorted(per_fil[navn]):
+        for si in sorted(per_fil[navn], key=lambda s: rang[(navn, s)]):
             if not 1 <= si <= len(dok):
                 continue
             side_pred = per_side[(navn, si)]

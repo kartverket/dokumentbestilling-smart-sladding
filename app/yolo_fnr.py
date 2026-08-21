@@ -3,7 +3,6 @@ import os
 import re
 
 import numpy as np
-from ultralytics import YOLO
 
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
@@ -52,6 +51,10 @@ def modell_info():
 def _hent_modell():
     global _modell
     if _modell is None:
+        # Importen ligger her, ikke på toppen: cache-lesere bruker bare
+        # geometrifunksjonene og skal slippe å betale ultralytics-importen.
+        from ultralytics import YOLO
+
         if not os.path.isfile(_vekter_sti):
             raise FileNotFoundError(f"Fant ikke YOLO-vekter: {_vekter_sti}")
         info = modell_info()

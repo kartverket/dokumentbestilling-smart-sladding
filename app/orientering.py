@@ -1,6 +1,5 @@
 import os
 import numpy as np
-from paddleocr import DocImgOrientationClassification
 
 from config import NEDSKALERING, MIN_KONFIDENS
 
@@ -14,6 +13,10 @@ _orient = None
 def _hent_orient():
     global _orient
     if _orient is None:
+        # Importen ligger her, ikke på toppen: cache-lesere skal slippe
+        # å betale paddleocr-importen.
+        from paddleocr import DocImgOrientationClassification
+
         _orient = DocImgOrientationClassification(
             model_name=ORI_MODELL,
             model_dir=ORI_MODELL_DIR,

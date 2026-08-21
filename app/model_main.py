@@ -238,7 +238,11 @@ def _til_flat(sider, sidefelt):
 
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
                            elektronisk_tinglyst=False, kun_yolo=False,
-                           cache_mappe=None, yolo_cache_mappe=None):
+                           cache_mappe=None, yolo_cache_mappe=None,
+                           kun_cache=False):
+    """kun_cache=True: returner None i stedet for å kjøre modeller ved
+    cache-miss. Lar arbeiderprosesser uten GPU behandle cache-treff og
+    sende missene tilbake til en prosess som har modellene."""
     t = {}
     bruker_yolo = kun_yolo or not elektronisk_tinglyst
     yolo_cache = bool(yolo_cache_mappe and navn and bruker_yolo)
@@ -281,6 +285,8 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     bilder = bilder_ocr = None
 
     if trenger_piksler:
+        if kun_cache:
+            return None
         with _ta_tid(t, "render"):
             bilder = list(les_sider_fra_bytes(pdf_bytes))
 

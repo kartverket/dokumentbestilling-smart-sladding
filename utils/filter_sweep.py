@@ -961,8 +961,10 @@ def main():
             print(f"  {n_vindu} paddle/begge-bokser med vindu-trekk er i "
                   f"spill; alt annet er urørt")
             print(f"{'═' * 145}")
-            _sweep_en_param(ds, "MAKS_LUKE — største fysiske luke mellom "
-                                "nabosiffer i vinduet, i sifferbredder. "
+            _sweep_en_param(ds, "MAKS_LUKE (GLOBALT, inkl. begge-tap — se "
+                                "per-kilde-rutenettet for beslutningen) — "
+                                "største fysiske luke i vinduet, i siffer-"
+                                "bredder. "
                                 "Koordinat-søm («6626630.58 549810.29») og "
                                 "skisse-mål gir store luker; et ekte fnr "
                                 "ligger kant i kant",
@@ -1088,8 +1090,11 @@ def main():
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-cfrit ", **felles)
             # Paddle-vinduet: bokser fra 11-vinduer sydd over desimal-
-            # skiller og kolonnegap. Treffer paddle/begge — de eneste med
-            # vindu-trekk; yolo-bokser er urørt uansett verdier her.
+            # skiller og kolonnegap. KUN kilde paddle: globalt rammer reglene
+            # også begge-treffene — ekte fnr skrives med datoformat
+            # («01.01.50 12345» gir desimal-luker etter siffer 2 og 4), OCR
+            # legger inn støyprikker, og skjemafelter splitter fnr fysisk.
+            # Målt globalt @luke3+desluke: 978 tapt / 114 ov.fj — død.
             if any(x.get("maks_luke") is not None for x in ds.pred):
                 ocr_rader += _sweep_kombinasjoner(
                     ds, [None, 1], [None, 1.5, 2, 3, 4, 6, 8], [None], [None],
@@ -1097,7 +1102,8 @@ def main():
                           "min_siffer", "rec_veto"),
                     hoder=("desluke", "luke≥", "-", "-"),
                     tittel="PADDLE-VINDU KOMBINERT: desimal-luke og fysisk "
-                           "lukebredde (treffer paddle/begge)",
+                           "lukebredde (KUN kilde paddle)",
+                    kun_kilde="paddle",
                     etikett_prefiks="p-vindu ", **felles)
             alle_rader += ocr_rader
 

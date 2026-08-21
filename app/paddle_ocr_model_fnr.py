@@ -5,7 +5,6 @@ import statistics
 from collections import namedtuple
 
 import numpy as np
-from paddleocr import PaddleOCR
 
 from config import SLADDE_SIFFER, LUFT_X, LUFT_Y, MAKS_HOYDE_FAKTOR, MODELL_SETT, DET_SIDE_LEN, REC_BATCH, SIDER_PER_OCR_BATCH, PDF_DPI
 
@@ -47,6 +46,11 @@ def _har_gpu():
 def _hent_reader():
     global reader
     if reader is None:
+        # Importen ligger her, ikke på toppen: cache-lesere (run.py-arbeidere,
+        # boks_trekk, filtersweep) bruker bare de rene tekstfunksjonene og
+        # skal slippe å betale paddleocr-importen.
+        from paddleocr import PaddleOCR
+
         gpu = _har_gpu()
         print(f"GPU tilgjengelig: {gpu}")
 
@@ -182,18 +186,24 @@ def _les_tokens(res):
 
 
 def _grupper_til_linjer(tokens):
-    linjer = []
+    # Linjens min-y0/maks-y1 holdes løpende i stedet for å regnes over alle
+    # tokens per medlemskapstest — det var kvadratisk på token-tunge sider.
+    linjer = []                 # [tokens, min_y0, maks_y1] per linje
     for token in sorted(tokens, key=lambda t: ((t.y0 + t.y1) / 2, t.x0)):  # middelhøyde, så start
         senter_y = (token.y0 + token.y1) / 2
         plassert = False
         for linje in linjer:
-            if min(t.y0 for t in linje) <= senter_y <= max(t.y1 for t in linje):
-                linje.append(token)
+            if linje[1] <= senter_y <= linje[2]:
+                linje[0].append(token)
+                if token.y0 < linje[1]:
+                    linje[1] = token.y0
+                if token.y1 > linje[2]:
+                    linje[2] = token.y1
                 plassert = True
                 break
         if not plassert:
-            linjer.append([token])
-    return linjer
+            linjer.append([[token], token.y0, token.y1])
+    return [linje[0] for linje in linjer]
 
 
 def _bygg_linjetekst(linje):
@@ -259,27 +269,44 @@ def _sladdeboks(sifferbokser):
 
 
 
+# Ekte fnr skrives med skilletegn på FASTE plasser i 11-sifferet: dato-
+# punktumene etter siffer 2 og 4 («01.01.50») og skilletegnet/feltskillet
+# etter siffer 6 («010150 12345», eget skjemafelt for personnummer-delen).
+# Luker der beviser ingenting. Koordinat-søm legger lukene sine på
+# vilkårlige plasser i vinduet — det er DE som flagges.
+# (Manuell gjennomgang uttrekk 6: alle 4 tapene til den posisjonsblinde
+# varianten satt nettopp på 2/4/6 — 3 datoformat-fnr og ett feltskille.)
+_LOVLIGE_LUKE_POS = frozenset((2, 4, 6))
+
+
 def _vindu_trekk(vindu, sifferbokser):
     """Trekk ved 11-siffer-vinduet en sladdeboks ble bygget fra.
 
     Skrives til resultat-CSV-en (TREKK_FELT) så etterfiltre kan feies uten ny
-    kjøring. Et ekte fnr har fysisk sammenhengende siffer og aldri
-    desimalskille i lukene. Koordinat- og målekolonner («6626630.58
-    549810.29») syr derimot sammen vinduer på tvers av desimalpunktum og
-    kolonnegap — lukereglene tillater det (≤2 tegn av « .-,_»), og
-    linjeteksten har alltid nøyaktig ETT mellomrom mellom tokens uansett
-    fysisk avstand, så selv tall i hver sin ende av en skisse sys sammen.
+    kjøring. Koordinat- og målekolonner («6626630.58 549810.29») syr sammen
+    vinduer på tvers av desimalpunktum og kolonnegap — lukereglene tillater
+    det (≤2 tegn av « .-,_»), og linjeteksten har alltid nøyaktig ETT
+    mellomrom mellom tokens uansett fysisk avstand, så selv tall i hver sin
+    ende av en skisse sys sammen. Begge trekkene ser bort fra de lovlige
+    posisjonene i _LOVLIGE_LUKE_POS:
 
-      maks_luke        største horisontale avstand mellom to nabosiffer,
-                       målt i median sifferbredde (0 = kant i kant)
-      har_desimal_luke 1 hvis en luke inneholder «.» eller «,»
+      maks_luke        største horisontale avstand mellom to nabosiffer
+                       UTENFOR lovlig posisjon, i median sifferbredde
+      har_desimal_luke 1 hvis en luke med «.» eller «,» står utenfor
+                       lovlig posisjon
     """
-    har_desimal = int(any(ch in ".," for g in re.findall(r"\D+", vindu)
-                          for ch in g))
+    har_desimal = 0
+    pos = 0                      # antall siffer lest før tegnet
+    for ch in vindu:
+        if ch.isdigit():
+            pos += 1
+        elif ch in ".," and pos not in _LOVLIGE_LUKE_POS:
+            har_desimal = 1
     bredder = sorted(b.hoyre - b.venstre for b in sifferbokser)
     median = bredder[len(bredder) // 2] or 1.0
-    gap = max((sifferbokser[i + 1].venstre - sifferbokser[i].hoyre
-               for i in range(len(sifferbokser) - 1)), default=0.0)
+    gap = max((sifferbokser[j + 1].venstre - sifferbokser[j].hoyre
+               for j in range(len(sifferbokser) - 1)
+               if (j + 1) not in _LOVLIGE_LUKE_POS), default=0.0)
     return {"maks_luke": round(max(gap, 0.0) / median, 2),
             "har_desimal_luke": har_desimal}
 

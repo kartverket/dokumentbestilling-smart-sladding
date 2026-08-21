@@ -5,7 +5,7 @@ import sys
 import threading
 import warnings
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 # Demp irrelevante advarsler (PaddlePaddle ccache etc.)
 warnings.filterwarnings("ignore", message=".*ccache.*")
@@ -109,6 +109,34 @@ def _les_filer_fra_fil(sti):
     """Les en liste med filnavn/IDer fra en tekstfil (én per linje)."""
     with open(sti, encoding="utf-8") as f:
         return [linje.strip() for linje in f if linje.strip()]
+
+
+def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
+                        kun_yolo, med_linjer):
+    """Behandle ett dokument i en arbeiderprosess — kun fra cache.
+
+    Ved cache-treff er dokumentet ren CPU (JSON-lesing + matching), så det kan
+    gjøres i en prosess uten modeller. Returnerer ("ok", navn, sider, tid);
+    ved miss ("miss", navn, None, 0) — da kjører hovedprosessen, som har
+    modellene, dokumentet selv. Modellene lastes lazy og importene deres
+    likeså, så arbeiderne forblir lette.
+    """
+    navn = os.path.basename(fil)
+    start = time.perf_counter()
+    try:
+        with open(fil, "rb") as f:
+            pdf_bytes = f.read()
+        resultat = run_model_on_pdf_bytes(
+            pdf_bytes, skriv_tid=False, med_linjer=med_linjer, navn=navn,
+            elektronisk_tinglyst=elektronisk_tinglyst, kun_yolo=kun_yolo,
+            cache_mappe=ocr_cache, yolo_cache_mappe=yolo_cache,
+            kun_cache=True)
+        if resultat is None:
+            return ("miss", navn, None, 0.0)
+        sider = _sider_fra_resultat(resultat, pdf_bytes)
+        return ("ok", navn, sider, time.perf_counter() - start)
+    except Exception:
+        return ("feil", navn, traceback.format_exc(), 0.0)
 
 
 def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser_dok, sladd_bokser_dok):
@@ -231,6 +259,11 @@ def main():
                    help="path til YOLO-vektfil; default er $SLADD_PRODVEKTER fra server.env")
     p.add_argument("--fortsett", action="store_true",
                    help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
+    p.add_argument("--prosesser", type=int, default=None, metavar="N",
+                   help="antall arbeiderprosesser for cache-treff (default: "
+                        "min(8, CPU-kjerner); 1 = sekvensielt). Dokumenter uten "
+                        "cache-treff kjøres i hovedprosessen. Per-dokument-"
+                        "tabellen fra --tid skrives kun sekvensielt/ved miss.")
     p.add_argument("--resultat-mappe", default=".",
                    help="mappe der result-* undermappen opprettes (default: gjeldende mappe)")
     p.add_argument("--overskriv", action="store_true",
@@ -388,56 +421,36 @@ def main():
     bildebudsjett = _Bildebudsjett(args.maks_feilbilder)
     feil_futures = []
 
-    # Pre-les neste fil mens GPU jobber
-    neste_bytes = None
-    if filer:
-        with open(filer[0], "rb") as f:
-            neste_bytes = f.read()
+    # ── Antall arbeiderprosesser for cache-treff ─────────────────
+    prosesser = args.prosesser
+    if prosesser is None:
+        prosesser = min(8, os.cpu_count() or 1)
+    if prosesser > 1 and not args.ocr_cache and not args.yolo_cache:
+        print("Uten cache må alle dokumenter gjennom modellene — kjører sekvensielt.")
+        prosesser = 1
 
-    for i, fil in enumerate(filer, start=1):
-        start = time.perf_counter()
+    start_vegg = time.perf_counter()
 
-        navn = os.path.basename(fil)
-        print(f"\n[{i}/{totalt_antall}] → {navn}")
-
-        pdf_bytes = neste_bytes
-
-        # Pre-les neste fil i parallell med inferens
-        if i < totalt_antall:
-            # Les neste fil nå (rask I/O, ferdig før GPU er done)
-            with open(filer[i], "rb") as f:
-                neste_bytes = f.read()
-
-        try:
-            resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
-                                              elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                              kun_yolo=args.kun_yolo,
-                                              cache_mappe=args.ocr_cache,
-                                              yolo_cache_mappe=args.yolo_cache)
-        except Exception as e:
-            feilet.append((navn, repr(e)))
-            traceback.print_exc()
-            continue
-
-        sider = _sider_fra_resultat(resultat, pdf_bytes)
-
-        tid_brukt = time.perf_counter() - start
+    def ta_imot(i, navn, sider, tid_brukt):
+        """Alt som skjer med et ferdig dokument: logg, CSV, PNG, eval."""
+        nonlocal total_tid, advart_om_linjer
         total_tid += tid_brukt
         tider[navn] = tid_brukt
 
         if args.ocr_logg:
-            if isinstance(resultat, list) and not advart_om_linjer:
+            if not advart_om_linjer and sider and "linjer" not in sider[0]:
                 print("  !! --ocr-logg: modellen returnerer flatt format uten 'linjer' - loggen blir tom.")
                 advart_om_linjer = True
             for side in sider:
                 ocr_linjer[(navn, side["side"])] = side.get("linjer", [])
 
+        n = sum(len(s["bokser"]) for s in sider)
+        vegg = time.perf_counter() - start_vegg
+        gjenstaar = vegg / i * (totalt_antall - i)
+
         if not vil_ha_artefakt:
-            n = sum(len(s["bokser"]) for s in sider)
-            snitt = total_tid / i
-            gjenstaar = snitt * (totalt_antall - i)
             print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
-            continue
+            return
 
         sladd_dok = {}
         csv_dok = {}
@@ -479,12 +492,88 @@ def main():
                 bildebudsjett)
             feil_futures.append(fut)
 
-        n = sum(len(s["bokser"]) for s in sider)
-        snitt = total_tid / i
-        gjenstaar = snitt * (totalt_antall - i)
         print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
 
-    print(f"\nFerdig! {totalt_antall} dokumenter på {total_tid:.1f}s ({total_tid/max(totalt_antall,1):.2f}s/dok)")
+    def kjør_i_hovedprosess(pdf_bytes, navn):
+        """Full kjøring med modeller ved behov. Returnerer sider, None ved feil."""
+        try:
+            resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
+                                              elektronisk_tinglyst=args.elektronisk_tinglyst,
+                                              kun_yolo=args.kun_yolo,
+                                              cache_mappe=args.ocr_cache,
+                                              yolo_cache_mappe=args.yolo_cache)
+        except Exception as e:
+            feilet.append((navn, repr(e)))
+            traceback.print_exc()
+            return None
+        return _sider_fra_resultat(resultat, pdf_bytes)
+
+    if prosesser > 1:
+        # ── Parallell cache-lesing ───────────────────────────────
+        # Ved cache-treff er dokumentet ren CPU (JSON + matching) og gjøres i
+        # arbeiderprosessene; miss faller tilbake til hovedprosessen, som har
+        # modellene. Resultatene konsumeres i innsendingsrekkefølge, så CSV og
+        # utskrift blir som ved sekvensiell kjøring.
+        print(f"Parallell cache-lesing: {prosesser} prosesser")
+        with ProcessPoolExecutor(max_workers=prosesser) as pool:
+            futures = [pool.submit(_behandle_fra_cache, fil,
+                                   args.ocr_cache, args.yolo_cache,
+                                   args.elektronisk_tinglyst, args.kun_yolo,
+                                   args.ocr_logg)
+                       for fil in filer]
+            for i, (fil, fut) in enumerate(zip(filer, futures), start=1):
+                status, navn, nyttelast, tid_brukt = fut.result()
+                print(f"\n[{i}/{totalt_antall}] → {navn}")
+                if status == "feil":
+                    feilet.append((navn, nyttelast))
+                    print(nyttelast)
+                    continue
+                if status == "miss":
+                    start = time.perf_counter()
+                    try:
+                        with open(fil, "rb") as f:
+                            pdf_bytes = f.read()
+                    except OSError as e:
+                        feilet.append((navn, repr(e)))
+                        traceback.print_exc()
+                        continue
+                    sider = kjør_i_hovedprosess(pdf_bytes, navn)
+                    if sider is None:
+                        continue
+                    tid_brukt = time.perf_counter() - start
+                else:
+                    sider = nyttelast
+                ta_imot(i, navn, sider, tid_brukt)
+    else:
+        # ── Sekvensiell kjøring ──────────────────────────────────
+        # Pre-les neste fil mens GPU jobber
+        neste_bytes = None
+        if filer:
+            with open(filer[0], "rb") as f:
+                neste_bytes = f.read()
+
+        for i, fil in enumerate(filer, start=1):
+            start = time.perf_counter()
+
+            navn = os.path.basename(fil)
+            print(f"\n[{i}/{totalt_antall}] → {navn}")
+
+            pdf_bytes = neste_bytes
+
+            # Pre-les neste fil i parallell med inferens
+            if i < totalt_antall:
+                # Les neste fil nå (rask I/O, ferdig før GPU er done)
+                with open(filer[i], "rb") as f:
+                    neste_bytes = f.read()
+
+            sider = kjør_i_hovedprosess(pdf_bytes, navn)
+            if sider is None:
+                continue
+
+            ta_imot(i, navn, sider, time.perf_counter() - start)
+
+    vegg_tid = time.perf_counter() - start_vegg
+    print(f"\nFerdig! {totalt_antall} dokumenter på {vegg_tid:.1f}s ({vegg_tid/max(totalt_antall,1):.2f}s/dok)")
 
     if feilet:
         print(f"Feilet ({len(feilet)}):", feilet[:5])
