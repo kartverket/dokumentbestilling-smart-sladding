@@ -130,6 +130,7 @@ PARAM_KODER = (
     ("avvis_org_ord", "orgord", "--avvis-org-ord"),
     ("linje_veto", "lveto", "--linje-veto"),
     ("avvis_run_6_10", "run610", "--avvis-run-6-10"),
+    ("uten_tekst_conf", "utconf", "--uten-tekst-conf"),
 )
 
 
@@ -939,6 +940,13 @@ def main():
                             lambda v: {"avvis_run_6_10": 9,
                                        "rec_veto": 0.98, "linje_veto": v},
                             args.kostnad)
+            _sweep_en_param(ds, "UTEN_TEKST_CONF — bokser uten OCR-tekst "
+                                "krever conf ≥ V (prod: 0.40; treffer "
+                                "grafikk/kart-deteksjoner tekstreglene "
+                                "aldri ser)",
+                            [None, 0.45, 0.50, 0.60, 0.70, 0.80],
+                            lambda v: {"uten_tekst_conf": v},
+                            args.kostnad)
 
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
@@ -988,6 +996,30 @@ def main():
                 tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-fnr ", **felles)
+            # Sifferkravet med linjebevis-medisinen: cfritak og linje-veto
+            # var det som gjorde run-regelen prod-klar; min_siffer fikk
+            # tidoblet ov/tapt i nytt regime og har aldri fått samme porter.
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 4, 5, 6], [None, 0.95, 0.98], [None, 0.99],
+                [None, 0.5, 0.6],
+                felt=("min_siffer", "rec_veto", "linje_veto",
+                      "ocr_conf_fritak"),
+                hoder=("s.min", "rec≥", "linje≥", "cfrit"),
+                tittel="OCR-TREKK KOMBINERT: sifferkrav med linje-veto og "
+                       "conf-fritak (treffer kun «yolo» med tekst)",
+                etikett_prefiks="ocr-smin ", **felles)
+            # Orgnr-reglene med linje-veto: mod11 er verdiløs hvis ett
+            # siffer er feillest — linjevetoet er den naturlige porten,
+            # og reglene lå rett under kostnadskravet med bare rec-veto.
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 1], [None, 1], [None, 0.99, 0.999],
+                [None, 0.5],
+                felt=("avvis_00_run", "avvis_orgnr", "linje_veto",
+                      "ocr_conf_fritak"),
+                hoder=("00run", "orgnr", "linje≥", "cfrit"),
+                tittel="OCR-TREKK KOMBINERT: orgnummer-regler med linje-veto "
+                       "(treffer kun «yolo» med tekst)",
+                etikett_prefiks="ocr-orglinje ", **felles)
             # Linjebevis-reglene: fnr-kandidat og løpelengde 6-10, portet
             # på lesekvaliteten til hele linjen. Fjerde akse er cfritak så
             # høy YOLO-conf kan verne ekte fnr.

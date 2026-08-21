@@ -526,7 +526,7 @@ OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
                  "krev_fnr_kandidat", "avvis_desimal", "rec_veto",
                  "ocr_conf_fritak",
                  "avvis_00_run", "avvis_orgnr", "avvis_org_ord",
-                 "linje_veto", "avvis_run_6_10")
+                 "linje_veto", "avvis_run_6_10", "uten_tekst_conf")
 
 FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 
@@ -535,7 +535,7 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
                krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None,
                ocr_conf_fritak=None,
                avvis_00_run=None, avvis_orgnr=None, avvis_org_ord=None,
-               linje_veto=None, avvis_run_6_10=None):
+               linje_veto=None, avvis_run_6_10=None, uten_tekst_conf=None):
     """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
 
     Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
@@ -557,6 +557,15 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
     fnr som rammes nesten alle har conf >= 0.5, mens koordinater og
     kontonumre ligger under 0.4.
     """
+    # Bokser UTEN tekst styres i prod av YOLO_CONF_UTEN_TEKST (0.40) og er
+    # usynlige for alle tekstreglene under. uten_tekst_conf tester en
+    # strengere terskel for akkurat dem: grafikk/kart-deteksjoner har ingen
+    # tekst å forsvare seg med, så bare konfidens skiller dem fra fnr på
+    # skannede sider der OCR ikke leste noe.
+    if uten_tekst_conf is not None and p.get("har_tokens") is not None \
+            and not p["har_tokens"]:
+        if p.get("conf") is None or p["conf"] < uten_tekst_conf:
+            return f"uten tekst og conf < {uten_tekst_conf:g}"
     if p.get("har_tokens") is None or not p["har_tokens"]:
         return None
     if ocr_conf_fritak is not None and p.get("conf") is not None \
@@ -736,7 +745,8 @@ def parse_per_kilde(spec_liste):
     r00 = 1 avviser 00-paddede løp, orgnr = 1 avviser gyldige orgnr,
     orgord = 1 avviser ved org-ord nær boksen (2 = kun uten fnr-kandidat),
     lveto = OCR-reglene gjelder først når rec_min_linje >= verdien,
-    run610 = øvre grense: avviser bokser over sifferløp på 6..V (1 = 6..10).
+    run610 = øvre grense: avviser bokser over sifferløp på 6..V (1 = 6..10),
+    utconf = bokser UTEN tekst krever conf >= verdien (prod: 0.40).
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -753,6 +763,7 @@ def parse_per_kilde(spec_liste):
         "r00": "avvis_00_run",      "orgnr": "avvis_orgnr",
         "orgord": "avvis_org_ord",
         "lveto": "linje_veto",      "run610": "avvis_run_6_10",
+        "utconf": "uten_tekst_conf",
     }
     resultat = {}
     for spec in spec_liste:

@@ -92,7 +92,8 @@ def _etikett(kwargs):
                         ("avvis_orgnr", "ikke-orgnr"),
                         ("avvis_org_ord", "ikke-org-ord({:g})"),
                         ("linje_veto", "linjerec≥{:g}→gjelder"),
-                        ("avvis_run_6_10", "ikke-run-6-10")):
+                        ("avvis_run_6_10", "ikke-run-6-10"),
+                        ("uten_tekst_conf", "utenTekst-c≥{:g}")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -118,7 +119,8 @@ def _mappenavn(kwargs):
                          ("ocr_conf_fritak", "cfritak"),
                          ("avvis_00_run", "r00"), ("avvis_orgnr", "orgnr"),
                          ("avvis_org_ord", "orgord"),
-                         ("linje_veto", "lveto"), ("avvis_run_6_10", "run610")):
+                         ("linje_veto", "lveto"), ("avvis_run_6_10", "run610"),
+                         ("uten_tekst_conf", "utconf")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1351,6 +1353,10 @@ def main():
                      help="Forkast bokser over sifferløp på 6..MAKS (med "
                           "luker); uten verdi = 6..10. Bruk 9: 10-løp er "
                           "ofte fnr med ensifret dag/måned eller mistet tegn")
+    ocr.add_argument("--uten-tekst-conf", type=float, default=None,
+                     dest="uten_tekst_conf",
+                     help="Bokser UTEN tekst (har_tokens=0) krever conf ≥ V "
+                          "— strengere enn prods YOLO_CONF_UTEN_TEKST (0.40)")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
