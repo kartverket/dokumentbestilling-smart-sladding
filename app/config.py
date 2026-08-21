@@ -107,6 +107,21 @@ LINJEBEVIS_LINJE_VETO  = 0.99  # rec_min_linje ≥ dette for at reglene gjelder
 LINJEBEVIS_CONF_FRITAK = 0.5   # conf ≥ dette overstyrer reglene
 LINJEBEVIS_RUN_MAKS    = 8     # sifferløp 6..8 forkastes
 
+# Paddle-vindu-reglene: forkast paddle-bokser der 11-siffer-vinduet boksen
+# ble bygget fra er sydd sammen over et desimalskille eller en stor fysisk
+# luke UTENFOR de lovlige posisjonene (etter siffer 2/4/6 — datoformatets
+# punktum og skilletegnet/feltskillet). Koordinat- og målekolonner
+# («6626630.58 549810.29») og spredte skissemål er kilden; et ekte fnr har
+# aldri slike luker. Gjelder KUN endelig kilde «paddle» — «begge» er
+# yolo-bekreftet og fritas (posisjonsblind variant på begge-bokser målte
+# 974 tapte fnr: datoformat/OCR-prikker/håndskriftsgap er vanlige i ekte
+# fnr). Terskel 8, ikke 3: håndskrevne fnr kan ha luker opp mot ~6 siffer-
+# bredder (målt 5.94 på ekte fnr), koordinat-gap ligger typisk ≥10.
+# Målt uttrekk 6 (vindu2): 72 oversladdinger fjernet / 0 tapte fnr
+# (luke 3: 91/1 — netto ved kostnad 20: 71 mot 72, og null tap vinner).
+VINDU_MAKS_LUKE          = 8.0   # sifferbredder, luker utenfor posisjon 2/4/6
+VINDU_AVVIS_DESIMAL_LUKE = True  # desimalskille i luke utenfor 2/4/6
+
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
 # utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.

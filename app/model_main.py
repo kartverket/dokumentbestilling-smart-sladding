@@ -9,7 +9,8 @@ from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     AVVIS_DESIMAL_REC_VETO, AVVIS_DESIMAL_CONF_FRITAK,
                     AVVIS_DESIMAL_REC_VETO_LAV, AVVIS_DESIMAL_CONF_TAK_LAV,
                     LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
-                    LINJEBEVIS_RUN_MAKS)
+                    LINJEBEVIS_RUN_MAKS,
+                    VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE)
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
                                   ocr_linjer_fra_tokens, bygg_linjer)
@@ -85,6 +86,23 @@ def _linjebevis_forkaster(trekk, conf):
     return bool(trekk.get("har_orgnr"))
 
 
+def _paddle_vindu_forkaster(trekk):
+    """11-vinduet boksen ble bygget fra er en søm, ikke et fnr.
+
+    Speiler _ocr_grunn i utils/filter_felles.py med avvis_desimal_luke=1 og
+    maks_luke=VINDU_MAKS_LUKE. Kalles på ENDELIG kilde etter dedup: bokser
+    som ble «begge» underveis er yolo-bekreftet og fritas. Trekkene er
+    posisjonsbevisste allerede ved beregning (_vindu_trekk) — luker etter
+    siffer 2/4/6 teller ikke. Se config for tallgrunnlaget.
+    """
+    if not trekk:
+        return False
+    if VINDU_AVVIS_DESIMAL_LUKE and trekk.get("har_desimal_luke"):
+        return True
+    luke = trekk.get("maks_luke")
+    return luke is not None and luke >= VINDU_MAKS_LUKE
+
+
 def _finn_bokser_kun_yolo(yolo_bokser):
     bokser = []
     for (x0, y0, x1, y1, conf) in yolo_bokser:
@@ -144,7 +162,9 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     bokser = [par for par in bokser
               if not (par[1] == "yolo"
                       and (_desimalregel_forkaster(par[4], par[2])
-                           or _linjebevis_forkaster(par[4], par[2])))]
+                           or _linjebevis_forkaster(par[4], par[2])))
+              and not (par[1] == "paddle"
+                       and _paddle_vindu_forkaster(par[4]))]
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
