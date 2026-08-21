@@ -11,7 +11,8 @@ from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
                     LINJEBEVIS_RUN_MAKS,
                     VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE,
-                    KOORDFAM_KODER, SEKSJONERING_KODER,
+                    KOORDFAM_KODER, KOORDFAM_UTEN_TEKST_CONF,
+                    SEKSJONERING_KODER,
                     SEKSJONERING_MAKS_KORTSIDE_PT, SEKSJONERING_MAKS_LANGSIDE_PT,
                     SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_SIFFER,
                     SEKSJONERING_REC_VETO, SEKSJONERING_CONF_FRITAK)
@@ -133,17 +134,23 @@ def _seksjonering_paddle_forkaster(boks):
     return _seksjonering_geometri_forkaster(boks)
 
 
-def _koordfam_forkaster(trekk):
+def _koordfam_forkaster(trekk, conf):
     """Koordinat-dokument: tall uten fnr-bevis er koordinater, ikke fnr.
 
-    Speiler _ocr_grunn i utils/filter_felles.py med krev_fnr_kandidat=1 og
-    avvis_desimal=1, uten veto/fritak. Gjelder KUN når dokumentets
-    rettsstiftelsestyper treffer KOORDFAM_KODER — globalt koster de samme
-    reglene hundrevis av ekte fnr. Som resten av OCR-reglene rører den bare
-    yolo-bokser med lest tekst (har_tokens).
+    Speiler _ocr_grunn i utils/filter_felles.py med krev_fnr_kandidat=1,
+    avvis_desimal=1 og uten_tekst_conf=KOORDFAM_UTEN_TEKST_CONF, uten
+    veto/fritak. Gjelder KUN når dokumentets rettsstiftelsestyper treffer
+    KOORDFAM_KODER — globalt koster de samme reglene hundrevis av ekte fnr.
+    Bokser med lest tekst dømmes på tekstbevis; tokenløse bokser
+    (kart/grafikk) krever høy deteksjons-conf.
     """
-    if not trekk or not trekk.get("har_tokens"):
+    if not trekk:
         return False
+    har_tokens = trekk.get("har_tokens")
+    if har_tokens is None:
+        return False
+    if not har_tokens:
+        return conf is None or conf < KOORDFAM_UTEN_TEKST_CONF
     if not trekk.get("har_fnr_kandidat"):
         return True
     return bool(trekk.get("har_desimal_naer"))
@@ -227,7 +234,7 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False,
               if not (par[1] == "yolo"
                       and (_desimalregel_forkaster(par[4], par[2])
                            or _linjebevis_forkaster(par[4], par[2])
-                           or (koordfam and _koordfam_forkaster(par[4]))
+                           or (koordfam and _koordfam_forkaster(par[4], par[2]))
                            or (seksjonering and _seksjonering_yolo_forkaster(
                                    par[0], par[4], par[2]))))
               and not (par[1] == "paddle"

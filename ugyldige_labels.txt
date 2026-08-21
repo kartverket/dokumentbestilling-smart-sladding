@@ -33,3 +33,4 @@ cfa26e5c-42b2-4813-9700-a5462b953f87    # fasit-støy, koordinat, desimal-review
 2bbfa6e4-9afa-4311-a430-d60c13874f44    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 1129350547 side 6
 d73b681d-e8cc-4a07-bbf0-4744ee730764    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1178742450 side 1
 3645c061-7027-47e3-949c-f26c25b84a59    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1179906179 side 1
+ab7b7959-aa88-497b-b911-6d116991839e    # fasit-støy, FR_REG-review 2026-08-22 — dok 10841927 side 2

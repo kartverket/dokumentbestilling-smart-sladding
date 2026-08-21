@@ -141,6 +141,8 @@ KOORDFAM_KODER = frozenset((
     "TR_MAS",   # Massetransport
     "SR_SKN",   # Skjønn
     "JS_JSA",   # Opprettelse av jordsameie
+    "FR_REG",   # Registrering av grunn — oppmålingsdokumenter; målt
+                # marginalt: 183 ov.fj / 1 ekte fnr + 1 usikker (ov/tapt ≥91)
 ))
 
 # Seksjonering-profilen: SE_SEK-dokumenter er tabelltunge (eierbrøker,
@@ -156,6 +158,15 @@ KOORDFAM_KODER = frozenset((
 # derfor egne profiler per dokumenttype. Kun SE_SEK er målt;
 # reseksjonering-slektningene (RS_RES, SB_SEB, …) er fnr-tette og holdes
 # utenfor til de eventuelt måles for seg.
+# Tokenløse bokser i koordfam-dokumenter er kart-/grafikkdeteksjoner —
+# tekstreglene over ser dem aldri (har_tokens=0), så de krever i stedet
+# høy deteksjons-conf. Målt marginalt (uttrekk6_sesek, med profilen aktiv):
+# 26 oversladdinger fjernet / 0 tapt ved 0.7 — samme tall som før profilen,
+# gevinsten er uavhengig av fnr-kandidat-regelen. Globalt er samme regel
+# tapsgivende (tokenløse bokser over conf 0.4 er oftere ekte fnr enn støy —
+# uten_tekst_conf-hypotesen døde globalt); den er trygg KUN i koordfam.
+KOORDFAM_UTEN_TEKST_CONF = 0.7
+
 SEKSJONERING_KODER = frozenset(("SE_SEK",))
 SEKSJONERING_MAKS_KORTSIDE_PT = 40.0  # yolo+paddle: fnr-sladd p99.9 = 29.5
 SEKSJONERING_MAKS_LANGSIDE_PT = 80.0  # yolo+paddle: fnr-sladd p99.9 = 78.9
