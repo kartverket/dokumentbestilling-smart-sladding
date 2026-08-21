@@ -9,12 +9,15 @@ from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
     MIN_BOKS_AREAL, MIN_ELONGATION, MAKS_ELONGATION, MIN_KORTSIDE_PT,
     MIN_KORTSIDE_YOLO_PT, MIN_LANGSIDE_YOLO_PT,
+    MIN_KORTSIDE_PADDLE_PT, MIN_LANGSIDE_PADDLE_PT, MAKS_ELONGATION_PADDLE,
     PDF_DPI, standard_vekter)
 
 YOLO_VEKTER = standard_vekter()
 MIN_KORTSIDE_PX = MIN_KORTSIDE_PT * PDF_DPI / 72.0
 MIN_KORTSIDE_YOLO_PX = MIN_KORTSIDE_YOLO_PT * PDF_DPI / 72.0
 MIN_LANGSIDE_YOLO_PX = MIN_LANGSIDE_YOLO_PT * PDF_DPI / 72.0
+MIN_KORTSIDE_PADDLE_PX = MIN_KORTSIDE_PADDLE_PT * PDF_DPI / 72.0
+MIN_LANGSIDE_PADDLE_PX = MIN_LANGSIDE_PADDLE_PT * PDF_DPI / 72.0
 
 _modell = None
 _vekter_sti = YOLO_VEKTER
@@ -144,14 +147,36 @@ def er_for_tynn(boks):
     return min(x1 - x0, y1 - y0) < MIN_KORTSIDE_PX
 
 
-def har_yolo_stoyform(boks):
-    """Strengere formkrav for rene YOLO-bokser — se MIN_*_YOLO_PT i config.
+def er_for_smal_yolo(boks):
+    """Kortside under MIN_KORTSIDE_YOLO_PT — støy uansett konfidens.
 
-    Orienteringsuavhengig som er_for_tynn: kortside/langside, ikke bredde/høyde.
+    Orienteringsuavhengig som er_for_tynn: kortside, ikke høyde.
+    """
+    x0, y0, x1, y1 = boks[:4]
+    return min(x1 - x0, y1 - y0) < MIN_KORTSIDE_YOLO_PX
+
+
+def er_for_kort_yolo(boks):
+    """Langside under MIN_LANGSIDE_YOLO_PT — for kort til å romme 5 sifre.
+
+    Høy konfidens fritar (se _hopp_over_geometrifilter), i motsetning til
+    kortsidekravet over.
+    """
+    x0, y0, x1, y1 = boks[:4]
+    return max(x1 - x0, y1 - y0) < MIN_LANGSIDE_YOLO_PX
+
+
+def har_paddle_stoyform(boks):
+    """Strengere formkrav for paddle-bokser — se MIN_*_PADDLE_* i config.
+
+    Paddle fritas aldri av konfidens, så alle tre kravene gjelder alltid.
     """
     x0, y0, x1, y1 = boks[:4]
     kort, lang = sorted((x1 - x0, y1 - y0))
-    return kort < MIN_KORTSIDE_YOLO_PX or lang < MIN_LANGSIDE_YOLO_PX
+    if kort <= 0:
+        return True
+    return (kort < MIN_KORTSIDE_PADDLE_PX or lang < MIN_LANGSIDE_PADDLE_PX
+            or lang / kort > MAKS_ELONGATION_PADDLE)
 
 
 

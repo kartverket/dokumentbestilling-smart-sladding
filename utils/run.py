@@ -2,6 +2,7 @@ import argparse
 import io
 import os
 import sys
+import threading
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -116,8 +117,25 @@ def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser
                   y_origin=y_origin, skriv_logg=True, rydd=False, kilder=csv_bokser_dok)
 
 
+class _Bildebudsjett:
+    """Trådsikker teller for --maks-feilbilder: maks N dokumenter tegnes."""
+
+    def __init__(self, maks):
+        self._rest = maks                   # None = ubegrenset
+        self._laas = threading.Lock()
+
+    def ta(self):
+        if self._rest is None:
+            return True
+        with self._laas:
+            if self._rest > 0:
+                self._rest -= 1
+                return True
+            return False
+
+
 def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
-                           terskel, y_origin):
+                           terskel, y_origin, budsjett=None):
     """Evaluer ett dokument mot fasit og tegn feilbilder hvis det finnes feil.
 
     Lagrer i undermapper: bom/ (manglende deteksjoner) og oversladd/ (over-sladding).
@@ -135,6 +153,8 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
     har_bom = bool(dok_eval.get("bom_filer"))
     har_over = bool(dok_eval.get("overflod_filer"))
     if not har_bom and not har_over:
+        return
+    if budsjett is not None and not budsjett.ta():
         return
 
     bom_indekser = {
@@ -191,6 +211,11 @@ def main():
     p.add_argument("--csv-ut", default=CSV_UT, help="hvor boks-CSV-en skrives")
     p.add_argument("--ocr-logg-fil", default=OCR_LOGG_FIL, help="hvor OCR-loggen skrives")
     p.add_argument("--png-mappe", default=PNG_MAPPE, help="hvor PNG-ene lagres")
+    p.add_argument("--maks-feilbilder", type=int, default=None,
+                   dest="maks_feilbilder", metavar="N",
+                   help="tegn feilbilder for maks N dokumenter (0 = ingen "
+                        "bilder). Sammendraget og resultat-CSV-en påvirkes "
+                        "ikke — de beregnes fra boksene alene.")
     p.add_argument("--sladd-mappe", default=SLADD_MAPPE, help="hvor sladdede PDF-er lagres")
     p.add_argument("--terskel", type=float, default=TERSKEL, help="andel fasit-areal for TRUFFET")
     p.add_argument("--y-origin", choices=["topp", "bunn"], default=Y_ORIGIN, help="CSV y-origo")
@@ -358,7 +383,9 @@ def main():
     # Bakgrunnstråder for PNG-generering (CPU) mens GPU jobber videre
     png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.kun_feil) else None
     png_futures = []
-    feil_executor = ThreadPoolExecutor(max_workers=2) if args.kun_feil else None
+    feil_executor = (ThreadPoolExecutor(max_workers=2)
+                     if args.kun_feil and args.maks_feilbilder != 0 else None)
+    bildebudsjett = _Bildebudsjett(args.maks_feilbilder)
     feil_futures = []
 
     # Pre-les neste fil mens GPU jobber
@@ -448,32 +475,14 @@ def main():
         if feil_executor and fasit:
             fut = feil_executor.submit(
                 _evaluer_og_tegn_feil, sladd_dok, csv_dok,
-                fasit, args.mappe, args.png_mappe, args.terskel, args.y_origin)
+                fasit, args.mappe, args.png_mappe, args.terskel, args.y_origin,
+                bildebudsjett)
             feil_futures.append(fut)
 
         n = sum(len(s["bokser"]) for s in sider)
         snitt = total_tid / i
         gjenstaar = snitt * (totalt_antall - i)
         print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
-
-    # Vent på at alle bakgrunns-PNG-er er ferdige
-    if png_futures:
-        print(f"\nVenter på {len(png_futures)} PNG-jobber i bakgrunnen...")
-        for fut in png_futures:
-            try:
-                fut.result()
-            except Exception as e:
-                print(f"  PNG-feil: {e!r}")
-        png_executor.shutdown(wait=False)
-
-    if feil_futures:
-        print(f"\nVenter på {len(feil_futures)} feilbilde-jobber i bakgrunnen...")
-        for fut in feil_futures:
-            try:
-                fut.result()
-            except Exception as e:
-                print(f"  Feilbilde-feil: {e!r}")
-        feil_executor.shutdown(wait=False)
 
     print(f"\nFerdig! {totalt_antall} dokumenter på {total_tid:.1f}s ({total_tid/max(totalt_antall,1):.2f}s/dok)")
 
@@ -506,8 +515,31 @@ def main():
             )
             lagre_resultat(eval_resultat, mappe=args.resultat_mappe, beskrivelse=args.beskrivelse, logg=header + logg)
 
-    # --kun-feil uten feil_executor (fallback, bør ikke skje)
-    if args.kun_feil and eval_resultat and not feil_futures:
+    # Vent på bakgrunnsbildene FØRST NÅ — sammendraget over er beregnet fra
+    # boksene alene og skal ikke stå og vente på PNG-rendering.
+    if png_futures:
+        print(f"\nVenter på {len(png_futures)} PNG-jobber i bakgrunnen...")
+        for fut in png_futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"  PNG-feil: {e!r}")
+        png_executor.shutdown(wait=False)
+
+    if feil_futures:
+        print(f"\nVenter på {len(feil_futures)} feilbilde-jobber i bakgrunnen...")
+        for fut in feil_futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"  Feilbilde-feil: {e!r}")
+        feil_executor.shutdown(wait=False)
+
+    # --kun-feil uten feil_executor (fallback, bør ikke skje). Med
+    # --maks-feilbilder 0 er executor bevisst droppet — da skal fallbacken
+    # heller ikke tegne noe.
+    if args.kun_feil and eval_resultat and not feil_futures \
+            and args.maks_feilbilder != 0:
         bom_indekser = {
             (_dok_nr(d["fil"]), d["side"], d["fasit_nr"] - 1)
             for d in eval_resultat.get("detaljer", [])

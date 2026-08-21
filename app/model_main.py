@@ -13,7 +13,7 @@ from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
 from orientering import finn_rotasjoner_batch, boks_tilbake
 from yolo_fnr import (finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks,
                       er_vertikal, er_for_liten, har_feil_ratio, er_for_tynn,
-                      har_yolo_stoyform)
+                      er_for_smal_yolo, er_for_kort_yolo, har_paddle_stoyform)
 from boks_trekk import trekk_for_boks
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 from yolo_cache import les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache
@@ -62,10 +62,10 @@ def _finn_bokser_kun_yolo(yolo_bokser):
     bokser = []
     for (x0, y0, x1, y1, conf) in yolo_bokser:
         yb = (x0, y0, x1, y1)
-        if not er_for_liten(yb) and (
+        if not er_for_liten(yb) and not er_for_smal_yolo(yb) and (
                 _hopp_over_geometrifilter(round(conf, 3), "yolo")
                 or (not har_feil_ratio(yb) and not er_for_tynn(yb)
-                    and not har_yolo_stoyform(yb))):
+                    and not er_for_kort_yolo(yb))):
             bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
     return [tuple(par) for par in bokser]
 
@@ -88,10 +88,19 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     for (x0, y0, x1, y1, conf) in yolo_bokser:
         yb = (x0, y0, x1, y1)
         dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
-        if dekket:
-            for par in dekket:
+        # Bare Paddle-funn kan bekreftes til «begge». Tidligere ble også
+        # tidligere YOLO-bokser i listen omdøpt og fikk denne boksens
+        # konfidens — det kontaminerte «begge»-bøtta med rene YOLO-funn og
+        # skjulte dem for OCR-reglene (som kun gjelder kilde «yolo»).
+        paddle_dekket = [par for par in dekket if par[1] in ("paddle", "begge")]
+        if paddle_dekket:
+            for par in paddle_dekket:
                 par[1] = "begge"
                 par[2] = round(conf, 3)           # yolo_conf
+        elif dekket:
+            # Overlapper kun en tidligere YOLO-boks: duplikat — behold den
+            # første, uten omdøping.
+            pass
         elif kilde := _godta_yolo_boks(tokens, yb, conf):
             # Trekkene beskriver hva snill_sjekk hadde å gå på, og skrives til
             # resultat-CSV-en så strengere varianter kan feies uten ny kjøring.
@@ -108,12 +117,17 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
-    # Rene «yolo»-bokser har i tillegg strengere formkrav (har_yolo_stoyform).
+    # I tillegg: kortsidekrav for «yolo» og full støyform for «paddle», som
+    # begge gjelder uansett konfidens, og langsidekrav for «yolo» bak
+    # conf-porten.
     bokser = [par for par in bokser
-              if not er_for_liten(par[0]) and (
+              if not er_for_liten(par[0])
+              and not (par[1] == "yolo" and er_for_smal_yolo(par[0]))
+              and not (par[1] == "paddle" and har_paddle_stoyform(par[0]))
+              and (
                   _hopp_over_geometrifilter(par[2], par[1])
                   or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0])
-                      and not (par[1] == "yolo" and har_yolo_stoyform(par[0])))
+                      and not (par[1] == "yolo" and er_for_kort_yolo(par[0])))
               )]
 
     return [tuple(par) for par in bokser]

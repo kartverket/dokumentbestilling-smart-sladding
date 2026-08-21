@@ -26,10 +26,21 @@ MIN_KORTSIDE_PT    = 6         # min korteste side i punkt — for tynn til å v
 # paddle har et Paddle-funn bak seg og rammes ikke, «yolo_vertikal» heller
 # ikke). Utledet fra uttrekk 6 på samme måte som grensene over: 4 tapte
 # fasit-bokser, alle bekreftet som referansenumre som ikke skulle vært
-# sladdet, mot ~53 fjernede oversladdinger. Conf ≥ YOLO_CONF_GEOMETRI_TERSKEL
-# fritar, som for grensene over.
+# sladdet, mot ~53 fjernede oversladdinger. Kortsidekravet gjelder uansett
+# konfidens (runde 2: 0 tapt uten conf-port); langsidekravet fritas ved
+# conf ≥ YOLO_CONF_GEOMETRI_TERSKEL som resten av geometrien.
 MIN_KORTSIDE_YOLO_PT = 7       # smalere enn dette er støy
 MIN_LANGSIDE_YOLO_PT = 20      # for kort til å romme 5 sifre
+
+# Strengere formkrav for paddle-bokser (kun kilde «paddle», ikke «begge»).
+# Paddle fritas aldri av konfidens — OCR-konfidens er lesekvalitet, ikke
+# deteksjonssikkerhet. Utledet fra uttrekk 6 runde 2 (etter runde 1-
+# filtrene): 0 tapte fasit-bokser på både trening og holdout, ~20 fjernede
+# oversladdinger. Paddle-BOM er tynne streker: kortside p99.9 = 14,6pt der
+# minste ekte paddle-treff er 8,6pt.
+MIN_KORTSIDE_PADDLE_PT = 7
+MIN_LANGSIDE_PADDLE_PT = 20
+MAKS_ELONGATION_PADDLE = 6
 
 # Bokser med conf ≥ dette hopper over geometrifiltrene. Gjelder alle kilder;
 # paddle-bokser har conf=None og fritas aldri. «begge»-bokser var tidligere

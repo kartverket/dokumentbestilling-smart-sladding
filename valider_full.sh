@@ -12,6 +12,9 @@
 #   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
+#   bilder   — 'nei'/0 for å hoppe over feilbildene, eller et tall N for å
+#              tegne maks N dokumenter (default: alle). Sammendrag og
+#              resultat.csv påvirkes ikke — de beregnes fra boksene alene.
 #
 # Bruker OCR- og YOLO-cache ($SLADD_CACHE) for å unngå å kjøre OCR og YOLO på nytt.
 # YOLO-cachen er per vektfil. Treffer begge, hoppes også PDF-renderingen over,
@@ -34,6 +37,7 @@ UTTREKK_NR=""
 LISTE=""
 NAVN=""
 PRECACHE="ja"
+BILDER="alle"
 EKSTRA_FLAGG=()
 
 for arg in "$@"; do
@@ -43,6 +47,7 @@ for arg in "$@"; do
         liste=*)   LISTE="${arg#liste=}" ;;
         navn=*)    NAVN="${arg#navn=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
+        bilder=*)  BILDER="${arg#bilder=}" ;;
         -*)        EKSTRA_FLAGG+=("$arg") ;;
         *)
             echo "FEIL: Ukjent parameter: $arg"
@@ -171,6 +176,17 @@ if [[ -n "$LISTE_FIL" ]]; then
     CMD+=(--velg-fra-fil "$LISTE_FIL")
 else
     CMD+=(--antall alle)
+fi
+
+if [[ "$BILDER" != "alle" ]]; then
+    if [[ "$BILDER" == "nei" ]]; then
+        BILDER=0
+    fi
+    if ! [[ "$BILDER" =~ ^[0-9]+$ ]]; then
+        echo "FEIL: bilder= må være 'alle', 'nei' eller et tall (fikk: $BILDER)"
+        exit 1
+    fi
+    CMD+=(--maks-feilbilder "$BILDER")
 fi
 
 # ── Kjør full validering (produksjonslogikk) ─────────────────────
