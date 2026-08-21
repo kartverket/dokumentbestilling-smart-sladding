@@ -186,7 +186,7 @@ def _finn_bokser_kun_yolo(yolo_bokser):
 
 
 def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False,
-                           seksjonering=False):
+                           seksjonering=False, etterfilter=True):
     """Slå sammen Paddle- og YOLO-bokser.
 
     En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
@@ -230,32 +230,41 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False,
     # ── Desimal- og linjebevis-reglene ──────────────────────────────────────────
     # Etter dedup-løkken med vilje: kilden er endelig, så bokser som ble
     # «begge» underveis beholder sladdingen sin.
-    bokser = [par for par in bokser
-              if not (par[1] == "yolo"
-                      and (_desimalregel_forkaster(par[4], par[2])
-                           or _linjebevis_forkaster(par[4], par[2])
-                           or (koordfam and _koordfam_forkaster(par[4], par[2]))
-                           or (seksjonering and _seksjonering_yolo_forkaster(
-                                   par[0], par[4], par[2]))))
-              and not (par[1] == "paddle"
-                       and (_paddle_vindu_forkaster(par[4])
-                            or (seksjonering
-                                and _seksjonering_paddle_forkaster(par[0]))))]
+    # etterfilter=False hopper over BEGGE blokkene under (regler + geometri)
+    # — måler rå deteksjon+mod11+dedup, for å tallfeste hva hele regelverket
+    # bidrar med. YOLO_CONF og snill_sjekk (_godta_yolo_boks) gjelder
+    # fortsatt: de er modellens driftspunkt, ikke etterfiltre.
+    if etterfilter:
+        bokser = [par for par in bokser
+                  if not (par[1] == "yolo"
+                          and (_desimalregel_forkaster(par[4], par[2])
+                               or _linjebevis_forkaster(par[4], par[2])
+                               or (koordfam
+                                   and _koordfam_forkaster(par[4], par[2]))
+                               or (seksjonering
+                                   and _seksjonering_yolo_forkaster(
+                                       par[0], par[4], par[2]))))
+                  and not (par[1] == "paddle"
+                           and (_paddle_vindu_forkaster(par[4])
+                                or (seksjonering
+                                    and _seksjonering_paddle_forkaster(
+                                        par[0]))))]
 
-    # ── Dimensjonsfiltre ────────────────────────────────────────
-    # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
-    # I tillegg: kortsidekrav for «yolo» og full støyform for «paddle», som
-    # begge gjelder uansett konfidens, og langsidekrav for «yolo» bak
-    # conf-porten.
-    bokser = [par for par in bokser
-              if not er_for_liten(par[0])
-              and not (par[1] == "yolo" and er_for_smal_yolo(par[0]))
-              and not (par[1] == "paddle" and har_paddle_stoyform(par[0]))
-              and (
-                  _hopp_over_geometrifilter(par[2], par[1])
-                  or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0])
-                      and not (par[1] == "yolo" and er_for_kort_yolo(par[0])))
-              )]
+        # ── Dimensjonsfiltre ────────────────────────────────────
+        # Universelle grenser for alle kilder; kun høy yolo-konfidens
+        # fritar. I tillegg: kortsidekrav for «yolo» og full støyform for
+        # «paddle», som begge gjelder uansett konfidens, og langsidekrav
+        # for «yolo» bak conf-porten.
+        bokser = [par for par in bokser
+                  if not er_for_liten(par[0])
+                  and not (par[1] == "yolo" and er_for_smal_yolo(par[0]))
+                  and not (par[1] == "paddle" and har_paddle_stoyform(par[0]))
+                  and (
+                      _hopp_over_geometrifilter(par[2], par[1])
+                      or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0])
+                          and not (par[1] == "yolo"
+                                   and er_for_kort_yolo(par[0])))
+                  )]
 
     return [tuple(par) for par in bokser]
 
@@ -335,7 +344,8 @@ def _til_flat(sider, sidefelt):
 def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
                            elektronisk_tinglyst=False, kun_yolo=False,
                            cache_mappe=None, yolo_cache_mappe=None,
-                           kun_cache=False, rettsstiftelsestyper=None):
+                           kun_cache=False, rettsstiftelsestyper=None,
+                           etterfilter=True):
     """kun_cache=True: returner None i stedet for å kjøre modeller ved
     cache-miss. Lar arbeiderprosesser uten GPU behandle cache-treff og
     sende missene tilbake til en prosess som har modellene.
@@ -446,7 +456,7 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             else:
                 bokser_med_kilde = _finn_bokser_med_kilde(
                     tokens, yolo_bokser, koordfam=koordfam,
-                    seksjonering=seksjonering)
+                    seksjonering=seksjonering, etterfilter=etterfilter)
 
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si + 1, sidemaal[si], tokens, bokser_med_kilde,

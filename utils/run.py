@@ -112,7 +112,8 @@ def _les_filer_fra_fil(sti):
 
 
 def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
-                        kun_yolo, med_linjer, rettsstiftelsestyper=None):
+                        kun_yolo, med_linjer, rettsstiftelsestyper=None,
+                        etterfilter=True):
     """Behandle ett dokument i en arbeiderprosess — kun fra cache.
 
     Ved cache-treff er dokumentet ren CPU (JSON-lesing + matching), så det kan
@@ -130,7 +131,8 @@ def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
             pdf_bytes, skriv_tid=False, med_linjer=med_linjer, navn=navn,
             elektronisk_tinglyst=elektronisk_tinglyst, kun_yolo=kun_yolo,
             cache_mappe=ocr_cache, yolo_cache_mappe=yolo_cache,
-            kun_cache=True, rettsstiftelsestyper=rettsstiftelsestyper)
+            kun_cache=True, rettsstiftelsestyper=rettsstiftelsestyper,
+            etterfilter=etterfilter)
         if resultat is None:
             return ("miss", navn, None, 0.0)
         sider = _sider_fra_resultat(resultat, pdf_bytes)
@@ -281,6 +283,13 @@ def main():
                         "utledet fra --mappe. Sett til eksplisitt sti for å overstyre.")
     p.add_argument("--no-yolo-cache", action="store_true",
                    help="deaktiver YOLO-cache helt")
+    p.add_argument("--uten-etterfilter", action="store_true",
+                   dest="uten_etterfilter",
+                   help="Hopp over ALLE etterfiltrene (desimal, linjebevis, "
+                        "paddle-vindu, profiler, geometri) — rå deteksjon + "
+                        "mod11 + dedup. Basislinjemåling av regelverkets "
+                        "totalbidrag; YOLO_CONF og snill_sjekk gjelder "
+                        "fortsatt")
     p.add_argument("--metadata-csv", default=None, metavar="FIL",
                    help="metadata-CSV med rettsstiftelsestyper per dokument "
                         "(uttrekk_N.csv). Aktiverer regelprofiler per "
@@ -524,7 +533,8 @@ def main():
                                               kun_yolo=args.kun_yolo,
                                               cache_mappe=args.ocr_cache,
                                               yolo_cache_mappe=args.yolo_cache,
-                                              rettsstiftelsestyper=rs_for(navn))
+                                              rettsstiftelsestyper=rs_for(navn),
+                                              etterfilter=not args.uten_etterfilter)
         except Exception as e:
             feilet.append((navn, repr(e)))
             traceback.print_exc()
@@ -543,7 +553,8 @@ def main():
                                    args.ocr_cache, args.yolo_cache,
                                    args.elektronisk_tinglyst, args.kun_yolo,
                                    args.ocr_logg,
-                                   rs_for(os.path.basename(fil)))
+                                   rs_for(os.path.basename(fil)),
+                                   not args.uten_etterfilter)
                        for fil in filer]
             for i, (fil, fut) in enumerate(zip(filer, futures), start=1):
                 status, navn, nyttelast, tid_brukt = fut.result()

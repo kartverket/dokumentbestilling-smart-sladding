@@ -12,6 +12,8 @@
 #   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
 #   navn     — egendefinert navn på utmappen (valgfri)
 #   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
+#   regler   — 'nei' for å hoppe over ALLE etterfiltrene (rå deteksjon;
+#              basislinjemåling av regelverkets totalbidrag)
 #   metadata — 'ja' for å sende rettsstiftelsestyper fra
 #              $SLADD_METADATA/uttrekk_N.csv (regelprofiler som i prod),
 #              eller en eksplisitt sti. Uten = global oppførsel.
@@ -44,6 +46,7 @@ NAVN=""
 PRECACHE="ja"
 BILDER="alle"
 METADATA=""
+REGLER="ja"
 PROSESSER=""
 EKSTRA_FLAGG=()
 
@@ -55,6 +58,7 @@ for arg in "$@"; do
         navn=*)    NAVN="${arg#navn=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
         metadata=*) METADATA="${arg#metadata=}" ;;
+        regler=*)   REGLER="${arg#regler=}" ;;
         bilder=*)  BILDER="${arg#bilder=}" ;;
         prosesser=*) PROSESSER="${arg#prosesser=}" ;;
         -*)        EKSTRA_FLAGG+=("$arg") ;;
@@ -201,6 +205,10 @@ if [[ -n "$METADATA" ]]; then
         exit 1
     fi
     CMD+=(--metadata-csv "$METADATA")
+fi
+
+if [[ "$REGLER" == "nei" || "$REGLER" == "0" ]]; then
+    CMD+=(--uten-etterfilter)
 fi
 
 if [[ "$BILDER" != "alle" ]]; then
