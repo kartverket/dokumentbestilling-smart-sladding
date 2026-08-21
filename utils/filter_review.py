@@ -966,6 +966,264 @@ SWEEP_KONFIGER = [
 ]
 
 
+
+# ── Udekket-gjennomgang ───────────────────────────────────────
+# Motstykket til tapt-gjennomgangen: ikke «hva fjerner filteret», men «hva
+# fant modellen aldri, eller bokset for dårlig». Fasit splittes på
+# ml_generated: ML-aksepterte bokser er modellens egne godkjente forslag og
+# gjenfinnes nesten alltid av en re-kjøring (sirkulært) — reell
+# deteksjonsevne måles på de manuelt tegnede boksene. Manuelle sladdinger
+# kan selv være slurvete tegnet, så utsnittene viser både fasit-boksen og
+# modellens beste forslag: da kan gjennomgangen skille «modell-bom»,
+# «dårlig boksing» og «fasit-slurv» i vurdering-kolonnen.
+
+def _er_ml_generert(rad):
+    return (rad.get("ml_generated") or "").strip().lower() in ("true", "t", "1")
+
+
+def _p10_p50_p90(verdier):
+    v = sorted(verdier)
+    n = len(v)
+    return v[int(0.10 * (n - 1))], v[int(0.50 * (n - 1))], v[int(0.90 * (n - 1))]
+
+
+def gjennomgang_udekket(fasit_csv, res_csv, mappe, ut_mappe,
+                        kriterium=STD_KRITERIUM, terskel=STD_TERSKEL,
+                        god_dekning=0.90, kjorte_dok=None, ogsaa_ml=False,
+                        maks_utsnitt=None, utsnitt_margin=60.0):
+    """Katalogiserer og tegner fasit-bokser uten (god nok) dekning."""
+    if kriterium in KRITERIUM_LAV_ER_BRA:
+        raise SystemExit(f"--udekket støtter ikke kriterium {kriterium!r} "
+                         f"(der er lav verdi bra — bruk areal/kortside/iou)")
+    felt = KRITERIUM_FELT[kriterium]
+
+    fasit_rader, _forkastet, kolonner = les_fasit_rader(fasit_csv)
+    if "ml_generated" not in kolonner:
+        print("⚠ Fasit-CSV-en mangler ml_generated — alle bokser behandles "
+              "som manuelle. Ta kolonnen med i neste eksport.")
+    pred = les_prediksjoner(res_csv)
+
+    kjorte = (set(kjorte_dok) if kjorte_dok is not None
+              else {p["dok_nr"] for p in pred})
+    scope = {r["dok_nr"] for r in fasit_rader} & kjorte
+
+    side_str = {}
+    per_side_pred = defaultdict(list)
+    navn_per_dok = {}
+    for p in pred:
+        key = (p["dok_nr"], p["side"])
+        side_str.setdefault(key, (p["bw"] / SKALA, p["bh"] / SKALA))
+        per_side_pred[key].append(p)
+        navn_per_dok.setdefault(p["dok_nr"], p["navn"])
+
+    grupper = {"udekket": [], "daarlig_dekket": [], "ok": []}
+    for r in fasit_rader:
+        if r["dok_nr"] not in scope:
+            continue
+        x0, y0, x1, y1 = r["boks"]
+        pw, ph = side_str.get((r["dok_nr"], r["side"]), (595.0, 842.0))
+        fn = (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
+        horisontal = (x1 - x0) >= (y1 - y0)
+        beste_v, beste_p = 0.0, None
+        for p in per_side_pred.get((r["dok_nr"], r["side"]), ()):
+            m = match_metrikker(p["norm"], fn, horisontal)
+            if m is not None and m[felt] > beste_v:
+                beste_v, beste_p = m[felt], p
+        r["_dekning"] = beste_v
+        r["_beste_p"] = beste_p
+        r["_ml"] = _er_ml_generert(r["rad"])
+        gruppe = ("udekket" if beste_v < terskel
+                  else "daarlig_dekket" if beste_v < god_dekning else "ok")
+        grupper[gruppe].append(r)
+
+    n_scope = sum(len(g) for g in grupper.values())
+    print(f"\nUdekket-gjennomgang  (kriterium «{kriterium}», terskel "
+          f"{terskel:g}, god dekning ≥ {god_dekning:g})")
+    print(f"  Scope: {len(scope)} dokumenter, {n_scope} fasit-bokser")
+    for ml, navn in ((False, "manuelt tegnet"), (True, "ML-akseptert ")):
+        tell = {k: sum(1 for r in g if r["_ml"] == ml)
+                for k, g in grupper.items()}
+        n = sum(tell.values())
+        if n:
+            print(f"  {navn} ({n:>5} bokser): "
+                  f"udekket {tell['udekket']:>4} ({100*tell['udekket']/n:4.1f}%)  "
+                  f"dårlig {tell['daarlig_dekket']:>4} "
+                  f"({100*tell['daarlig_dekket']/n:4.1f}%)  "
+                  f"god {tell['ok']:>5} ({100*tell['ok']/n:4.1f}%)")
+
+    utvalg = [r for r in grupper["udekket"] + grupper["daarlig_dekket"]
+              if ogsaa_ml or not r["_ml"]]
+    if not utvalg:
+        print("  Ingenting å tegne.")
+        return
+
+    # ── Karakteristikk: hva har de udekkede boksene til felles? ──
+    staaende = sum(1 for r in utvalg if r["h"] > r["w"])
+    print(f"\n  Utvalg til gjennomgang: {len(utvalg)} bokser "
+          f"({'manuelle + ML' if ogsaa_ml else 'kun manuelt tegnede'})")
+    print(f"    stående (h > b):   {staaende} ({100*staaende/len(utvalg):.1f}%)")
+    for maal in ("kortside", "langside"):
+        p10, p50, p90 = _p10_p50_p90([r[maal] for r in utvalg])
+        print(f"    {maal:>8} (pt):    p10 {p10:5.1f}   p50 {p50:5.1f}   "
+              f"p90 {p90:5.1f}")
+    per_type = defaultdict(int)
+    for r in utvalg:
+        per_type[r["type"]] += 1
+    print("    per type:          "
+          + "  ".join(f"{t}={n}" for t, n in
+                      sorted(per_type.items(), key=lambda kv: -kv[1])))
+    per_dok = defaultdict(int)
+    for r in utvalg:
+        per_dok[r["dok_nr"]] += 1
+    n_en = sum(1 for n in per_dok.values() if n == 1)
+    print(f"    fordelt på {len(per_dok)} dokumenter "
+          f"({n_en} med bare én boks); verstinger:")
+    for dnr, n in sorted(per_dok.items(), key=lambda kv: -kv[1])[:15]:
+        print(f"      {n:>4}  {navn_per_dok.get(dnr, f'{dnr}.pdf')}")
+
+    # ── Manifest ──
+    utvalg.sort(key=lambda r: (r["_dekning"] >= terskel, navn_per_dok.get(
+        r["dok_nr"], str(r["dok_nr"])), r["side"], r["boks"][1]))
+    if maks_utsnitt:
+        utvalg = utvalg[:maks_utsnitt]
+
+    manifest = []
+    for nr, r in enumerate(utvalg, 1):
+        bp = r["_beste_p"]
+        fil = navn_per_dok.get(r["dok_nr"], f"{r['dok_nr']}.pdf")
+        base = os.path.splitext(os.path.basename(fil))[0]
+        manifest.append({
+            "nr": nr, "fil": fil, "side": r["side"],
+            "gruppe": ("udekket" if r["_dekning"] < terskel
+                       else "daarlig_dekket"),
+            "dekning_pst": round(100 * r["_dekning"], 1),
+            "ml_generated": int(r["_ml"]),
+            "ml_status": r["ml_status"], "type": r["type"],
+            "staaende": int(r["h"] > r["w"]),
+            "fasit_bredde_pt": round(r["w"], 1),
+            "fasit_hoyde_pt": round(r["h"], 1),
+            "beste_kilde": bp["kilde"] if bp else "",
+            "beste_conf": (bp["conf"] if bp and bp["conf"] is not None
+                           else ""),
+            "beste_bredde_pt": round(bp["w"], 1) if bp else "",
+            "beste_hoyde_pt": round(bp["h"], 1) if bp else "",
+            "fasit_x0": round(r["boks"][0], 1),
+            "fasit_y0": round(r["boks"][1], 1),
+            "utsnitt": f"{nr:04d}_{base}_side{r['side']}.png",
+            "vurdering": "",
+            "_r": r,
+        })
+
+    os.makedirs(ut_mappe, exist_ok=True)
+    manifest_sti = os.path.join(ut_mappe, "udekket.csv")
+    felt_csv = ["nr", "fil", "side", "gruppe", "dekning_pst", "ml_generated",
+                "ml_status", "type", "staaende", "fasit_bredde_pt",
+                "fasit_hoyde_pt", "beste_kilde", "beste_conf",
+                "beste_bredde_pt", "beste_hoyde_pt", "fasit_x0", "fasit_y0",
+                "utsnitt", "vurdering"]
+    with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=felt_csv, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(manifest)
+    print(f"\n  Manifest: {manifest_sti}  ({len(manifest)} rader)")
+
+    # ── Tegning ──
+    side_mappe = os.path.join(ut_mappe, "sider")
+    utsnitt_mappe = os.path.join(ut_mappe, "utsnitt")
+    os.makedirs(side_mappe, exist_ok=True)
+    os.makedirs(utsnitt_mappe, exist_ok=True)
+
+    per_fil = defaultdict(lambda: defaultdict(list))
+    for rad in manifest:
+        per_fil[rad["fil"]][rad["side"]].append(rad)
+
+    n_sider = n_utsnitt = 0
+    for fil in sorted(per_fil):
+        sti = os.path.join(mappe, fil)
+        if not os.path.isfile(sti):
+            print(f"  ⚠ Finner ikke {sti}, hopper over")
+            continue
+        try:
+            dok = fitz.open(sti)
+        except Exception as e:
+            print(f"  ⚠ Kunne ikke åpne {fil}: {e!r}")
+            continue
+        for si, rader in sorted(per_fil[fil].items()):
+            if not 1 <= si <= len(dok):
+                continue
+            bilde = _render_side(dok, si)
+            rekt = dok[si - 1].rect
+            skx = bilde.width / rekt.width if rekt.width else SKALA
+            sky = bilde.height / rekt.height if rekt.height else SKALA
+            base = bilde.convert("RGBA")
+            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            tegner = ImageDraw.Draw(overlay)
+            dnr = dok_nr(fil)
+            valgt = {id(rad["_r"]) for rad in rader}
+
+            # Alle prediksjoner på siden, tynt grått
+            side_pred = per_side_pred.get((dnr, si), ())
+            for p2 in side_pred:
+                px = p2["px"]
+                sx2 = bilde.width / p2["bw"]
+                sy2 = bilde.height / p2["bh"]
+                tegner.rectangle([px[0] * sx2, px[1] * sy2,
+                                  px[2] * sx2, px[3] * sy2],
+                                 outline=BEHOLDT, width=1)
+
+            # Øvrige fasit-bokser på siden, tynt blått
+            for r2 in grupper["udekket"] + grupper["daarlig_dekket"] + grupper["ok"]:
+                if (r2["dok_nr"], r2["side"]) != (dnr, si) or id(r2) in valgt:
+                    continue
+                fx0, fy0, fx1, fy1 = r2["boks"]
+                tegner.rectangle([fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky],
+                                 outline=FASIT, width=2)
+
+            # De utvalgte: fasit magenta + beste forslag oransje
+            for rad in rader:
+                r2 = rad["_r"]
+                fx0, fy0, fx1, fy1 = r2["boks"]
+                rr = [fx0 * skx - 6, fy0 * sky - 6,
+                      fx1 * skx + 6, fy1 * sky + 6]
+                tegner.rectangle(rr, outline=TAPT_FASIT, width=5)
+                merke = (f"{rad['gruppe'].upper()} {rad['dekning_pst']:g}% "
+                         f"[{'ML' if r2['_ml'] else 'manuell'}]")
+                _tegn_tekst(tegner, rr, merke, TAPT_FASIT, over=True)
+                bp = r2["_beste_p"]
+                if bp is not None:
+                    px = bp["px"]
+                    sx2 = bilde.width / bp["bw"]
+                    sy2 = bilde.height / bp["bh"]
+                    rp = [px[0] * sx2, px[1] * sy2, px[2] * sx2, px[3] * sy2]
+                    tegner.rectangle(rp, outline=BOM, width=3)
+                    tekst = f"BESTE FORSLAG [{bp['kilde']}]"
+                    if bp["conf"] is not None:
+                        tekst += f" conf={bp['conf']:.2f}"
+                    _tegn_tekst(tegner, rp, tekst, BOM, over=False)
+
+            ferdig = Image.alpha_composite(base, overlay).convert("RGB")
+            ferdig.save(os.path.join(
+                side_mappe, f"{os.path.splitext(fil)[0]}_side{si}.png"))
+            n_sider += 1
+
+            mrg = utsnitt_margin * skx
+            for rad in rader:
+                fx0, fy0, fx1, fy1 = rad["_r"]["boks"]
+                boks = (max(0, int(fx0 * skx - mrg)),
+                        max(0, int(fy0 * sky - mrg)),
+                        min(ferdig.width, int(fx1 * skx + mrg)),
+                        min(ferdig.height, int(fy1 * sky + mrg)))
+                if boks[2] > boks[0] and boks[3] > boks[1]:
+                    ferdig.crop(boks).save(
+                        os.path.join(utsnitt_mappe, rad["utsnitt"]))
+                    n_utsnitt += 1
+        dok.close()
+
+    print(f"  Tegnet {n_sider} sider til {side_mappe}")
+    print(f"  {n_utsnitt} utsnitt i {utsnitt_mappe} — samme rekkefølge som "
+          f"udekket.csv, klare for vurdering-kolonnen")
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Visuell gjennomgang av bokser som fjernes av en "
@@ -1066,6 +1324,23 @@ def main():
                         "fasit-boks) uavhengig av filter, 'begge'-kilden "
                         "først. Svarer på om de er oversladding eller "
                         "fødselsnumre saksbehandleren bommet på.")
+    p.add_argument("--udekket", action="store_true",
+                   help="Gjennomgangs-modus: katalogiser og tegn fasit-bokser "
+                        "modellen ikke dekker (godt nok). Splitter på "
+                        "ml_generated — reell deteksjonsevne måles på "
+                        "manuelt tegnede bokser. Trenger ingen filterflagg.")
+    p.add_argument("--god-dekning", type=float, default=0.90,
+                   dest="god_dekning", metavar="ANDEL",
+                   help="--udekket: dekning under dette regnes som «dårlig "
+                        "dekket» selv om terskelen er nådd (default 0.90)")
+    p.add_argument("--udekket-ogsaa-ml", action="store_true",
+                   dest="udekket_ogsaa_ml",
+                   help="--udekket: tegn også ML-aksepterte bokser (ellers "
+                        "kun manuelt tegnede — ML-boksene er sirkulære)")
+    p.add_argument("--maks-utsnitt", type=int, default=None,
+                   dest="maks_utsnitt", metavar="N",
+                   help="--udekket: maks antall bokser å tegne "
+                        "(dårligst dekning først)")
     p.add_argument("--band", nargs=3, default=None,
                    metavar=("KRITERIUM", "LO", "HI"),
                    help="Tegn utsnitt av hvert (prediksjon, fasit)-par der "
@@ -1094,6 +1369,20 @@ def main():
                 "min_langside", "maks_langside", "maks_areal", "min_areal_px",
                 "conf_terskel") + OCR_PARAMETRE
                if getattr(args, n) is not None}
+
+    if args.udekket:
+        if not args.res_csv or not args.mappe:
+            p.error("--udekket krever --res-csv og --mappe")
+        kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
+        gjennomgang_udekket(args.fasit_csv, args.res_csv, args.mappe,
+                            args.ut_mappe, kriterium=args.kriterium,
+                            terskel=args.terskel,
+                            god_dekning=args.god_dekning, kjorte_dok=kjorte,
+                            ogsaa_ml=args.udekket_ogsaa_ml,
+                            maks_utsnitt=args.maks_utsnitt,
+                            utsnitt_margin=args.utsnitt_margin)
+        print("\nFerdig!")
+        return
 
     if args.mot_fasit:
         if not kw_alle:
