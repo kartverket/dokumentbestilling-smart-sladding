@@ -7,9 +7,11 @@ import numpy as np
 from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL)
 from load_pdf import les_sider_fra_bytes
-from paddle_ocr_model_fnr import les_tokens_batched, finn_bokser_fra_tokens, ocr_linjer_fra_tokens
+from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
+                                  ocr_linjer_fra_tokens, bygg_linjer)
 from orientering import finn_rotasjoner_batch, boks_tilbake
 from yolo_fnr import finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks, er_vertikal, er_for_liten, har_feil_ratio, er_for_tynn
+from boks_trekk import trekk_for_boks
 from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
 from yolo_cache import les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache
 
@@ -43,8 +45,8 @@ def _finn_bokser_kun_yolo(yolo_bokser):
         if not er_for_liten(yb) and (
                 _hopp_over_geometrifilter(round(conf, 3), "yolo")
                 or (not har_feil_ratio(yb) and not er_for_tynn(yb))):
-            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None])
-    return [(tuple(boks), kilde, yc, prs) for boks, kilde, yc, prs in bokser]
+            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
+    return [tuple(par) for par in bokser]
 
 
 def _finn_bokser_med_kilde(tokens, yolo_bokser):
@@ -53,10 +55,14 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
     En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
     elektronisk tinglyste dokumenter behandles.
 
-    Intern struktur per boks: [boks, kilde, yolo_conf, paddle_rec_score]
+    Intern struktur per boks: [boks, kilde, yolo_conf, paddle_rec_score, trekk]
     """
-    bokser = [[boks, "paddle", None, rec_score]
-              for (boks, _mod11, rec_score) in finn_bokser_fra_tokens(tokens)]
+    # Linjegrupperingen er den dyre delen. Den gjøres én gang per side og
+    # deles av både fnr-søket og trekk-beregningen for hver YOLO-boks.
+    linjer = bygg_linjer(tokens) if tokens else []
+
+    bokser = [[boks, "paddle", None, rec_score, None]
+              for (boks, _mod11, rec_score) in finn_bokser_fra_tokens(tokens, linjer)]
 
     for (x0, y0, x1, y1, conf) in yolo_bokser:
         yb = (x0, y0, x1, y1)
@@ -66,7 +72,12 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
                 par[1] = "begge"
                 par[2] = round(conf, 3)           # yolo_conf
         elif kilde := _godta_yolo_boks(tokens, yb, conf):
-            bokser.append([yb, kilde, round(conf, 3), None])
+            # Trekkene beskriver hva snill_sjekk hadde å gå på, og skrives til
+            # resultat-CSV-en så strengere varianter kan feies uten ny kjøring.
+            # Se boks_trekk: kun «yolo» får trekk — «yolo_vertikal» leser ikke
+            # tokens, og paddle/begge styres ikke av denne regelen.
+            trekk = trekk_for_boks(tokens, linjer, yb) if kilde == "yolo" else None
+            bokser.append([yb, kilde, round(conf, 3), None, trekk])
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
@@ -76,7 +87,7 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
                   or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0]))
               )]
 
-    return [(tuple(boks), kilde, yc, prs) for boks, kilde, yc, prs in bokser]
+    return [tuple(par) for par in bokser]
 
 
 def _godta_yolo_boks(tokens, boks, conf):
@@ -90,13 +101,15 @@ def _godta_yolo_boks(tokens, boks, conf):
 def _bygg_side(si, storrelse, tokens, bokser_med_kilde, k, med_linjer):
     w, h = storrelse
     bokser = []
-    for boks, kilde, yolo_conf, paddle_rec_score in bokser_med_kilde:
+    for boks, kilde, yolo_conf, paddle_rec_score, trekk in bokser_med_kilde:
         x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
         b = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": kilde}
         if yolo_conf is not None:
             b["yolo_conf"] = yolo_conf
         if paddle_rec_score is not None:
             b["paddle_rec_score"] = paddle_rec_score
+        if trekk is not None:
+            b["trekk"] = trekk
         bokser.append(b)
     side = {"side": si, "bilde_bredde": w, "bilde_hoyde": h, "bokser": bokser}
     if med_linjer:
@@ -143,6 +156,8 @@ def _til_flat(sider, sidefelt):
                 d["yolo_conf"] = b["yolo_conf"]
             if "paddle_rec_score" in b:
                 d["paddle_rec_score"] = b["paddle_rec_score"]
+            if "trekk" in b:
+                d["trekk"] = b["trekk"]
             ut.append(d)
     return ut
 

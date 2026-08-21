@@ -42,7 +42,9 @@ def les_resultat(sti):
                 x0, y0 = float(r["x0"]), float(r["y0"])
                 x1, y1 = float(r["x1"]), float(r["y1"])
                 kilde = r.get("kilde", "ukjent")
-                conf = float(r["conf"]) if r.get("conf") else None
+                # yolo_conf i nytt format, «conf» i gamle resultat-CSV-er
+                raa_conf = r.get("yolo_conf") or r.get("conf")
+                conf = float(raa_conf) if raa_conf else None
             except (TypeError, ValueError, KeyError):
                 continue
             w_px = abs(x1 - x0)

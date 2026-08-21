@@ -35,9 +35,12 @@ if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
 try:
-    from config import PDF_DPI
+    from config import PDF_DPI, TREKK_FELT
 except ImportError:  # kjøring utenfor repoet
     PDF_DPI = 300
+    TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
+                  "rec_min_linje", "n_siffer_linje", "siffer_run",
+                  "har_fnr_kandidat", "har_desimal_naer")
 
 SKALA = PDF_DPI / 72.0   # PDF-punkt → piksel
 
@@ -178,8 +181,17 @@ def les_prediksjoner(sti):
                 x0, y0 = float(r["x0"]), float(r["y0"])
                 x1, y1 = float(r["x1"]), float(r["y1"])
                 kilde = r.get("kilde", "ukjent")
-                conf_s = r.get("conf", "")
+                # yolo_conf er deteksjonssikkerhet og er det «conf» alltid har
+                # betydd her. paddle_rec_score er OCR-lesekvalitet og må ALDRI
+                # havne i samme kolonne: den ville ellers slippe paddle-bokser
+                # forbi geometrifiltrene via conf_terskel. Gamle resultat-CSV-er
+                # har bare «conf», og leses som yolo_conf.
+                conf_s = r.get("yolo_conf")
+                if conf_s is None:
+                    conf_s = r.get("conf", "")
                 conf = float(conf_s) if conf_s else None
+                rec_s = r.get("paddle_rec_score", "")
+                paddle_rec = float(rec_s) if rec_s else None
             except (TypeError, ValueError, KeyError):
                 continue
             w_pt = abs(x1 - x0) / SKALA
@@ -201,9 +213,27 @@ def les_prediksjoner(sti):
                 "langside": max(w_pt, h_pt),
                 "areal": w_pt * h_pt,
                 "areal_px": abs(x1 - x0) * abs(y1 - y0),
-                "kilde": kilde, "conf": conf,
+                "kilde": kilde, "conf": conf, "paddle_rec": paddle_rec,
+                **_les_trekk(r),
             })
     return pred
+
+
+def _les_trekk(rad):
+    """Trekk-kolonnene fra resultat-CSV-en, som tall eller None.
+
+    Tomme felt betyr «ikke beregnet»: alt annet enn kilde «yolo» har tomme
+    trekk (se app/boks_trekk.py), og gamle CSV-er har ikke kolonnene i det
+    hele tatt. Begge deler gir None, og OCR-filtrene lar boksen være i fred.
+    """
+    ut = {}
+    for felt in TREKK_FELT:
+        verdi = rad.get(felt, "")
+        try:
+            ut[felt] = float(verdi) if verdi not in (None, "") else None
+        except ValueError:
+            ut[felt] = None
+    return ut
 
 
 def les_kjorte_dok(sti):
@@ -480,11 +510,54 @@ def pareto_front(rader, maal=lambda r: (r.m.tapt, r.m.ov_fj)):
 
 # ── Filtrering ───────────────────────────────────────────────
 
-FILTER_PARAMETRE = ("min_elongation", "maks_elongation",
-                    "maks_hoyde", "min_hoyde", "maks_bredde", "min_bredde",
-                    "min_kortside", "maks_kortside",
-                    "min_langside", "maks_langside",
-                    "maks_areal", "min_areal_px", "conf_terskel")
+GEOMETRI_PARAMETRE = ("min_elongation", "maks_elongation",
+                      "maks_hoyde", "min_hoyde", "maks_bredde", "min_bredde",
+                      "min_kortside", "maks_kortside",
+                      "min_langside", "maks_langside",
+                      "maks_areal", "min_areal_px", "conf_terskel")
+
+# Strengere varianter av snill_sjekk. Se _ocr_grunn for semantikken.
+OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
+                 "krev_fnr_kandidat", "avvis_desimal", "rec_veto")
+
+FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
+
+
+def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
+               krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None):
+    """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
+
+    Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
+    bare der den regelen gjelder:
+
+      * Boksen må ha trekk. Bare kilde «yolo» får trekk (app/boks_trekk.py);
+        paddle, «begge» og «yolo_vertikal» har None og røres ikke.
+      * har_tokens må være 1. Bokser uten tekst styres av
+        YOLO_CONF_UTEN_TEKST, ikke av snill_sjekk.
+
+    rec_veto er selve hypotesen: OCR-reglene får bare lov til å forkaste når
+    Paddle leste boksen sikkert (rec_min >= verdien). Leste den dårlig, er
+    fraværet av et fnr ikke bevis for noe, og boksen beholdes som i dag.
+    Uten rec_veto gjelder reglene uansett lesekvalitet.
+    """
+    if p.get("har_tokens") is None or not p["har_tokens"]:
+        return None
+    if rec_veto is not None:
+        rec = p.get("rec_min")
+        if rec is None or rec < rec_veto:
+            return None
+
+    if min_siffer is not None and (p["n_siffer"] or 0) < min_siffer:
+        return f"siffer {p['n_siffer']:.0f} < {min_siffer:g}"
+    if maks_bokstaver is not None and (p["n_bokstaver"] or 0) > maks_bokstaver:
+        return f"bokstaver {p['n_bokstaver']:.0f} > {maks_bokstaver:g}"
+    if min_siffer_run is not None and (p["siffer_run"] or 0) < min_siffer_run:
+        return f"sifferløp {p['siffer_run']:.0f} < {min_siffer_run:g}"
+    if krev_fnr_kandidat and not p.get("har_fnr_kandidat"):
+        return "ingen 11-sifret fnr-kandidat på linjen"
+    if avvis_desimal and p.get("har_desimal_naer"):
+        return "desimalskille i tallet"
+    return None
 
 
 def filter_grunner(p, min_elongation=None, maks_elongation=None,
@@ -492,14 +565,22 @@ def filter_grunner(p, min_elongation=None, maks_elongation=None,
                    maks_bredde=None, min_bredde=None,
                    min_kortside=None, maks_kortside=None,
                    min_langside=None, maks_langside=None,
-                   maks_areal=None, min_areal_px=None, conf_terskel=None):
+                   maks_areal=None, min_areal_px=None, conf_terskel=None,
+                   **ocr):
     """Grunner til at boksen filtreres bort (tom liste = beholdes).
 
     min_areal_px er i PIKSEL² for å matche MIN_BOKS_AREAL i config.py, og
     sjekkes FØR conf-porten: i prod gjelder støygrensen alle bokser, også
     høy-confidence og «begge».
+
+    OCR-reglene (**ocr, se _ocr_grunn) sjekkes aller først og er IKKE omfattet
+    av conf-porten. I prod kjører snill_sjekk i _godta_yolo_boks, altså før
+    geometrifiltrene og uten fritak for høy konfidens.
     """
     grunner = []
+    if grunn := _ocr_grunn(p, **ocr):
+        grunner.append(grunn)
+        return grunner
     if min_areal_px is not None and p["areal_px"] < min_areal_px:
         grunner.append(f"areal {p['areal_px']:.0f}px² < {min_areal_px:g}")
         return grunner
@@ -537,8 +618,11 @@ def er_filtrert(p, min_elongation=None, maks_elongation=None,
                 maks_bredde=None, min_bredde=None,
                 min_kortside=None, maks_kortside=None,
                 min_langside=None, maks_langside=None,
-                maks_areal=None, min_areal_px=None, conf_terskel=None):
+                maks_areal=None, min_areal_px=None, conf_terskel=None,
+                **ocr):
     """Rask variant av filter_grunner som ikke bygger tekst."""
+    if ocr and _ocr_grunn(p, **ocr):
+        return True
     if min_areal_px is not None and p["areal_px"] < min_areal_px:
         return True
     if conf_terskel is not None and p["conf"] is not None \
@@ -595,6 +679,11 @@ def parse_per_kilde(spec_liste):
     e/emaks = min/maks elongation, h/hmin = maks/min høyde (pt),
     b/bmin = maks/min bredde (pt), a = maks areal (pt²),
     amin = min areal (px², som MIN_BOKS_AREAL), c = conf-terskel.
+
+    OCR-regler (gjelder kun kilde «yolo», se _ocr_grunn):
+    smin = min siffer, bmaks = maks bokstaver, rmin = min sifferløp,
+    fnr = 1 krever 11-sifret fnr-kandidat, des = 1 avviser desimaltall,
+    rveto = OCR-reglene gjelder først når rec_min >= verdien.
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -604,6 +693,9 @@ def parse_per_kilde(spec_liste):
         "lmin": "min_langside",     "lmaks": "maks_langside",
         "a": "maks_areal",          "amin": "min_areal_px",
         "c": "conf_terskel",
+        "smin": "min_siffer",       "bmaks": "maks_bokstaver",
+        "rmin": "min_siffer_run",   "fnr": "krev_fnr_kandidat",
+        "des": "avvis_desimal",     "rveto": "rec_veto",
     }
     resultat = {}
     for spec in spec_liste:

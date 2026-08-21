@@ -44,7 +44,7 @@ from filter_felles import (KRITERIER, KRITERIUM_FELT, KRITERIUM_LAV_ER_BRA,
                            match_metrikker, overlapp,
                            lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
                            les_fasit_rader, les_prediksjoner, parse_per_kilde,
-                           skriv_oppsummering)
+                           skriv_oppsummering, OCR_PARAMETRE)
 
 # ── Farger ────────────────────────────────────────────────────
 TAPT_FASIT         = (230, 0, 200, 255)     # magenta = fasit-boks uten dekning
@@ -80,7 +80,13 @@ def _etikett(kwargs):
                         ("min_kortside", "kort≥{:g}"), ("maks_kortside", "kort≤{:g}"),
                         ("min_langside", "lang≥{:g}"), ("maks_langside", "lang≤{:g}"),
                         ("maks_areal", "a≤{:g}"), ("min_areal_px", "apx≥{:g}"),
-                        ("conf_terskel", "c≥{:g}→behold")):
+                        ("conf_terskel", "c≥{:g}→behold"),
+                        ("min_siffer", "siffer≥{:g}"),
+                        ("maks_bokstaver", "bokst≤{:g}"),
+                        ("min_siffer_run", "løp≥{:g}"),
+                        ("krev_fnr_kandidat", "fnr-kandidat"),
+                        ("avvis_desimal", "ikke-desimal"),
+                        ("rec_veto", "rec≥{:g}→gjelder")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -98,7 +104,11 @@ def _mappenavn(kwargs):
                          ("min_kortside", "km"), ("maks_kortside", "kM"),
                          ("min_langside", "lm"), ("maks_langside", "lM"),
                          ("maks_areal", "a"), ("min_areal_px", "apx"),
-                         ("conf_terskel", "c")):
+                         ("conf_terskel", "c"),
+                         ("min_siffer", "smin"), ("maks_bokstaver", "bmaks"),
+                         ("min_siffer_run", "rmin"),
+                         ("krev_fnr_kandidat", "fnr"),
+                         ("avvis_desimal", "des"), ("rec_veto", "rveto")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1014,6 +1024,30 @@ def main():
     filt.add_argument("--conf", type=float, default=None, dest="conf_terskel",
                       help="conf ≥ denne verdien beholdes uansett geometri")
 
+    ocr = p.add_argument_group(
+        "OCR-trekk (strengere snill_sjekk; treffer kun kilde «yolo» med "
+        "tekst i boksen — se _ocr_grunn i filter_felles.py)")
+    ocr.add_argument("--min-siffer", type=float, default=None,
+                     dest="min_siffer",
+                     help="Krev minst N siffer i boksen (prod i dag: 1)")
+    ocr.add_argument("--maks-bokstaver", type=float, default=None,
+                     dest="maks_bokstaver",
+                     help="Tillat høyst N bokstaver i boksen (prod i dag: 1)")
+    ocr.add_argument("--min-siffer-run", type=float, default=None,
+                     dest="min_siffer_run",
+                     help="Krev at lengste sifferløp over boksen er minst N")
+    ocr.add_argument("--krev-fnr-kandidat", action="store_const", const=1,
+                     default=None, dest="krev_fnr_kandidat",
+                     help="Krev et 11-sifret løp med gyldig fnr-form på linjen "
+                          "(uten mod11)")
+    ocr.add_argument("--avvis-desimal", action="store_const", const=1,
+                     default=None, dest="avvis_desimal",
+                     help="Forkast bokser med desimalskille i tallet")
+    ocr.add_argument("--rec-veto", type=float, default=None, dest="rec_veto",
+                     help="Slå OCR-reglene over på først når rec_min ≥ V. "
+                          "Under V leste Paddle dårlig, og fraværet av et fnr "
+                          "er ikke bevis for noe.")
+
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
     p.add_argument("--mot-fasit", action="store_true", dest="mot_fasit",
@@ -1052,7 +1086,8 @@ def main():
                ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
                 "maks_bredde", "min_bredde", "min_kortside", "maks_kortside",
                 "min_langside", "maks_langside", "maks_areal", "min_areal_px",
-                "conf_terskel") if getattr(args, n) is not None}
+                "conf_terskel") + OCR_PARAMETRE
+               if getattr(args, n) is not None}
 
     if args.mot_fasit:
         if not kw_alle:

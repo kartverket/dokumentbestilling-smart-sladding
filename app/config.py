@@ -56,6 +56,13 @@ YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
 MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
 MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
 
+# Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
+# Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
+# utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.
+TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
+              "rec_min_linje", "n_siffer_linje", "siffer_run",
+              "har_fnr_kandidat", "har_desimal_naer")
+
 # Konfidens-gulv YOLO-cachen skrives med (utils/run.py --yolo-cache). Må ligge
 # under alle terskler man vil kunne endre uten å invalidere cachen: bokser
 # lagres ned til gulvet og filtreres mot YOLO_CONF ved lesing. Merk at et lavere

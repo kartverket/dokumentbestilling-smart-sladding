@@ -118,6 +118,12 @@ PARAM_KODER = (
     ("maks_areal", "a", "--maks-areal"),
     ("min_areal_px", "amin", "--min-areal-px"),
     ("conf_terskel", "c", "--conf"),
+    ("min_siffer", "smin", "--min-siffer"),
+    ("maks_bokstaver", "bmaks", "--maks-bokstaver"),
+    ("min_siffer_run", "rmin", "--min-siffer-run"),
+    ("krev_fnr_kandidat", "fnr", "--krev-fnr-kandidat"),
+    ("avvis_desimal", "des", "--avvis-desimal"),
+    ("rec_veto", "rveto", "--rec-veto"),
 )
 
 
@@ -827,6 +833,46 @@ def main():
                         [6, 8, 10, 12, 15, 20, 30, 50],
                         lambda v: {"maks_elongation": v}, args.kostnad)
 
+        # ── OCR-trekk: strengere varianter av snill_sjekk ────────
+        # Gjelder kun kilde «yolo» med tekst i boksen — se _ocr_grunn i
+        # filter_felles. Alt annet er urørt uansett hva som settes her.
+        n_trekk = sum(1 for x in ds.pred if x.get("har_tokens"))
+        if not n_trekk:
+            print("\n(ingen trekk-kolonner i resultat-CSV-en — OCR-sweepen "
+                  "hoppes over. Kjør run.py på nytt for å få dem.)")
+        else:
+            print(f"\n{'═' * 145}")
+            print("OCR-TREKK — strengere snill_sjekk")
+            print(f"  {n_trekk} yolo-bokser med tekst er i spill; "
+                  f"øvrige {len(ds.pred) - n_trekk} prediksjoner er urørt")
+            print(f"{'═' * 145}")
+
+            _sweep_en_param(ds, "MIN_SIFFER i boksen (dagens: 1)",
+                            [2, 3, 4, 5, 6, 8, 11],
+                            lambda v: {"min_siffer": v}, args.kostnad)
+            _sweep_en_param(ds, "MAKS_BOKSTAVER i boksen (dagens: 1)",
+                            [0, 1, 2, 3],
+                            lambda v: {"maks_bokstaver": v}, args.kostnad)
+            _sweep_en_param(ds, "MIN_SIFFER_RUN — lengste sifferløp som "
+                                "overlapper boksen (koordinat = 5-7)",
+                            [6, 7, 8, 9, 10, 11],
+                            lambda v: {"min_siffer_run": v}, args.kostnad)
+            _sweep_en_param(ds, "REC_VETO — min_siffer=2 slås bare på når "
+                                "Paddle leste boksen sikkert",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"min_siffer": 2, "rec_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "KREV_FNR_KANDIDAT — 11-sifret fnr-form på "
+                                "linjen, med rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"krev_fnr_kandidat": 1, "rec_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "AVVIS_DESIMAL — desimalskille i tallet, "
+                                "med rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"avvis_desimal": 1, "rec_veto": v},
+                            args.kostnad)
+
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
 
@@ -845,6 +891,37 @@ def main():
 
         alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
                                           conf_v, **felles)
+
+        # OCR-aksene måles globalt, som alt annet, men kan bare treffe
+        # yolo-bokser med tekst. Radene blir med i den samlede Pareto-fronten
+        # så en OCR-regel kan konkurrere direkte mot en geometrigrense.
+        ocr_rader = []
+        if n_trekk:
+            # avvis_desimal er med i BEGGE rutenettene med vilje. finn_fnr
+            # tillater «.» og «,» som luke mellom sifferbiter — det er riktig
+            # for et fnr OCR har delt opp, men på en koordinatlinje syr det
+            # sammen to nabotall til et 11-sifret løp med gyldig form.
+            # «370600.83 -56912.29» gir en fnr-kandidat på den måten. Da er
+            # desimalskillet det som skiller, ikke kandidaten.
+            ocr_rader = _sweep_kombinasjoner(
+                ds, [None, 2, 3, 5, 8, 11], [None, 6, 7, 9, 11],
+                [None, 1], [None, 0.80, 0.90, 0.95, 0.98],
+                felt=("min_siffer", "min_siffer_run", "avvis_desimal",
+                      "rec_veto"),
+                hoder=("s.min", "løp", "des", "rec≥"),
+                tittel="OCR-TREKK KOMBINERT: sifferkrav "
+                       "(treffer kun «yolo» med tekst)",
+                **felles)
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 6, 7, 9, 11], [None, 1], [None, 1],
+                [None, 0.80, 0.90, 0.95, 0.98],
+                felt=("min_siffer_run", "krev_fnr_kandidat", "avvis_desimal",
+                      "rec_veto"),
+                hoder=("løp", "fnr", "des", "rec≥"),
+                tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
+                       "(treffer kun «yolo» med tekst)",
+                **felles)
+            alle_rader += ocr_rader
 
         STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",
                        "conf_terskel")

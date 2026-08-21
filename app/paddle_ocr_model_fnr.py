@@ -105,7 +105,16 @@ def er_fnr_form(nummer):
     return 1 <= dag <= 31 and 1 <= maaned <= 12
 
 
-def finn_fnr(tekst):
+def finn_fnr(tekst, krev_mod11=True):
+    """11-sifrede løp i teksten som ser ut som fnr/d-nummer.
+
+    krev_mod11=False slår av kontrollsiffer-sjekken og gir *kandidater*: løp
+    som har riktig form (11 siffer, gyldig dag og måned, korte luker), men som
+    ikke nødvendigvis er et gyldig nummer. Brukes av boks_trekk til å svare på
+    «finnes det i det hele tatt et 11-sifret nummer her?» — et enkelt lesefeil
+    i et siffer velter mod11, så form alene er det riktige spørsmålet når
+    poenget er å avvise bokser som ikke KAN være fnr.
+    """
     norm = _normaliser_ocr(tekst)
     pos = [i for i, ch in enumerate(norm) if ch.isdigit()]   # indeks til hvert siffer
     treff, i = [], 0
@@ -117,9 +126,9 @@ def finn_fnr(tekst):
         ok = (
             len(luker) <= 3                                   # OCR kan ha splittet fnr-et i biter
             and all(set(g) <= set(" .-,_") for g in luker)
-            and all(len(g) <= 2 for g in luker)               
+            and all(len(g) <= 2 for g in luker)
             and er_fnr_form(cifre)
-            and gyldig_mod11(cifre)
+            and (not krev_mod11 or gyldig_mod11(cifre))
         )
         if ok:
             treff.append(Treff(start, slutt))
@@ -206,6 +215,20 @@ def _bygg_linjetekst(linje):
     return "".join(tegn), kart
 
 
+def bygg_linjer(tokens):
+    """Tekstlinjene på én side: [(tokens, tekst, kart)].
+
+    Grupperingen er den samme som finn_bokser_fra_tokens bruker. Skilt ut
+    fordi boks_trekk trenger de samme linjene per YOLO-boks, og gruppering
+    per boks ville kostet O(bokser x tokens) i stedet for én gang per side.
+    """
+    ut = []
+    for linje in _grupper_til_linjer(tokens):
+        tekst, kart = _bygg_linjetekst(linje)
+        ut.append((linje, tekst, kart))
+    return ut
+
+
 def _sladdeboks(sifferbokser):
     if len(sifferbokser) <= SLADDE_SIFFER:
         return None
@@ -236,11 +259,14 @@ def _sladdeboks(sifferbokser):
 
 
 
-def finn_bokser_fra_tokens(tokens):
-    linjer = _grupper_til_linjer(tokens)
+def finn_bokser_fra_tokens(tokens, linjer=None):
+    """Sladdebokser fra OCR-tokens.
+
+    `linjer` kan gis inn fra bygg_linjer når kalleren alt har gruppert siden,
+    så grupperingen ikke gjøres to ganger per side.
+    """
     bokser = []
-    for linje in linjer:
-        tekst, kart = _bygg_linjetekst(linje)
+    for _linje, tekst, kart in (linjer if linjer is not None else bygg_linjer(tokens)):
         for treff in finn_fnr(tekst):
             sifferbokser = [kart[i] for i in range(treff.start, treff.end) if kart[i] is not None]
             boks = _sladdeboks(sifferbokser)

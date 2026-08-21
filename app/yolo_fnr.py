@@ -83,14 +83,26 @@ def tokens_i_boks(tokens, boks, terskel=0.3):
     return [t for t in tokens if _overlapp_andel(t, boks) > terskel]
 
 
-def snill_sjekk(tokens, boks):
+def tell_siffer_bokstaver(tokens):
+    """(siffer, bokstaver) i tokens som inneholder minst ett siffer.
+
+    Rene ord-tokens hoppes over helt, slik at en etikett ved siden av tallet
+    ikke teller som bokstaver. Skilt ut fra snill_sjekk fordi boks_trekk
+    skriver de samme to tallene til resultat-CSV-en: deler de kode, kan
+    tallene i sweepen ikke komme i utakt med regelen i produksjon.
+    """
     n_siffer = 0
     bokstaver = 0
-    for token in tokens_i_boks(tokens, boks):
+    for token in tokens:
         if not any(ch.isdigit() for ch in token.tekst):
             continue
         n_siffer += sum(ch.isdigit() for ch in token.tekst)
         bokstaver += sum(ch.isalpha() for ch in token.tekst)
+    return n_siffer, bokstaver
+
+
+def snill_sjekk(tokens, boks):
+    n_siffer, bokstaver = tell_siffer_bokstaver(tokens_i_boks(tokens, boks))
     return n_siffer >= MIN_SIFFER and bokstaver <= MAKS_BOKSTAVER
 
 

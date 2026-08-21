@@ -67,9 +67,11 @@ def _sider_fra_resultat(resultat, pdf_bytes):
                     "y1": (b["y"] + b["height"]) * SKALA,
                     "kilde": b.get("kilde", "paddle"),
                 }
-                conf = b.get("yolo_conf") or b.get("paddle_rec_score")
-                if conf is not None:
-                    boks["conf"] = conf
+                # Holdes atskilt: yolo_conf er deteksjonssikkerhet,
+                # paddle_rec_score er OCR-ens lesekvalitet. Se csv_export.
+                for felt in ("yolo_conf", "paddle_rec_score", "trekk"):
+                    if b.get(felt) is not None:
+                        boks[felt] = b[felt]
                 bokser.append(boks)
             sider.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
                           "bokser": bokser})
@@ -413,7 +415,8 @@ def main():
         csv_dok = {}
         for side in sider:
             bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
-            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"), b.get("conf"))
+            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"),
+                           b.get("yolo_conf"), b.get("paddle_rec_score"), b.get("trekk"))
                           for b in side["bokser"]]
             yolo_bare  = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]
                           if b.get("kilde") in ("yolo", "begge")]
