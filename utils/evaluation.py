@@ -44,9 +44,21 @@ def _sidestr(navn, si, mappe, sladd_bokser):
     iw, ih, _ = sladd_bokser[(navn, si)]
     return iw, ih
 
-def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kilder=None, yolo_bokser=None):
+def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kilder=None,
+                 yolo_bokser=None, skriv=None, diagnostikk=True):
+    """Mål sladde-bokser mot fasit.
+
+    skriv        — funksjon som tar imot rapportlinjene (samme signatur som print).
+                   Default er print. Flere tråder kan kalle samtidig ved å gi hver
+                   sin egen samler; redirect_stdout ville byttet global sys.stdout.
+    diagnostikk  — skriv ID-diagnostikken når ingen fasit-bokser ble funnet. Den er
+                   bare meningsfull for hele kjøringen: for ett enkelt dokument
+                   betyr «ingen fasit» som regel bare at dokumentet er ulabelt.
+    """
+    skriv = skriv or print
+
     if fasit is None:
-        print("Ingen fasit — hopper over måling.")
+        skriv("Ingen fasit — hopper over måling.")
         return None
 
     sum_fasit = sum_truffet = sum_pred = sum_overflod = 0
@@ -80,7 +92,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kild
         sum_fasit += len(fbokser)
         truffet_pred = set()
         if fbokser:
-            print(f"\n{navn}  (dok_nr={nr}, side {si})")
+            skriv(f"\n{navn}  (dok_nr={nr}, side {si})")
         for fi, (fb, t) in enumerate(fbokser):
             fa = _areal(fb)
             best_dek = best_iou = best_ov = 0.0
@@ -121,7 +133,7 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kild
                 truffet_pred.add(best_pi)
             else:
                 bom_filer[(navn, si)][0] += 1
-            print(f"   fasit#{fi + 1} {t:<22} dekning={best_dek:5.0%}  IoU={best_iou:5.0%}  "
+            skriv(f"   fasit#{fi + 1} {t:<22} dekning={best_dek:5.0%}  IoU={best_iou:5.0%}  "
                   f"-> {'TRUFFET' if truffet else 'MANGLER'}")
         n_overflod = len(pred) - len(truffet_pred)
         sum_overflod += n_overflod
@@ -130,13 +142,13 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kild
             over_bokser = [raw[i] for i in range(len(raw)) if i not in truffet_pred]
             oversladd_bokser[(navn, si)] = (iw, ih, over_bokser)
 
-    print("\n" + "=" * 64)
+    skriv("\n" + "=" * 64)
     rec = sum_truffet / sum_fasit if sum_fasit else 0.0
-    print(f"Recall (truffet / fasit):         {sum_truffet}/{sum_fasit} = {rec:.0%}")
-    print(f"Samlet overlapp (areal):          {(sum_ov_areal / sum_fa_areal if sum_fa_areal else 0):.0%}")
-    print(f"Sladde-bokser totalt:             {sum_pred}")
-    print(f"Over-sladding (uten fasit-treff): {sum_overflod}")
-    print(f"Terskel for treff:                {terskel:.0%} av fasit-boksens areal")
+    skriv(f"Recall (truffet / fasit):         {sum_truffet}/{sum_fasit} = {rec:.0%}")
+    skriv(f"Samlet overlapp (areal):          {(sum_ov_areal / sum_fa_areal if sum_fa_areal else 0):.0%}")
+    skriv(f"Sladde-bokser totalt:             {sum_pred}")
+    skriv(f"Over-sladding (uten fasit-treff): {sum_overflod}")
+    skriv(f"Terskel for treff:                {terskel:.0%} av fasit-boksens areal")
 
     # Diagnostikk: vis om fasit-oppslag feilet
     eval_dok_nrs = {_dok_nr(n) for (n, _) in sladd_bokser}
@@ -145,39 +157,39 @@ def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kild
     felles = eval_dok_nrs & fasit_dok_nrs
     n_fasit_totalt = sum(len(v) for v in fasit.values())
 
-    if sum_fasit == 0 and n_fasit_totalt > 0 and eval_dok_nrs:
-        print(f"\n!! ADVARSEL: Ingen av de {len(eval_dok_nrs)} evaluerte dokumentene "
+    if diagnostikk and sum_fasit == 0 and n_fasit_totalt > 0 and eval_dok_nrs:
+        skriv(f"\n!! ADVARSEL: Ingen av de {len(eval_dok_nrs)} evaluerte dokumentene "
               f"matcher de {len(fasit_dok_nrs)} dokumentene i fasit.")
-        print(f"   Evaluert (dok_nr fra filnavn):  {sorted(eval_dok_nrs)[:5]}")
-        print(f"   Fasit (fil_revisjon_id):        {sorted(fasit_dok_nrs)[:5]}")
+        skriv(f"   Evaluert (dok_nr fra filnavn), 5 laveste:  {sorted(eval_dok_nrs)[:5]}")
+        skriv(f"   Fasit (fil_revisjon_id), 5 laveste:        {sorted(fasit_dok_nrs)[:5]}")
         eval_navneksempler = sorted({n for (n, _) in sladd_bokser})[:3]
-        print(f"   Filnavn-eksempler:              {eval_navneksempler}")
-        print(f"   Sjekk at filnavnene i --mappe samsvarer med fil_revisjon_id i --fasit-csv.")
-    elif felles and len(felles) < len(eval_dok_nrs):
+        skriv(f"   Filnavn-eksempler:              {eval_navneksempler}")
+        skriv(f"   Sjekk at filnavnene i --mappe samsvarer med fil_revisjon_id i --fasit-csv.")
+    elif diagnostikk and felles and len(felles) < len(eval_dok_nrs):
         n_uten = len(eval_dok_nrs) - len(felles)
-        print(f"\n   Info: {len(felles)}/{len(eval_dok_nrs)} evaluerte dokumenter har fasit "
+        skriv(f"\n   Info: {len(felles)}/{len(eval_dok_nrs)} evaluerte dokumenter har fasit "
               f"({n_uten} uten fasit-bokser)")
 
-    print("Recall per type:")
+    skriv("Recall per type:")
     for t, (tr, tot) in sorted(pr_type.items()):
-        print(f"   {t or '(tom)':<22} {tr}/{tot} = {tr / tot:.0%}")
+        skriv(f"   {t or '(tom)':<22} {tr}/{tot} = {tr / tot:.0%}")
 
     feil = sorted((k for k, (b, _tot) in bom_filer.items() if b > 0))
-    print("\n" + "=" * 64)
+    skriv("\n" + "=" * 64)
     if sum_fasit == 0:
         if n_fasit_totalt > 0:
-            print(f"Ingen fasit-bokser matchet de evaluerte dokumentene "
+            skriv(f"Ingen fasit-bokser matchet de evaluerte dokumentene "
                   f"({n_fasit_totalt} fasit-bokser finnes, men for andre dokumenter).")
         else:
-            print("Ingen fasit-bokser lastet — kan ikke måle recall.")
+            skriv("Ingen fasit-bokser lastet — kan ikke måle recall.")
     elif feil:
-        print(f"Filer med bom ({len(feil)} side(r) med minst én MANGLER):")
+        skriv(f"Filer med bom ({len(feil)} side(r) med minst én MANGLER):")
        
         for (navn, si) in feil:
             bom, tot = bom_filer[(navn, si)]
-            print(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")
+            skriv(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")
     else:
-        print("Ingen bom — alle fasit-bokser ble truffet. 🎉")
+        skriv("Ingen bom — alle fasit-bokser ble truffet. 🎉")
                    
 
     return {

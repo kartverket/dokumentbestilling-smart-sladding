@@ -5,7 +5,6 @@ import sys
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
 
 # Demp irrelevante advarsler (PaddlePaddle ccache etc.)
 warnings.filterwarnings("ignore", message=".*ccache.*")
@@ -124,10 +123,12 @@ def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
     Lagrer i undermapper: bom/ (manglende deteksjoner) og oversladd/ (over-sladding).
     En side kan havne i begge mapper hvis den har begge typer feil.
     """
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        dok_eval = mal_overlapp(sladd_dok, fasit, mappe, terskel=terskel,
-                                y_origin=y_origin, kilder=csv_dok)
+    # Rapporten kastes — vi er her for feilbildene. skriv= holder utskriften unna
+    # sys.stdout, som hovedtråden og de andre arbeidertrådene skriver til samtidig.
+    # diagnostikk=False: for ett dokument betyr «ingen fasit» bare at det er ulabelt.
+    dok_eval = mal_overlapp(sladd_dok, fasit, mappe, terskel=terskel,
+                            y_origin=y_origin, kilder=csv_dok,
+                            skriv=lambda *a, **k: None, diagnostikk=False)
     if not dok_eval:
         return
 
@@ -490,9 +491,9 @@ def main():
     eval_resultat = None
     if args.fasit or args.kun_feil:
         buf = io.StringIO()
-        with redirect_stdout(buf):
-            eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
-                                         y_origin=args.y_origin, kilder=csv_bokser)
+        eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
+                                     y_origin=args.y_origin, kilder=csv_bokser,
+                                     skriv=lambda *a, **k: print(*a, **k, file=buf))
         logg = buf.getvalue()
         print(logg, end="")  # vis fortsatt i terminalen
         if args.fasit:
