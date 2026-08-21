@@ -427,7 +427,7 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
               f"— én per tapt boks, samme rekkefølge som tapt.csv")
 
 
-def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
+def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None):
     """Tegner ALLE BOM-prediksjoner, uavhengig av filter.
 
     En BOM-boks treffer ingen fasit-boks, men fasit er menneskeskapt: den kan
@@ -439,7 +439,10 @@ def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None):
     er feil størst.
     """
     bom = [p for p in ds.pred if p["klasse"] == "BOM"]
-    print(f"\nTRIAGE av BOM-bokser (treffer ingen fasit-boks)")
+    if kilde:
+        bom = [p for p in bom if p["kilde"].lower() == kilde.lower()]
+    print(f"\nTRIAGE av BOM-bokser (treffer ingen fasit-boks)"
+          + (f" — kun kilde «{kilde}»" if kilde else ""))
     print(f"  Totalt: {len(bom)}")
     per_kilde = defaultdict(int)
     for p in bom:
@@ -1365,10 +1368,12 @@ def main():
                         "(alle labels, ikke bare dokumenter modellen kjørte på). "
                         "Svarer på hvor mange riktige sladdinger filteret ville "
                         "forkastet. Krever ikke --res-csv.")
-    p.add_argument("--bom", action="store_true",
+    p.add_argument("--bom", nargs="?", const="alle", default=None,
+                   metavar="KILDE",
                    help="Triage-modus: tegn ALLE BOM-bokser (treffer ingen "
                         "fasit-boks) uavhengig av filter, 'begge'-kilden "
-                        "først. Svarer på om de er oversladding eller "
+                        "først. Med verdi (begge/paddle/yolo) tegnes kun den "
+                        "kilden. Svarer på om de er oversladding eller "
                         "fødselsnumre saksbehandleren bommet på.")
     p.add_argument("--udekket", action="store_true",
                    help="Gjennomgangs-modus: katalogiser og tegn fasit-bokser "
@@ -1481,7 +1486,8 @@ def main():
                     ut_csv=args.band_csv)
     elif args.bom:
         triage_bom(ds, args.mappe, args.ut_mappe, velg=args.velg,
-                   maks_sider=args.maks_sider)
+                   maks_sider=args.maks_sider,
+                   kilde=None if args.bom == "alle" else args.bom)
     elif args.per_kilde:
         per_kilde = parse_per_kilde(args.per_kilde)
         ukjente = set(per_kilde) - {k.lower() for k in ds.kilder()}

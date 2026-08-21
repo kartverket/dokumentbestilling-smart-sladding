@@ -6,7 +6,10 @@ import numpy as np
 
 from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL,
-                    AVVIS_DESIMAL_REC_VETO, AVVIS_DESIMAL_CONF_FRITAK)
+                    AVVIS_DESIMAL_REC_VETO, AVVIS_DESIMAL_CONF_FRITAK,
+                    AVVIS_DESIMAL_REC_VETO_LAV, AVVIS_DESIMAL_CONF_TAK_LAV,
+                    LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
+                    LINJEBEVIS_RUN_MAKS)
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
                                   ocr_linjer_fra_tokens, bygg_linjer)
@@ -51,11 +54,35 @@ def _desimalregel_forkaster(trekk, conf):
     """
     if not trekk or not trekk.get("har_tokens"):
         return False
-    if conf is not None and conf >= AVVIS_DESIMAL_CONF_FRITAK:
-        return False
     rec = trekk.get("rec_min")
-    return (rec is not None and rec >= AVVIS_DESIMAL_REC_VETO
-            and bool(trekk.get("har_desimal_naer")))
+    if rec is None or not trekk.get("har_desimal_naer"):
+        return False
+    if rec >= AVVIS_DESIMAL_REC_VETO \
+            and (conf is None or conf < AVVIS_DESIMAL_CONF_FRITAK):
+        return True
+    # Lav-tier: litt svakere lesing holder når deteksjonen selv er svak.
+    return (rec >= AVVIS_DESIMAL_REC_VETO_LAV
+            and (conf is None or conf < AVVIS_DESIMAL_CONF_TAK_LAV))
+
+
+def _linjebevis_forkaster(trekk, conf):
+    """Sikkert lest linje beviser at tallet ikke kan være et fnr.
+
+    Speiler _ocr_grunn i utils/filter_felles.py med avvis_run_6_10=RUN_MAKS,
+    avvis_orgnr=1, linje_veto og ocr_conf_fritak. Kalles på ENDELIG kilde
+    etter dedup, som desimalregelen. Se config for tallgrunnlaget.
+    """
+    if not trekk or not trekk.get("har_tokens"):
+        return False
+    if conf is not None and conf >= LINJEBEVIS_CONF_FRITAK:
+        return False
+    linje = trekk.get("rec_min_linje")
+    if linje is None or linje < LINJEBEVIS_LINJE_VETO:
+        return False
+    lang = trekk.get("lang_run")
+    if lang is not None and 6 <= lang <= LINJEBEVIS_RUN_MAKS:
+        return True
+    return bool(trekk.get("har_orgnr"))
 
 
 def _finn_bokser_kun_yolo(yolo_bokser):
@@ -109,11 +136,13 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser):
             trekk = trekk_for_boks(tokens, linjer, yb) if kilde == "yolo" else None
             bokser.append([yb, kilde, round(conf, 3), None, trekk])
 
-    # ── Desimalregelen ──────────────────────────────────────────
+    # ── Desimal- og linjebevis-reglene ──────────────────────────────────────────
     # Etter dedup-løkken med vilje: kilden er endelig, så bokser som ble
     # «begge» underveis beholder sladdingen sin.
     bokser = [par for par in bokser
-              if not (par[1] == "yolo" and _desimalregel_forkaster(par[4], par[2]))]
+              if not (par[1] == "yolo"
+                      and (_desimalregel_forkaster(par[4], par[2])
+                           or _linjebevis_forkaster(par[4], par[2])))]
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.

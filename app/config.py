@@ -87,6 +87,25 @@ MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
 # _ocr_grunn i utils/filter_felles.py.
 AVVIS_DESIMAL_REC_VETO    = 0.98   # regelen gjelder først når rec_min ≥ dette
 AVVIS_DESIMAL_CONF_FRITAK = 0.6    # conf ≥ dette overstyrer regelen
+# Lavere tier (uttrekk 6, full fasit): rec_min i [0.95, 0.98) er også bevis
+# nok NÅR deteksjonen selv er svak — målt +38 fjernede oversladdinger mot
+# 1 tapt.
+AVVIS_DESIMAL_REC_VETO_LAV  = 0.95
+AVVIS_DESIMAL_CONF_TAK_LAV  = 0.4  # lav-tier gjelder bare når conf < dette
+
+# Linjebevis-reglene (uttrekk 6 med fasit som dekker hele uttrekket; manuelt
+# labelet i tre runder — pakke C): når HELE linjen er sikkert lest, kan
+# tallet bevises å ikke være et fnr. To bevistyper:
+#   * sifferløp på 6-8 (med luker): for langt for nakent personnummer, for
+#     kort for fnr — dagboknr, beløp, koordinat. 9-løp er BEVISST utenfor:
+#     manuell gjennomgang viste at de ofte er ekte fnr der OCR selvsikkert
+#     har mistet to tegn (samme sykdom som felte 10-løpene).
+#   * gyldig orgnr-mod11 i boksen.
+# Målt: 79 fjernede oversladdinger mot 1 ekte fnr (conf 0.463, rett under
+# fritaket) + 1 fasit-støy.
+LINJEBEVIS_LINJE_VETO  = 0.99  # rec_min_linje ≥ dette for at reglene gjelder
+LINJEBEVIS_CONF_FRITAK = 0.5   # conf ≥ dette overstyrer reglene
+LINJEBEVIS_RUN_MAKS    = 8     # sifferløp 6..8 forkastes
 
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
