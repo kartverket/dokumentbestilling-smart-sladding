@@ -87,7 +87,10 @@ def _etikett(kwargs):
                         ("krev_fnr_kandidat", "fnr-kandidat"),
                         ("avvis_desimal", "ikke-desimal"),
                         ("rec_veto", "rec≥{:g}→gjelder"),
-                        ("ocr_conf_fritak", "c≥{:g}→OCR-fritak")):
+                        ("ocr_conf_fritak", "c≥{:g}→OCR-fritak"),
+                        ("avvis_00_run", "ikke-00-løp"),
+                        ("avvis_orgnr", "ikke-orgnr"),
+                        ("avvis_org_ord", "ikke-org-ord({:g})")):
         if kwargs.get(nøkkel) is not None:
             deler.append(mal.format(kwargs[nøkkel]))
     return ", ".join(deler) if deler else "ingen filter"
@@ -110,7 +113,9 @@ def _mappenavn(kwargs):
                          ("min_siffer_run", "rmin"),
                          ("krev_fnr_kandidat", "fnr"),
                          ("avvis_desimal", "des"), ("rec_veto", "rveto"),
-                         ("ocr_conf_fritak", "cfritak")):
+                         ("ocr_conf_fritak", "cfritak"),
+                         ("avvis_00_run", "r00"), ("avvis_orgnr", "orgnr"),
+                         ("avvis_org_ord", "orgord")):
         if kwargs.get(nøkkel) is not None:
             deler.append(f"{kort}{kwargs[nøkkel]:g}")
     return "_".join(deler) if deler else "ingen_filter"
@@ -1311,6 +1316,20 @@ def main():
                      dest="ocr_conf_fritak",
                      help="OCR-reglene viker for bokser med deteksjons-conf "
                           "≥ V — sikker YOLO-deteksjon overstyrer tekstbevis.")
+    ocr.add_argument("--avvis-00-run", action="store_const", const=1,
+                     default=None, dest="avvis_00_run",
+                     help="Forkast bokser der et 10-12-sifret løp starter "
+                          "med 00 — orgnr paddet til fnr-bredde; dag 00 er "
+                          "ugyldig i et fnr")
+    ocr.add_argument("--avvis-orgnr", action="store_const", const=1,
+                     default=None, dest="avvis_orgnr",
+                     help="Forkast bokser med gyldig orgnr-mod11 (9 siffer "
+                          "som starter på 8/9, evt. 00-paddet)")
+    ocr.add_argument("--avvis-org-ord", type=float, default=None,
+                     dest="avvis_org_ord", metavar="{1,2}",
+                     help="Forkast bokser med selskapsform-ord nær seg "
+                          "(AS, Borettslag, Org.nr, …). 1=alltid, 2=kun når "
+                          "boksen også mangler fnr-kandidat")
 
     p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
                    help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')

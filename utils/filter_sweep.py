@@ -125,6 +125,9 @@ PARAM_KODER = (
     ("avvis_desimal", "des", "--avvis-desimal"),
     ("rec_veto", "rveto", "--rec-veto"),
     ("ocr_conf_fritak", "cfritak", "--ocr-conf-fritak"),
+    ("avvis_00_run", "r00", "--avvis-00-run"),
+    ("avvis_orgnr", "orgnr", "--avvis-orgnr"),
+    ("avvis_org_ord", "orgord", "--avvis-org-ord"),
 )
 
 
@@ -885,6 +888,27 @@ def main():
                             lambda v: {"avvis_desimal": 1, "rec_veto": 0.98,
                                        "ocr_conf_fritak": v},
                             args.kostnad)
+            _sweep_en_param(ds, "AVVIS_00_RUN — 10-12-sifret løp starter med "
+                                "00 (orgnr paddet til fnr-bredde), med "
+                                "rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"avvis_00_run": 1, "rec_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "AVVIS_ORGNR — gyldig orgnr-mod11 i boksen, "
+                                "med rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"avvis_orgnr": 1, "rec_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "AVVIS_ORG_ORD=1 — org-ord nær boksen, med "
+                                "rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"avvis_org_ord": 1, "rec_veto": v},
+                            args.kostnad)
+            _sweep_en_param(ds, "AVVIS_ORG_ORD=2 — org-ord nær boksen OG "
+                                "ingen fnr-kandidat, med rec_veto-port",
+                            [None, 0.80, 0.90, 0.95, 0.98],
+                            lambda v: {"avvis_org_ord": 2, "rec_veto": v},
+                            args.kostnad)
 
         _sweep_fordeling(ds)
         _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
@@ -934,6 +958,18 @@ def main():
                 tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
                        "(treffer kun «yolo» med tekst)",
                 etikett_prefiks="ocr-fnr ", **felles)
+            # Orgnummer-reglene: 00-paddede løp, orgnr-mod11 og
+            # selskapsform-ord, mot rec_veto. Konkurrerer i samme
+            # Pareto-front som resten.
+            ocr_rader += _sweep_kombinasjoner(
+                ds, [None, 1], [None, 1], [None, 1, 2],
+                [None, 0.90, 0.95, 0.98],
+                felt=("avvis_00_run", "avvis_orgnr", "avvis_org_ord",
+                      "rec_veto"),
+                hoder=("00run", "orgnr", "orgord", "rec≥"),
+                tittel="OCR-TREKK KOMBINERT: orgnummer-regler "
+                       "(treffer kun «yolo» med tekst)",
+                etikett_prefiks="ocr-org ", **felles)
             # Desimalregelen med conf-fritak: manuell gjennomgang viste at
             # tapene nesten alle har høy deteksjons-conf, mens koordinatene
             # regelen skal fjerne ligger lavt. Fjerde akse er en dummy.

@@ -519,14 +519,16 @@ GEOMETRI_PARAMETRE = ("min_elongation", "maks_elongation",
 # Strengere varianter av snill_sjekk. Se _ocr_grunn for semantikken.
 OCR_PARAMETRE = ("min_siffer", "maks_bokstaver", "min_siffer_run",
                  "krev_fnr_kandidat", "avvis_desimal", "rec_veto",
-                 "ocr_conf_fritak")
+                 "ocr_conf_fritak",
+                 "avvis_00_run", "avvis_orgnr", "avvis_org_ord")
 
 FILTER_PARAMETRE = GEOMETRI_PARAMETRE + OCR_PARAMETRE
 
 
 def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
                krev_fnr_kandidat=None, avvis_desimal=None, rec_veto=None,
-               ocr_conf_fritak=None):
+               ocr_conf_fritak=None,
+               avvis_00_run=None, avvis_orgnr=None, avvis_org_ord=None):
     """Hvorfor en YOLO-boks forkastes av en strengere snill_sjekk, eller None.
 
     Reglene speiler _godta_yolo_boks i app/model_main.py og gjelder derfor
@@ -568,6 +570,16 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
         return "ingen 11-sifret fnr-kandidat på linjen"
     if avvis_desimal and p.get("har_desimal_naer"):
         return "desimalskille i tallet"
+    if avvis_00_run and p.get("har_00_run"):
+        return "11-sifret løp starter med 00"
+    if avvis_orgnr and p.get("har_orgnr"):
+        return "gyldig orgnr i boksen"
+    # avvis_org_ord=1: org-ord nær boksen er nok.
+    # avvis_org_ord=2: i tillegg må boksen mangle fnr-kandidat — navnet
+    # alene feller ikke et tall som faktisk har fnr-form.
+    if avvis_org_ord and p.get("har_org_ord") \
+            and (avvis_org_ord < 2 or not p.get("har_fnr_kandidat")):
+        return "org-ord nær boksen"
     return None
 
 
@@ -695,7 +707,9 @@ def parse_per_kilde(spec_liste):
     smin = min siffer, bmaks = maks bokstaver, rmin = min sifferløp,
     fnr = 1 krever 11-sifret fnr-kandidat, des = 1 avviser desimaltall,
     rveto = OCR-reglene gjelder først når rec_min >= verdien,
-    cfritak = OCR-reglene viker når deteksjons-conf >= verdien.
+    cfritak = OCR-reglene viker når deteksjons-conf >= verdien,
+    r00 = 1 avviser 00-paddede løp, orgnr = 1 avviser gyldige orgnr,
+    orgord = 1 avviser ved org-ord nær boksen (2 = kun uten fnr-kandidat).
     """
     param_map = {
         "e": "min_elongation",      "emaks": "maks_elongation",
@@ -709,6 +723,8 @@ def parse_per_kilde(spec_liste):
         "rmin": "min_siffer_run",   "fnr": "krev_fnr_kandidat",
         "des": "avvis_desimal",     "rveto": "rec_veto",
         "cfritak": "ocr_conf_fritak",
+        "r00": "avvis_00_run",      "orgnr": "avvis_orgnr",
+        "orgord": "avvis_org_ord",
     }
     resultat = {}
     for spec in spec_liste:
