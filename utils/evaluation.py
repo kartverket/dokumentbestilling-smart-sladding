@@ -215,11 +215,18 @@ from collections import defaultdict
 
 
 def les_fasit(csv_sti):
+    from filter_felles import les_ugyldige_label_ids, _advar_uten_id_kolonne
+    ugyldige = les_ugyldige_label_ids()
     fasit = defaultdict(list)
     try:
         with open(csv_sti, newline="", encoding="utf-8-sig") as f:
-            for r in csv.DictReader(f):
+            leser = csv.DictReader(f)
+            _advar_uten_id_kolonne(ugyldige, leser.fieldnames)
+            for r in leser:
                 if (r.get("ml_status") or "").strip().upper() == "REJECTED":
+                    continue
+                rid = (r.get("id") or "").strip()
+                if rid and rid in ugyldige:
                     continue
                 try:
                     nr = int(r["fil_revisjon_id"])

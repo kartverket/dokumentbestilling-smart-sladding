@@ -144,15 +144,56 @@ ANBEFALT_TERSKEL = {"areal": 0.32, "kortside": 0.60, "iou": 0.20, "senter": 0.40
 
 # ── Innlesing ────────────────────────────────────────────────
 
+# Register over label-rader dømt som fasit-støy i manuell review
+# (kontonumre, koordinater, feiltegnede bokser). Bor i repoet og oppdateres
+# løpende når review finner nye — les_fasit* hopper over radene, så ingen
+# vask av selve labels-filen trengs, og en re-eksport nullstiller ingenting.
+UGYLDIGE_LABELS_FIL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "ugyldige_labels.txt")
+
+
+def les_ugyldige_label_ids(sti=None):
+    """Label-id-er fra ugyldige_labels.txt: én per linje, «#» = kommentar."""
+    sti = sti or UGYLDIGE_LABELS_FIL
+    ids = set()
+    if os.path.isfile(sti):
+        with open(sti, encoding="utf-8") as f:
+            for linje in f:
+                linje = linje.split("#", 1)[0].strip()
+                if linje:
+                    ids.add(linje)
+    return ids
+
+
+_ADVART_UTEN_ID = False
+
+
+def _advar_uten_id_kolonne(ugyldige, kolonner):
+    global _ADVART_UTEN_ID
+    if ugyldige and "id" not in (kolonner or []) and not _ADVART_UTEN_ID:
+        _ADVART_UTEN_ID = True
+        print(f"⚠ ugyldige_labels.txt har {len(ugyldige)} id-er, men "
+              f"labels-CSV-en mangler id-kolonnen — ingen rader filtreres. "
+              f"Ta med id i neste eksport.")
+
+
 def les_fasit(sti):
     """Leser fasit-labels (ACCEPTED + manuell, ekskluderer REJECTED).
 
-    Returnerer dict: (dok_nr, side) -> [(x0, y0, x1, y1), ...] i PDF-punkt.
+    Rader hvis id står i ugyldige_labels.txt (dømt fasit-støy) hoppes over.
+    Returnerer dict: (dok_nr, side) -> [(x0, y0, x1, y1, label_id), ...]
+    i PDF-punkt.
     """
+    ugyldige = les_ugyldige_label_ids()
     fasit = defaultdict(list)
     with open(sti, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
+        leser = csv.DictReader(f)
+        _advar_uten_id_kolonne(ugyldige, leser.fieldnames)
+        for r in leser:
             if (r.get("ml_status") or "").strip().upper() == "REJECTED":
+                continue
+            label_id = (r.get("id") or "").strip()
+            if label_id and label_id in ugyldige:
                 continue
             try:
                 nr = int(r["fil_revisjon_id"])
@@ -163,7 +204,7 @@ def les_fasit(sti):
                 continue
             x0, x1 = sorted((x, x + w))
             y0, y1 = sorted((y, y + h))
-            fasit[(nr, side)].append((x0, y0, x1, y1))
+            fasit[(nr, side)].append((x0, y0, x1, y1, label_id))
     return fasit
 
 
@@ -270,13 +311,19 @@ def les_fasit_rader(sti, ekskluder=("REJECTED",)):
     """
     rader, forkastet = [], defaultdict(int)
     ekskluder = {e.strip().upper() for e in ekskluder}
+    ugyldige = les_ugyldige_label_ids()
     with open(sti, newline="", encoding="utf-8-sig") as f:
         leser = csv.DictReader(f)
         kolonner = leser.fieldnames or []
+        _advar_uten_id_kolonne(ugyldige, kolonner)
         for r in leser:
             status = (r.get("ml_status") or "").strip().upper()
             if status in ekskluder:
                 forkastet[status or "(tom)"] += 1
+                continue
+            label_id = (r.get("id") or "").strip()
+            if label_id and label_id in ugyldige:
+                forkastet["(ugyldig-listet)"] += 1
                 continue
             try:
                 nr = int(r["fil_revisjon_id"])
@@ -405,12 +452,13 @@ def bygg_datasett(fasit, pred, terskel=STD_TERSKEL,
             n_fasit_ukjort += len(bokser)
             continue
         pw, ph = side_str.get((nr, si), (595, 842))   # fallback A4
-        for (x0, y0, x1, y1) in bokser:
+        for (x0, y0, x1, y1, *rest) in bokser:
             n = (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
             per_side[(nr, si)].append(len(fasit_bokser))
             fasit_bokser.append({
                 "dok_nr": nr, "side": si,
                 "boks": (x0, y0, x1, y1),
+                "label_id": rest[0] if rest else "",
                 "norm": n,
                 "norm_areal": areal(n),
                 # Avgjort i punkt-rom: normalisering skjever w/h

@@ -1,0 +1,35 @@
+# Ugyldige labels — rader i labels-CSV-en som er dømt som fasit-støy i
+# manuell review (kontonumre, koordinater, feiltegnede bokser).
+#
+# Én label-id per linje (verdien i id-kolonnen i labels-eksporten).
+# Alt etter «#» er kommentar — skriv gjerne hva det var og hvor det ble
+# funnet, så dommen er sporbar.
+#
+# Alle analyseverktøyene (filter_sweep, filter_review, run.py-evaluering)
+# leser denne filen automatisk og hopper over radene. Labels-filen selv
+# røres ikke, så en re-eksport nullstiller ingenting — bare oppdater denne
+# filen når review finner nye. tapt.csv-manifestene fra filter_review har
+# en label_id-kolonne: dommer med «riktig å fjerne» limes rett inn her.
+#
+# Eksempel:
+# 123456    # kontonummer, ikke fnr — desimalregel-review 2026-08-21
+72704437-82d6-4099-92f7-57e3eb0abce3    # fasit-støy, koordfam-review 2026-08-21 — dok 19619597 side 50
+5e9b6b42-3cf5-456f-bcfd-8b664d8ed418    # fasit-støy, koordfam-review 2026-08-21 — dok 19619597 side 18
+1099bae9-fc22-442c-a2a5-858ca8712699    # fasit-støy, koordfam-review 2026-08-21 — dok 19619597 side 41
+137a79b8-7254-4a58-8224-4f895bf20bae    # fasit-støy, koordfam-review 2026-08-21 — dok 19619597 side 40
+a5057285-e134-4786-af36-3b4aaa8b56b8    # fasit-støy, koordfam-review 2026-08-21 — dok 1047116553 side 35
+5eb7359e-cea6-4c99-859d-201da9a9438e    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 4477635 side 2
+a124cc18-1258-4c14-a084-a35a8bb2ac49    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 8768593 side 1
+2f948d21-76f9-4caf-8d45-8f8888edf6d4    # fasit-støy, koordinat, desimal-review 2026-08 — dok 16121353 side 3
+cfa26e5c-42b2-4813-9700-a5462b953f87    # fasit-støy, koordinat, desimal-review 2026-08 — dok 16121353 side 3
+37b4dd44-03e0-4e63-86ec-bff55b02b152    # fasit-støy, koordinat, desimal-review 2026-08 — dok 16121353 side 3
+9f6181ae-1cc9-4941-afa8-8c4972783853    # fasit-støy, koordinat, desimal-review 2026-08 — dok 1024009031 side 13
+0898e6b9-31ec-4987-b78b-d85a582b20f9    # fasit-støy, koordinat, desimal-review 2026-08 — dok 1024009031 side 13
+1b13b51b-ae78-46e1-bd0a-091d6f687f14    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1053017125 side 1
+09358e83-e28a-4b8b-8bc3-890e9e7f4015    # fasit-støy, orgnr, pakke A/B/C (dømt 3x) 2026-08 — dok 1058596825 side 1
+8389b633-c73a-42e8-adcd-5778add7974b    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 1067893712 side 2
+133a5750-273d-4189-a3df-73008737c01f    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 1121137683 side 27
+0c29f27f-3004-45a8-8353-d7b2a916a12d    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1121489454 side 1
+2bbfa6e4-9afa-4311-a430-d60c13874f44    # fasit-støy, kontonummer, desimal-review 2026-08 — dok 1129350547 side 6
+d73b681d-e8cc-4a07-bbf0-4744ee730764    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1178742450 side 1
+3645c061-7027-47e3-949c-f26c25b84a59    # fasit-støy, referanse, per-kilde-review 2026-08 — dok 1179906179 side 1

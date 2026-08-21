@@ -211,6 +211,7 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
                 "dekning_pst": round(dekning, 1) if dekning != "" else "",
                 "fil": navn_per_dok.get(fb["dok_nr"], f"{fb['dok_nr']}"),
                 "side": fb["side"],
+                "label_id": fb.get("label_id", ""),
                 "fasit_x0": round(fx0, 1), "fasit_y0": round(fy0, 1),
                 "fasit_bredde_pt": round(fx1 - fx0, 1),
                 "fasit_hoyde_pt": round(fy1 - fy0, 1),
@@ -238,7 +239,8 @@ def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
     if manifest:
         os.makedirs(ut_mappe, exist_ok=True)
         manifest_sti = os.path.join(ut_mappe, "tapt.csv")
-        felt = ["nr", "fil", "side", "grunn", "dekning_pst", "kilde", "conf",
+        felt = ["nr", "fil", "side", "label_id", "grunn", "dekning_pst",
+                "kilde", "conf",
                 "elongation", "kortside_pt", "langside_pt",
                 "pred_bredde_pt", "pred_hoyde_pt", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "dekkere_foer", "fasit_x0", "fasit_y0",
