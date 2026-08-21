@@ -146,18 +146,32 @@ def les_fasit(sti):
     """Leser fasit-labels (ACCEPTED + manuell, ekskluderer REJECTED).
 
     Returnerer dict: (dok_nr, side) -> [(x0, y0, x1, y1), ...] i PDF-punkt.
+
+    Dokumenter som forekommer i CSV-en uten en eneste gyldig boks — alle
+    radene REJECTED, eller rader uten koordinater — får en TOM oppføring.
+    De er gjennomgått med fasit «null fnr», ikke ulabelte: prediksjoner der
+    er ekte oversladdinger og skal telles i scope, ikke ekskluderes som
+    «dokument mangler i fasit».
     """
     fasit = defaultdict(list)
     with open(sti, newline="", encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
-            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
-                continue
             try:
                 nr = int(r["fil_revisjon_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            try:
                 side = int(r["sidetall"])
+            except (TypeError, ValueError, KeyError):
+                side = 1
+            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
+                fasit[(nr, side)]        # marker dokumentet som labelt
+                continue
+            try:
                 x, y = float(r["x"]), float(r["y"])
                 w, h = float(r["width"]), float(r["height"])
             except (TypeError, ValueError, KeyError):
+                fasit[(nr, side)]        # labelt, men raden har ingen boks
                 continue
             x0, x1 = sorted((x, x + w))
             y0, y1 = sorted((y, y + h))

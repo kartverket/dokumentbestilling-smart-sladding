@@ -128,8 +128,10 @@ fi
 # ── Begrens til labelte dokumenter ──────────────────────────────
 # Uten liste kjøres ellers ALT i mappa, også dokumenter uten fasit — da
 # teller sammendraget hver prediksjon på dem som «overflod» uansett hvor
-# riktige de er. Generer en liste fra fasit-CSV-en (REJECTED-rader gir
-# ingen brukbar fasit og holdes utenfor, som i filter_felles.les_fasit).
+# riktige de er. Listen genereres fra fasit-CSV-en og tar med ALLE
+# dokumenter som forekommer der, også de der alle radene er REJECTED:
+# et gjennomgått dokument uten godkjente bokser er fasit på null fnr,
+# og prediksjoner der er ekte oversladdinger som skal telles.
 # Merk: listen er IKKE en kjorte-liste — den inneholder også labelte
 # dokumenter der PDF-en mangler i mappa, og de blir aldri kjørt.
 if [[ -z "$LISTE_FIL" ]]; then
@@ -140,8 +142,6 @@ import csv, sys
 dokumenter = set()
 with open(sys.argv[1], newline="", encoding="utf-8-sig") as f:
     for rad in csv.DictReader(f):
-        if (rad.get("ml_status") or "").strip().upper() == "REJECTED":
-            continue
         try:
             dokumenter.add(int(rad["fil_revisjon_id"]))
         except (TypeError, ValueError, KeyError):
