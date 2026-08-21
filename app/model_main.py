@@ -11,7 +11,10 @@ from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
                     LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
                     LINJEBEVIS_RUN_MAKS,
                     VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE,
-                    KOORDFAM_KODER)
+                    KOORDFAM_KODER, SEKSJONERING_KODER,
+                    SEKSJONERING_MAKS_KORTSIDE_PT, SEKSJONERING_MAKS_LANGSIDE_PT,
+                    SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_SIFFER,
+                    SEKSJONERING_REC_VETO, SEKSJONERING_CONF_FRITAK)
 from load_pdf import les_sider_fra_bytes
 from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
                                   ocr_linjer_fra_tokens, bygg_linjer)
@@ -87,6 +90,49 @@ def _linjebevis_forkaster(trekk, conf):
     return bool(trekk.get("har_orgnr"))
 
 
+_SEKSJONERING_MAKS_KORTSIDE_PX = SEKSJONERING_MAKS_KORTSIDE_PT * PDF_DPI / 72.0
+_SEKSJONERING_MAKS_LANGSIDE_PX = SEKSJONERING_MAKS_LANGSIDE_PT * PDF_DPI / 72.0
+
+
+def _seksjonering_geometri_forkaster(boks):
+    """Orienteringsfri form: for stor til å være en 5-siffer-sladd."""
+    x0, y0, x1, y1 = boks[:4]
+    kort, lang = sorted((x1 - x0, y1 - y0))
+    return (kort > _SEKSJONERING_MAKS_KORTSIDE_PX
+            or lang > _SEKSJONERING_MAKS_LANGSIDE_PX)
+
+
+def _seksjonering_yolo_forkaster(boks, trekk, conf):
+    """Seksjonering-dokument: tabellcelle, ikke fnr-sladd.
+
+    Speiler er_filtrert i utils/filter_felles.py med per-kilde-spec
+    «yolo:kmaks=40,lmaks=80,smin=6,rveto=0.98,cfritak=0.5». Geometrien
+    gjelder ubetinget; sifferkravet bare for bokser med sikkert lest tekst
+    (har_tokens, rec_min ≥ veto) under conf-fritaket. Se config.
+    """
+    if _seksjonering_geometri_forkaster(boks):
+        return True
+    if not trekk or not trekk.get("har_tokens"):
+        return False
+    if conf is not None and conf >= SEKSJONERING_CONF_FRITAK:
+        return False
+    rec = trekk.get("rec_min")
+    if rec is None or rec < SEKSJONERING_REC_VETO:
+        return False
+    return (trekk.get("n_siffer") or 0) < SEKSJONERING_MIN_SIFFER
+
+
+def _seksjonering_paddle_forkaster(boks):
+    """Speiler «paddle:e=3,kmaks=40,lmaks=80» — kvadratiske/store celler."""
+    x0, y0, x1, y1 = boks[:4]
+    kort, lang = sorted((x1 - x0, y1 - y0))
+    if kort <= 0:
+        return True
+    if lang / kort < SEKSJONERING_PADDLE_MIN_ELONG:
+        return True
+    return _seksjonering_geometri_forkaster(boks)
+
+
 def _koordfam_forkaster(trekk):
     """Koordinat-dokument: tall uten fnr-bevis er koordinater, ikke fnr.
 
@@ -132,7 +178,8 @@ def _finn_bokser_kun_yolo(yolo_bokser):
     return [tuple(par) for par in bokser]
 
 
-def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False):
+def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False,
+                           seksjonering=False):
     """Slå sammen Paddle- og YOLO-bokser.
 
     En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
@@ -180,9 +227,13 @@ def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False):
               if not (par[1] == "yolo"
                       and (_desimalregel_forkaster(par[4], par[2])
                            or _linjebevis_forkaster(par[4], par[2])
-                           or (koordfam and _koordfam_forkaster(par[4]))))
+                           or (koordfam and _koordfam_forkaster(par[4]))
+                           or (seksjonering and _seksjonering_yolo_forkaster(
+                                   par[0], par[4], par[2]))))
               and not (par[1] == "paddle"
-                       and _paddle_vindu_forkaster(par[4]))]
+                       and (_paddle_vindu_forkaster(par[4])
+                            or (seksjonering
+                                and _seksjonering_paddle_forkaster(par[0]))))]
 
     # ── Dimensjonsfiltre ────────────────────────────────────────
     # Universelle grenser for alle kilder; kun høy yolo-konfidens fritar.
@@ -287,8 +338,9 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
     config). None/tom liste = dagens globale oppførsel, så manglende
     metadata aldri kan koste recall."""
     t = {}
-    koordfam = bool(KOORDFAM_KODER.intersection(
-        k.strip().upper() for k in (rettsstiftelsestyper or ()) if k))
+    koder = {k.strip().upper() for k in (rettsstiftelsestyper or ()) if k}
+    koordfam = bool(KOORDFAM_KODER & koder)
+    seksjonering = bool(SEKSJONERING_KODER & koder)
     bruker_yolo = kun_yolo or not elektronisk_tinglyst
     yolo_cache = bool(yolo_cache_mappe and navn and bruker_yolo)
 
@@ -385,8 +437,9 @@ def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=No
             if kun_yolo:
                 bokser_med_kilde = _finn_bokser_kun_yolo(yolo_bokser)
             else:
-                bokser_med_kilde = _finn_bokser_med_kilde(tokens, yolo_bokser,
-                                                          koordfam=koordfam)
+                bokser_med_kilde = _finn_bokser_med_kilde(
+                    tokens, yolo_bokser, koordfam=koordfam,
+                    seksjonering=seksjonering)
 
         with _ta_tid(t, "etterbehandling"):
             sider.append(_bygg_side(si + 1, sidemaal[si], tokens, bokser_med_kilde,

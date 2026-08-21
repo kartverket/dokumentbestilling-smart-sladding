@@ -143,6 +143,27 @@ KOORDFAM_KODER = frozenset((
     "JS_JSA",   # Opprettelse av jordsameie
 ))
 
+# Seksjonering-profilen: SE_SEK-dokumenter er tabelltunge (eierbrøker,
+# arealer, seksjonsnumre) — presisjon 72 % mot 92 % ellers, og BOM-ene er
+# tabellceller: for store bokser eller korte talløp. Målt på uttrekk 6:
+# 143 oversladdinger fjernet / 2 ekte fnr tapt (ov/tapt 71). De to tapene
+# er fnr der Paddle bare leste 5 av 11 siffer selvsikkert (kjent klasse,
+# jf. rec-score-kalibreringen) — smin 5 ville reddet dem, men koster ~80
+# oversladdinger (40 per fnr > kostnad 20). Geometrien er ORIENTERINGSFRI
+# (kortside/langside), så prod (rotert rom) og analysen (side-rom) er
+# bit-like også på roterte sider. NB: koordfam-reglene er DØDELIGE her
+# (fnr står i samme tabellinjer som desimal-arealene: 130 tapt globalt) —
+# derfor egne profiler per dokumenttype. Kun SE_SEK er målt;
+# reseksjonering-slektningene (RS_RES, SB_SEB, …) er fnr-tette og holdes
+# utenfor til de eventuelt måles for seg.
+SEKSJONERING_KODER = frozenset(("SE_SEK",))
+SEKSJONERING_MAKS_KORTSIDE_PT = 40.0  # yolo+paddle: fnr-sladd p99.9 = 29.5
+SEKSJONERING_MAKS_LANGSIDE_PT = 80.0  # yolo+paddle: fnr-sladd p99.9 = 78.9
+SEKSJONERING_PADDLE_MIN_ELONG = 3.0   # paddle: kvadratiske celler forkastes
+SEKSJONERING_MIN_SIFFER  = 6          # yolo: færre lest siffer = brøk/snr
+SEKSJONERING_REC_VETO    = 0.98       # sifferkravet kun ved sikker lesning
+SEKSJONERING_CONF_FRITAK = 0.5        # høy deteksjons-conf overstyrer
+
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
 # utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.

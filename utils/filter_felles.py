@@ -655,11 +655,11 @@ def _ocr_grunn(p, min_siffer=None, maks_bokstaver=None, min_siffer_run=None,
             return None
 
     if min_siffer is not None and (p["n_siffer"] or 0) < min_siffer:
-        return f"siffer {p['n_siffer']:.0f} < {min_siffer:g}"
+        return f"siffer {p['n_siffer'] or 0:.0f} < {min_siffer:g}"
     if maks_bokstaver is not None and (p["n_bokstaver"] or 0) > maks_bokstaver:
-        return f"bokstaver {p['n_bokstaver']:.0f} > {maks_bokstaver:g}"
+        return f"bokstaver {p['n_bokstaver'] or 0:.0f} > {maks_bokstaver:g}"
     if min_siffer_run is not None and (p["siffer_run"] or 0) < min_siffer_run:
-        return f"sifferløp {p['siffer_run']:.0f} < {min_siffer_run:g}"
+        return f"sifferløp {p['siffer_run'] or 0:.0f} < {min_siffer_run:g}"
     if krev_fnr_kandidat and not p.get("har_fnr_kandidat"):
         return "ingen 11-sifret fnr-kandidat på linjen"
     if avvis_desimal and p.get("har_desimal_naer"):
