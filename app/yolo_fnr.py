@@ -8,10 +8,13 @@ from ultralytics import YOLO
 from config import (
     YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
     MIN_BOKS_AREAL, MIN_ELONGATION, MAKS_ELONGATION, MIN_KORTSIDE_PT,
+    MIN_KORTSIDE_YOLO_PT, MIN_LANGSIDE_YOLO_PT,
     PDF_DPI, standard_vekter)
 
 YOLO_VEKTER = standard_vekter()
 MIN_KORTSIDE_PX = MIN_KORTSIDE_PT * PDF_DPI / 72.0
+MIN_KORTSIDE_YOLO_PX = MIN_KORTSIDE_YOLO_PT * PDF_DPI / 72.0
+MIN_LANGSIDE_YOLO_PX = MIN_LANGSIDE_YOLO_PT * PDF_DPI / 72.0
 
 _modell = None
 _vekter_sti = YOLO_VEKTER
@@ -139,6 +142,16 @@ def er_for_tynn(boks):
     """
     x0, y0, x1, y1 = boks[:4]
     return min(x1 - x0, y1 - y0) < MIN_KORTSIDE_PX
+
+
+def har_yolo_stoyform(boks):
+    """Strengere formkrav for rene YOLO-bokser — se MIN_*_YOLO_PT i config.
+
+    Orienteringsuavhengig som er_for_tynn: kortside/langside, ikke bredde/høyde.
+    """
+    x0, y0, x1, y1 = boks[:4]
+    kort, lang = sorted((x1 - x0, y1 - y0))
+    return kort < MIN_KORTSIDE_YOLO_PX or lang < MIN_LANGSIDE_YOLO_PX
 
 
 

@@ -22,6 +22,15 @@ MIN_ELONGATION     = 1.44      # min max(w/h, h/w) — forkaster nesten-kvadrati
 MAKS_ELONGATION    = 9         # maks max(w/h, h/w) — bokser 3-4x bredere enn feltet
 MIN_KORTSIDE_PT    = 6         # min korteste side i punkt — for tynn til å være tekst
 
+# Strengere formkrav for rene YOLO-bokser (kun kilde «yolo» — «begge» og
+# paddle har et Paddle-funn bak seg og rammes ikke, «yolo_vertikal» heller
+# ikke). Utledet fra uttrekk 6 på samme måte som grensene over: 4 tapte
+# fasit-bokser, alle bekreftet som referansenumre som ikke skulle vært
+# sladdet, mot ~53 fjernede oversladdinger. Conf ≥ YOLO_CONF_GEOMETRI_TERSKEL
+# fritar, som for grensene over.
+MIN_KORTSIDE_YOLO_PT = 7       # smalere enn dette er støy
+MIN_LANGSIDE_YOLO_PT = 20      # for kort til å romme 5 sifre
+
 # Bokser med conf ≥ dette hopper over geometrifiltrene. Gjelder alle kilder;
 # paddle-bokser har conf=None og fritas aldri. «begge»-bokser var tidligere
 # fritatt uansett konfidens — det er fjernet, se _hopp_over_geometrifilter.
@@ -55,6 +64,18 @@ VERTIKAL_FAKTOR    = 1.3       # høyde > 1.3 × bredde regnes som vertikal
 YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
 MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
 MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
+
+# Desimalregelen (uttrekk 6): står det et desimalskille i tallet OG Paddle
+# leste teksten sikkert, er boksen en koordinat eller et beløp — fnr har
+# aldri desimalskille. Høy deteksjonskonfidens fritar: manuell gjennomgang av
+# samtlige tap viste at ekte fnr som rammes nesten alle har conf ≥ 0.5
+# (typisk fnr skrevet «ddmmåå.xxxxx»), mens koordinater ligger ≤ 0.37.
+# Anvendes på ENDELIG kilde etter dedup — bare rene «yolo»-bokser. Målt på
+# uttrekk 6: ~1250 fjernede oversladdinger mot 3 tapte ekte fnr (alle i
+# conf-båndet 0.49–0.57). Se _desimalregel_forkaster i model_main.py og
+# _ocr_grunn i utils/filter_felles.py.
+AVVIS_DESIMAL_REC_VETO    = 0.98   # regelen gjelder først når rec_min ≥ dette
+AVVIS_DESIMAL_CONF_FRITAK = 0.6    # conf ≥ dette overstyrer regelen
 
 # Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
 # Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
