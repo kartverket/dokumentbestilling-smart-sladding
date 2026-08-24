@@ -127,10 +127,15 @@ def _sidefil(ut_sti, navn, flatt_suffiks):
 
 
 def _md_label_rad(rad, utsnitt_mappe, md_mappe):
-    fil = rad.get("utsnitt", "")
-    rel = os.path.relpath(os.path.join(utsnitt_mappe, fil), md_mappe)
+    """Én linje for label-gjennomgangen — bare uenighetene med label:
+    dekkende fasit-bokser dømt «nei» (❌). Alt annet (BOM, enige dommer,
+    usikker) returnerer tom streng og holdes utenfor fila."""
     riktig = rad.get("riktig") or _riktig(
         rad.get("klasse", ""), (rad.get("svar") or "").strip().lower())
+    if riktig != "❌":
+        return ""
+    fil = rad.get("utsnitt", "")
+    rel = os.path.relpath(os.path.join(utsnitt_mappe, fil), md_mappe)
     celler = [f"[{os.path.splitext(fil)[0]}]({rel})", riktig,
               rad.get("klasse", ""), rad.get("svar", ""),
               rad.get("label_id", ""), rad.get("holdepunkt", ""),
@@ -139,8 +144,10 @@ def _md_label_rad(rad, utsnitt_mappe, md_mappe):
 
 
 def skriv_gjennomgang_label_md(ut_sti, utsnitt_mappe):
-    """Deriverer gjennomgang med label_id (uuid fra fasit-CSV-en) — for å slå
-    dommer direkte opp mot labels ved fasit-vedlikehold. Returnerer stien."""
+    """Deriverer label-gjennomgangen: KUN radene der LLM-en sier «nei» til en
+    boks fasit dekker (❌). Hver rad bærer label_id (uuid fra fasit-CSV-en),
+    så en dom som viser seg riktig går rett i fasit-vedlikeholdet. Tom tabell
+    = ingen uenigheter. Returnerer stien."""
     sti = _sidefil(ut_sti, "gjennomgang_label.md", "_gjennomgang_label.md")
     md_mappe = os.path.dirname(os.path.abspath(sti))
     navn = os.path.basename(os.path.dirname(os.path.abspath(ut_sti))
@@ -148,7 +155,10 @@ def skriv_gjennomgang_label_md(ut_sti, utsnitt_mappe):
                             else os.path.splitext(ut_sti)[0])
     with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
          open(sti, "w", encoding="utf-8") as f_ut:
-        f_ut.write(f"# Gjennomgang med label-id: {navn}\n\n"
+        f_ut.write(f"# Uenigheter med fasit: {navn}\n\n"
+                   f"LLM-en sier «nei» der fasit har en dekket boks — enten "
+                   f"tok modellen feil (dyrt i prod), eller labelen er "
+                   f"støy (label_id går rett i fasit-vedlikeholdet).\n\n"
                    f"| utsnitt | riktig | klasse | svar | label_id "
                    f"| holdepunkt | begrunnelse |\n"
                    f"|---|---|---|---|---|---|---|\n")
