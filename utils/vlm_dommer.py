@@ -64,12 +64,23 @@ UT_FELT = ["nr", "utsnitt", "klasse", "kilde", "label_id",
 # Innholdsfri søsterfil: dommer-CSV-en over inneholder avskrifter av EKTE
 # fødselsnumre («tall», «linjen», «sifre_paa_linjen», «raatekst») og er
 # dermed selv sensitiv. *_uten_innhold.csv har bare dommene og kan åpnes og
-# deles fritt under gjennomgang. «utsnitt» skrives som absolutt sti slik at
-# cmd+klikk i VSCode åpner PNG-en direkte. Regenereres i sin helhet fra
-# hovedfilen etter hver kjøring — også en gjenopptatt eller ferdig en.
-UTEN_INNHOLD_FELT = ["utsnitt", "klasse", "svar", "sikkerhet", "begrunnelse",
-                     "dato_gyldig", "holdepunkt", "sekunder", "label_id",
-                     "nr", "kilde"]
+# deles fritt under gjennomgang. «utsnitt» skrives som file://-URI: VSCode-
+# EDITOREN linkifiserer bare URL-er med skjema (terminalen tar rene stier,
+# editoren gjør det ikke), og cmd+klikk åpner da PNG-en direkte. «riktig»
+# holder dommen mot fasit-klassen: ✓ = dommen stemmer (BOM fikk nei, dekkende
+# fikk ja), ✗ = den motsier fasit, ? = usikker eller feilet kall.
+# Regenereres i sin helhet fra hovedfilen etter hver kjøring — også en
+# gjenopptatt eller ferdig en.
+UTEN_INNHOLD_FELT = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet",
+                     "begrunnelse", "dato_gyldig", "holdepunkt", "sekunder",
+                     "label_id", "nr", "kilde"]
+
+
+def _riktig(klasse, svar):
+    onsket = "nei" if klasse == "BOM" else "ja"
+    if svar not in ("ja", "nei"):
+        return "?"
+    return "✓" if svar == onsket else "✗"
 
 
 def skriv_uten_innhold(ut_sti, utsnitt_mappe):
@@ -82,8 +93,10 @@ def skriv_uten_innhold(ut_sti, utsnitt_mappe):
                                  extrasaction="ignore")
         skriver.writeheader()
         for rad in csv.DictReader(f_inn):
-            rad["utsnitt"] = os.path.abspath(
+            rad["utsnitt"] = "file://" + os.path.abspath(
                 os.path.join(utsnitt_mappe, rad.get("utsnitt", "")))
+            rad["riktig"] = _riktig(rad.get("klasse", ""),
+                                    (rad.get("svar") or "").strip().lower())
             skriver.writerow(rad)
     return sti
 
