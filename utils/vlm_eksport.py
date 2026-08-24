@@ -248,6 +248,17 @@ def _jobb_for_fil(oppgave):
             px = p["px"]
             r = _rekt_frem([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
                            k, w0, h0)
+            # Bokser helt utenfor den rendrede siden (en label tegnet forbi
+            # sidekanten, avvikende CropBox e.l.) hoppes over — én rar rad
+            # skal ikke velte en eksport på titusener av bokser.
+            if (r[2] <= 0 or r[3] <= 0
+                    or r[0] >= bilde.width or r[1] >= bilde.height):
+                droppet += 1
+                advarsler.append(
+                    f"{navn} s{si}: boks utenfor siden "
+                    f"({r[0]:.0f},{r[1]:.0f},{r[2]:.0f},{r[3]:.0f} "
+                    f"i {bilde.width}x{bilde.height}) — hoppet over")
+                continue
             venstre = 0 if full_bredde else max(0, int(r[0] - mx))
             hoyre = (bilde.width if full_bredde
                      else min(bilde.width, int(r[2] + mx)))
@@ -274,6 +285,11 @@ def _jobb_for_fil(oppgave):
             m = [max(0, m[0] - luft), max(0, m[1] - luft),
                  min(ut.width - 1, m[2] + luft),
                  min(ut.height - 1, m[3] + luft)]
+            if m[2] <= m[0] or m[3] <= m[1]:
+                droppet += 1
+                advarsler.append(f"{navn} s{si}: markør uten areal etter "
+                                 f"klipping — hoppet over")
+                continue
             ImageDraw.Draw(ut).rectangle(m, outline=MARKOR, width=strek)
 
             base = os.path.splitext(os.path.basename(navn))[0]
