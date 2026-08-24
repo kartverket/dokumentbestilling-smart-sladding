@@ -160,9 +160,10 @@ FREMGANGSMÅTE — følg den i rekkefølge og stopp så snart du får svar:
 2. Skriv av HELE tekstlinjen rammen står på, fra venstre til høyre, slik du ser den. Ikke bare det som er inne i rammen — hele linjen.
 3. Finn i den avskriften den lengste sammenhengende sifferrekken som berører rammen — OGSÅ sifrene som står utenfor rammen. Rekken slutter ikke ved rammekanten. Se bort fra mellomrom, punktum og bindestrek mellom sifrene.
 4. Har den rekken elleve sifre, og er de seks første en gyldig dato (dag 01-31 eller 41-71, måned 01-12 eller 41-52)? → svar JA. Du er ferdig.
-5. Har rekken fem-seks sifre: SE PÅ LINJEN RETT OVER og teksten rett foran. Står det en sekssifret gyldig dato der, hører de sammen — et fødselsnummer delt over to linjer, med datoen øverst og personnummeret under. → svar JA.
-6. Ellers: er sifferrekken for kort eller for lang til å være et fødselsnummer, ELLER står det et ord eller tegn som forteller hva tallet er? → svar NEI. Oppgi ordet i «holdepunkt» hvis du fant et.
-7. Bare hvis sifrene ikke lar seg lese i det hele tatt — uskarpt, avskåret, tomt — svar USIKKER.
+5. LET ETTER LEDETEKST som navngir tallet: «fødselsnummer», «fødselsnr», «f.nr», «personnr», «fødsel- og personnr» — også i kombinasjoner som «organisasjonsnr/fødselsnr». I skjemaer og tabeller står ledeteksten som overskrift OVER feltet, gjerne to-fire linjer over rammen — let til du finner den. Fant du en slik ledetekst: har rekken ni sifre og starter på 8 eller 9 er det org.nr-delen av en kombinert ledetekst → NEI. Ellers → svar JA.
+6. Har rekken fem-seks sifre: SE PÅ LINJEN RETT OVER og teksten rett foran. Står det en sekssifret gyldig dato der, hører de sammen — et fødselsnummer delt over to linjer, med datoen øverst og personnummeret under. → svar JA.
+7. Ellers: står det et ORD ELLER TEGN fra listen under som forteller hva tallet er? → svar NEI med ordet i «holdepunkt». Er det ENESTE som taler mot tallet din egen telling eller dato-utregning — ingen ledetekst, ingen forklaring — er NEI for dyrt: svar NEI bare når rekken åpenbart ikke kan være del av et fødselsnummer (f.eks. tre-fire sifre alene), ellers USIKKER.
+8. Bare hvis sifrene ikke lar seg lese i det hele tatt — uskarpt, avskåret, tomt — svar USIKKER.
 
 ORD OG TEGN som bekrefter et nei. Du kan også svare nei uten et slikt ord, når sifferrekken ikke har elleve sifre — men dikt aldri opp en kategori som ikke står her:
   - ordet konto, bank eller IBAN i nærheten, og elleve sifre gruppert 4-2-5
@@ -180,6 +181,9 @@ FELLER SOM HAR GITT FEIL FØR:
   - Et smalt 1-tall er lett å lese som skråstrek i et skann. Skråstrek ALENE er aldri holdepunkt for nei — krev ordet gnr, bnr, snr eller matrikkel i tillegg. Og teller du elleve sifre når skråstreken leses som 1, ER det elleve sifre.
   - Fødselsnummer deles ofte over to linjer: dato øverst, fem sifre personnummer under. En femsifret rekke er bare «for kort» når heller ikke linjen eller nabolinjene har dato-halvdelen.
   - «bare fem sifre i rammen» eller «mangler resten av fødselsnummeret» er ALDRI en gyldig begrunnelse for nei. Rammen skal bare dekke personnummeret — resten av rekken står utenfor rammen: foran på linjen, eller på linjen over. Let den opp før du konkluderer.
+  - Skjemaer setter ledeteksten OVER feltet, ofte to-tre linjer over rammen. «Fødselsnr.» langt over rammen gjelder fortsatt tallet i rammen.
+  - Lister og tabeller: står rammen i en kolonne der radene over er fødselsnumre, er denne raden det også. Døm kolonnen, ikke cellen alene.
+  - Din egen dato-utregning er UPÅLITELIG — «1607» er 16. juli, en helt gyldig dato. Avvis aldri en ellevesifret rekke fordi du regnet dato-delen ugyldig; uten et ord-holdepunkt i tillegg → USIKKER.
   - Ikke regn på kontrollsifre. Du kan ikke gjøre mod11 pålitelig, og et feilregnestykke er ingen grunn til nei.
   - Dikt aldri opp en kategori som ikke står i listen over.
 
