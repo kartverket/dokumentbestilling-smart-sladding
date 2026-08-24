@@ -237,7 +237,8 @@ def _jobb_for_fil(oppgave):
         if k:
             bilde = bilde.rotate(90 * k, expand=True)
 
-        mx, my = margin_x * SKALA, margin_y * SKALA
+        mx = margin_x * SKALA
+        m_opp, m_ned = margin_y[0] * SKALA, margin_y[1] * SKALA
         for p in side_pred:
             px = p["px"]
             r = _rekt_frem([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
@@ -245,8 +246,9 @@ def _jobb_for_fil(oppgave):
             venstre = 0 if full_bredde else max(0, int(r[0] - mx))
             hoyre = (bilde.width if full_bredde
                      else min(bilde.width, int(r[2] + mx)))
-            topp = 0 if fra_toppen else max(0, int(r[1] - my))
-            boks = (venstre, topp, hoyre, min(bilde.height, int(r[3] + my)))
+            topp = 0 if fra_toppen else max(0, int(r[1] - m_opp))
+            boks = (venstre, topp, hoyre,
+                    min(bilde.height, int(r[3] + m_ned)))
             if boks[2] <= boks[0] or boks[3] <= boks[1]:
                 droppet += 1
                 continue
@@ -331,10 +333,18 @@ def eksporter(ds, valgte, mappe, ut_mappe, margin_x=STD_MARGIN,
     langt utenfor enhver rimelig margin — den kan ikke nås med margin_y uten
     å ta like mye søppel under boksen på kjøpet.
 
+    margin_y kan være ett tall (symmetrisk) eller et par (opp, ned) —
+    i tabeller står den avslørende ledeteksten over boksen, ikke under,
+    så oppover-margin er mer verdt enn nedover.
+
     jobber deler arbeidet per DOKUMENT over flere prosesser. Rendering i 300
     dpi er ren CPU, og hvert dokument åpnes uansett bare én gang, så det er
     den naturlige delelinjen — og den holder én PDF i én prosess.
     """
+    try:
+        margin_y = (float(margin_y[0]), float(margin_y[1]))
+    except TypeError:
+        margin_y = (float(margin_y), float(margin_y))
     utsnitt_mappe = os.path.join(ut_mappe, "utsnitt")
     os.makedirs(utsnitt_mappe, exist_ok=True)
 
@@ -440,6 +450,14 @@ def main():
     p.add_argument("--margin-y", type=float, default=None, metavar="PT",
                    help="Margin opp/ned. 90 gir ~2 tekstlinjer over og under, "
                         "nok til å se en kolonneoverskrift.")
+    p.add_argument("--margin-opp", type=float, default=None, metavar="PT",
+                   help="Margin kun oppover — overstyrer --margin-y/--margin "
+                        "over boksen. Ledetekster og kolonneoverskrifter står "
+                        "OVER tallet; mer margin opp enn ned gir konteksten "
+                        "uten like mye søppel under.")
+    p.add_argument("--margin-ned", type=float, default=None, metavar="PT",
+                   help="Margin kun nedover — overstyrer --margin-y/--margin "
+                        "under boksen.")
     p.add_argument("--fra-toppen", action="store_true",
                    help="Ta med alt fra sidens overkant og ned til boksen. "
                         "Ledetekster og kolonneoverskrifter i skjemaer står "
@@ -514,8 +532,11 @@ def main():
     os.makedirs(a.ut_mappe, exist_ok=True)
     margin_x = a.margin if a.margin_x is None else a.margin_x
     margin_y = a.margin if a.margin_y is None else a.margin_y
+    margin_opp = margin_y if a.margin_opp is None else a.margin_opp
+    margin_ned = margin_y if a.margin_ned is None else a.margin_ned
     rader = eksporter(ds, valgte, a.mappe, a.ut_mappe, margin_x=margin_x,
-                      margin_y=margin_y, full_bredde=a.full_bredde,
+                      margin_y=(margin_opp, margin_ned),
+                      full_bredde=a.full_bredde,
                       fra_toppen=a.fra_toppen,
                       maks_px=a.maks_px or 0, ocr_mappe=a.ocr_cache,
                       roter=a.roter, jobber=a.jobber,
@@ -534,7 +555,7 @@ def main():
     stat["treff_faktor"] = (stat["n_dekkende_total"] / skrevet["dekkende"]
                             if skrevet["dekkende"] else 0.0)
     stat.update({
-        "margin_x_pt": margin_x, "margin_y_pt": margin_y,
+        "margin_x_pt": margin_x, "margin_y_pt": [margin_opp, margin_ned],
         "full_bredde": a.full_bredde, "fra_toppen": a.fra_toppen,
         "maks_px": a.maks_px,
         "res_csv": os.path.abspath(a.res_csv),
