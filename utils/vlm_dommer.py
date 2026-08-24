@@ -61,6 +61,32 @@ UT_FELT = ["nr", "utsnitt", "klasse", "kilde", "label_id",
            "linjen", "sifre_paa_linjen", "dato_gyldig", "holdepunkt",
            "sekunder", "feil", "raatekst"]
 
+# Innholdsfri søsterfil: dommer-CSV-en over inneholder avskrifter av EKTE
+# fødselsnumre («tall», «linjen», «sifre_paa_linjen», «raatekst») og er
+# dermed selv sensitiv. *_uten_innhold.csv har bare dommene og kan åpnes og
+# deles fritt under gjennomgang. «utsnitt» skrives som absolutt sti slik at
+# cmd+klikk i VSCode åpner PNG-en direkte. Regenereres i sin helhet fra
+# hovedfilen etter hver kjøring — også en gjenopptatt eller ferdig en.
+UTEN_INNHOLD_FELT = ["utsnitt", "klasse", "svar", "sikkerhet", "begrunnelse",
+                     "dato_gyldig", "holdepunkt", "sekunder", "label_id",
+                     "nr", "kilde"]
+
+
+def skriv_uten_innhold(ut_sti, utsnitt_mappe):
+    """Deriverer *_uten_innhold.csv fra dommer-CSV-en. Returnerer stien."""
+    stem, _ = os.path.splitext(ut_sti)
+    sti = stem + "_uten_innhold.csv"
+    with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
+         open(sti, "w", newline="", encoding="utf-8") as f_ut:
+        skriver = csv.DictWriter(f_ut, fieldnames=UTEN_INNHOLD_FELT,
+                                 extrasaction="ignore")
+        skriver.writeheader()
+        for rad in csv.DictReader(f_inn):
+            rad["utsnitt"] = os.path.abspath(
+                os.path.join(utsnitt_mappe, rad.get("utsnitt", "")))
+            skriver.writerow(rad)
+    return sti
+
 # Prompten er pilotens egentlige eksperiment. Den er bygget rundt kontrastene
 # fra oversladdingsanalysen — koordinater, kontonumre, dagboknumre,
 # gårds-/bruks-/seksjonsnumre — fordi det er DE som ligner et fnr nok til at
@@ -374,6 +400,8 @@ def kjor(a):
         igjen = igjen[:a.maks]
     if not igjen:
         print("  Ingenting å gjøre.")
+        if os.path.isfile(ut_sti):
+            print(f"  Uten innhold: {skriv_uten_innhold(ut_sti, mappe)}")
         return ut_sti
 
     print(f"  {len(igjen)} bokser å dømme  ({a.modus}-modus, "
@@ -425,6 +453,7 @@ def kjor(a):
         print(f"  ⚠ {telling['feil']} rader med feil/uparsbart svar "
               f"— alle talt som «usikker». Kjør på nytt med --gjenoppta.")
     print(f"  Dommer: {ut_sti}")
+    print(f"  Uten innhold: {skriv_uten_innhold(ut_sti, mappe)}")
     return ut_sti
 
 
