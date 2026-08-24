@@ -143,6 +143,7 @@ KOORDFAM_KODER = frozenset((
     "JS_JSA",   # Opprettelse av jordsameie
     "FR_REG",   # Registrering av grunn — oppmålingsdokumenter; målt
                 # marginalt: 183 ov.fj / 1 ekte fnr + 1 usikker (ov/tapt ≥91)
+    "SR_UTS",   # Utskifting — historisk jordskifte
 ))
 
 # Seksjonering-profilen: SE_SEK-dokumenter er tabelltunge (eierbrøker,
