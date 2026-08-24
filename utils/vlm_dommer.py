@@ -383,10 +383,18 @@ def dom_en(rad, a, mappe, prompt):
     t0 = time.monotonic()
     feil = ""
     raa = ""
+    urler = a.url if isinstance(a.url, list) else [a.url]
+    try:
+        i_url = int(rad.get("nr", 0)) % len(urler)
+    except (TypeError, ValueError):
+        i_url = 0
     for forsok in range(1, a.forsok + 1):
         try:
             meldinger = _bygg_melding(rad, mappe, prompt, a.modus)
-            raa = kall_modell(a.url, a.modell, meldinger,
+            # Ved nytt forsøk prøves neste backend — én død instans skal
+            # ikke koste raden når en annen kan svare.
+            url = urler[(i_url + forsok - 1) % len(urler)]
+            raa = kall_modell(url, a.modell, meldinger,
                               api_nokkel=a.api_nokkel, timeout=a.timeout,
                               temperatur=a.temperatur,
                               maks_tokens=a.maks_tokens,
@@ -573,8 +581,12 @@ def main():
     p.add_argument("--ut-csv", default=None,
                    help="Dommer-CSV (default: dommer_<modus>.csv ved manifestet)")
 
-    p.add_argument("--url", default=STD_URL,
+    p.add_argument("--url", nargs="+", default=[STD_URL],
                    help=f"OpenAI-kompatibel base-URL (default {STD_URL}). "
+                        "Flere URL-er fordeler boksene i rundgang — kjør én "
+                        "Ollama-instans per URL når arkitekturen ikke "
+                        "støtter parallelle kall i én instans (qwen35/"
+                        "qwen3vl serialiseres per instans). "
                         "Ollama: http://localhost:11434/v1")
     p.add_argument("--modell", default=None,
                    help="Modellnavn endepunktet kjenner (kreves)")
