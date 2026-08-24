@@ -153,15 +153,16 @@ def skriv_uten_innhold(ut_sti):
 STD_PROMPT = """\
 Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den RØDE RAMMEN markerer et område en automatisk modell foreslår å sladde.
 
-Spørsmålet er IKKE «er dette et fullstendig fødselsnummer». Det er: BERØRER RAMMEN ET FØDSELSNUMMER? Rammen er ofte satt upresist og dekker bare en del av tallet — fem sifre av elleve, eller bare datoen. Det skal fortsatt sladdes.
+Spørsmålet er IKKE «er dette et fullstendig fødselsnummer». Det er: BERØRER RAMMEN ET FØDSELSNUMMER? Rammen er som regel liten MED VILJE: sladdingen skal typisk bare dekke personnummeret — de fem siste sifrene — mens fødselsdatoen står usladdet rett foran på linjen, eller på linjen over. At rammen bare inneholder fem sifre er altså det NORMALE for en riktig sladd, aldri i seg selv et argument for nei. Dommen gjelder hele sifferrekken som berører rammen, medregnet sifrene som står utenfor den.
 
 FREMGANGSMÅTE — følg den i rekkefølge og stopp så snart du får svar:
 1. Les hele teksten du ser, ikke bare det som står inne i rammen.
 2. Skriv av HELE tekstlinjen rammen står på, fra venstre til høyre, slik du ser den. Ikke bare det som er inne i rammen — hele linjen.
-3. Finn i den avskriften den lengste sammenhengende sifferrekken som berører rammen. Se bort fra mellomrom, punktum og bindestrek mellom sifrene.
+3. Finn i den avskriften den lengste sammenhengende sifferrekken som berører rammen — OGSÅ sifrene som står utenfor rammen. Rekken slutter ikke ved rammekanten. Se bort fra mellomrom, punktum og bindestrek mellom sifrene.
 4. Har den rekken elleve sifre, og er de seks første en gyldig dato (dag 01-31 eller 41-71, måned 01-12 eller 41-52)? → svar JA. Du er ferdig.
-5. Ellers: er sifferrekken for kort eller for lang til å være et fødselsnummer, ELLER står det et ord eller tegn som forteller hva tallet er? → svar NEI. Oppgi ordet i «holdepunkt» hvis du fant et.
-6. Bare hvis sifrene ikke lar seg lese i det hele tatt — uskarpt, avskåret, tomt — svar USIKKER.
+5. Har rekken fem-seks sifre: SE PÅ LINJEN RETT OVER og teksten rett foran. Står det en sekssifret gyldig dato der, hører de sammen — et fødselsnummer delt over to linjer, med datoen øverst og personnummeret under. → svar JA.
+6. Ellers: er sifferrekken for kort eller for lang til å være et fødselsnummer, ELLER står det et ord eller tegn som forteller hva tallet er? → svar NEI. Oppgi ordet i «holdepunkt» hvis du fant et.
+7. Bare hvis sifrene ikke lar seg lese i det hele tatt — uskarpt, avskåret, tomt — svar USIKKER.
 
 ORD OG TEGN som bekrefter et nei. Du kan også svare nei uten et slikt ord, når sifferrekken ikke har elleve sifre — men dikt aldri opp en kategori som ikke står her:
   - ordet konto, bank eller IBAN i nærheten, og elleve sifre gruppert 4-2-5
@@ -176,16 +177,21 @@ FELLER SOM HAR GITT FEIL FØR:
   - Fødselsnumre begynner ofte med 0, fordi dagen er 01-09. Helt normalt.
   - «12.03.50» er en dato. Punktum MELLOM datoledd er ikke desimalskille.
   - «301 / 10000» er matrikkel. Skråstrek er ikke desimalskille.
+  - Et smalt 1-tall er lett å lese som skråstrek i et skann. Skråstrek ALENE er aldri holdepunkt for nei — krev ordet gnr, bnr, snr eller matrikkel i tillegg. Og teller du elleve sifre når skråstreken leses som 1, ER det elleve sifre.
+  - Fødselsnummer deles ofte over to linjer: dato øverst, fem sifre personnummer under. En femsifret rekke er bare «for kort» når heller ikke linjen eller nabolinjene har dato-halvdelen.
+  - «bare fem sifre i rammen» eller «mangler resten av fødselsnummeret» er ALDRI en gyldig begrunnelse for nei. Rammen skal bare dekke personnummeret — resten av rekken står utenfor rammen: foran på linjen, eller på linjen over. Let den opp før du konkluderer.
   - Ikke regn på kontrollsifre. Du kan ikke gjøre mod11 pålitelig, og et feilregnestykke er ingen grunn til nei.
   - Dikt aldri opp en kategori som ikke står i listen over.
 
-TRE EKSEMPLER:
+FIRE EKSEMPLER:
 Rammen dekker «00000», og linjen sier «Kari Nordmann 010190 00000»:
 {"linjen": "Kari Nordmann 010190 00000", "sifre_i_rammen": 5, "sifre_paa_linjen": "01019000000", "dato_gyldig": true, "holdepunkt": "", "elleve_og_dato_ok": true, "svar": "ja", "sikkerhet": 95, "tall": "010190 00000", "begrunnelse": "rammen dekker halve fnr-et på linjen"}
 Rammen dekker «6626630.58» på et målebrevkart:
 {"linjen": "N 6626630.58 Ø 256843.12", "sifre_i_rammen": 9, "sifre_paa_linjen": "662663058", "dato_gyldig": false, "holdepunkt": "desimalpunktum i tallet", "elleve_og_dato_ok": false, "svar": "nei", "sikkerhet": 95, "tall": "6626630.58", "begrunnelse": "koordinat med desimaler"}
-Rammen dekker «48526», og det står ingenting annet på linjen:
-{"linjen": "48526", "sifre_i_rammen": 5, "sifre_paa_linjen": "48526", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "nei", "sikkerhet": 80, "tall": "48526", "begrunnelse": "fem sifre, for kort til fnr"}
+Rammen dekker «00000», linjen over sier «Kari Nordmann f. 010190»:
+{"linjen": "00000", "sifre_i_rammen": 5, "sifre_paa_linjen": "00000", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "ja", "sikkerhet": 90, "tall": "010190 00000", "begrunnelse": "dato på linjen over — fnr delt over to linjer"}
+Rammen dekker «48526», og verken linjen eller nabolinjene har en dato:
+{"linjen": "48526", "sifre_i_rammen": 5, "sifre_paa_linjen": "48526", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "nei", "sikkerhet": 80, "tall": "48526", "begrunnelse": "fem sifre, ingen dato-halvdel på nabolinjene"}
 
 Rammen er for uskarp til at sifrene kan leses:
 {"linjen": "", "sifre_i_rammen": 0, "sifre_paa_linjen": "", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "usikker", "sikkerhet": 20, "tall": "", "begrunnelse": "kan ikke lese sifrene"}
