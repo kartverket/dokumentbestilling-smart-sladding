@@ -65,9 +65,9 @@ UT_FELT = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet", "begrunnelse",
 # Innholdsfri søsterfil: dommer-CSV-en over inneholder avskrifter av EKTE
 # fødselsnumre («tall», «linjen», «sifre_paa_linjen», «raatekst») og er
 # dermed selv sensitiv. *_uten_innhold.csv har bare dommene og kan åpnes og
-# deles fritt under gjennomgang. «utsnitt» skrives som file://-URI: VSCode-
-# EDITOREN linkifiserer bare URL-er med skjema (terminalen tar rene stier,
-# editoren gjør det ikke), og cmd+klikk åpner da PNG-en direkte. «riktig»
+# deles fritt under gjennomgang; «utsnitt» er kun stammen
+# (00002_BOM_1000040863_s3) — klikkbare lenker bor i *_gjennomgang.md,
+# der VSCode:s markdown-støtte løser relative stier også over SSH. «riktig»
 # holder dommen mot fasit-klassen: ✅ = dommen stemmer (BOM fikk nei, dekkende
 # fikk ja), 🟡 = ja på en BOM (tapt gevinst, ufarlig), ❌ = nei på en
 # dekkende boks (ville avsladdet et ekte fnr), ❓ = usikker/feilet kall.
@@ -90,27 +90,59 @@ def _riktig(klasse, svar):
     return "🟡" if klasse == "BOM" else "❌"
 
 
-def _uten_innhold_rad(rad, utsnitt_mappe):
+def _uten_innhold_rad(rad):
     rad = dict(rad)
-    rad["utsnitt"] = "file://" + os.path.abspath(
-        os.path.join(utsnitt_mappe, rad.get("utsnitt", "")))
+    rad["utsnitt"] = os.path.splitext(
+        os.path.basename(rad.get("utsnitt", "")))[0]
     rad["riktig"] = _riktig(rad.get("klasse", ""),
                             (rad.get("svar") or "").strip().lower())
     return rad
 
 
-def skriv_uten_innhold(ut_sti, utsnitt_mappe):
+def _md_rad(rad, utsnitt_mappe, md_mappe):
+    """Én gjennomgangslinje. Relativ lenke: VSCode:s markdown-støtte løser
+    [tekst](relativ/sti.png) selv, gjennom remote-filsystemet — cmd+klikk
+    virker i editoren der CSV-lenker ikke gjør det, og lenkene overlever
+    en rsync fordi de er relative til dokumentet."""
+    fil = rad.get("utsnitt", "")
+    rel = os.path.relpath(os.path.join(utsnitt_mappe, fil), md_mappe)
+    riktig = rad.get("riktig") or _riktig(
+        rad.get("klasse", ""), (rad.get("svar") or "").strip().lower())
+    celler = [f"[{os.path.splitext(fil)[0]}]({rel})", riktig,
+              rad.get("klasse", ""), rad.get("svar", ""),
+              str(rad.get("sikkerhet", "")), rad.get("holdepunkt", ""),
+              rad.get("begrunnelse", "")]
+    return "| " + " | ".join(c.replace("|", "/") for c in celler) + " |\n"
+
+
+def skriv_gjennomgang_md(ut_sti, utsnitt_mappe):
+    """Deriverer *_gjennomgang.md fra dommer-CSV-en. Returnerer stien."""
+    stem, _ = os.path.splitext(ut_sti)
+    sti = stem + "_gjennomgang.md"
+    md_mappe = os.path.dirname(os.path.abspath(sti))
+    with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
+         open(sti, "w", encoding="utf-8") as f_ut:
+        f_ut.write(f"# Gjennomgang: {os.path.basename(stem)}\n\n"
+                   f"❌ er radene som truer recall.\n\n"
+                   f"| utsnitt | riktig | klasse | svar | sikkerhet "
+                   f"| holdepunkt | begrunnelse |\n"
+                   f"|---|---|---|---|---|---|---|\n")
+        for rad in csv.DictReader(f_inn):
+            f_ut.write(_md_rad(rad, utsnitt_mappe, md_mappe))
+    return sti
+
+
+def skriv_uten_innhold(ut_sti):
     """Deriverer *_uten_innhold.csv fra dommer-CSV-en. Returnerer stien."""
     stem, _ = os.path.splitext(ut_sti)
     sti = stem + "_uten_innhold.csv"
     with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
          open(sti, "w", newline="", encoding="utf-8") as f_ut:
         skriver = csv.DictWriter(f_ut, fieldnames=UTEN_INNHOLD_FELT,
-                                 extrasaction="ignore",
-                                 quoting=csv.QUOTE_ALL)
+                                 extrasaction="ignore")
         skriver.writeheader()
         for rad in csv.DictReader(f_inn):
-            skriver.writerow(_uten_innhold_rad(rad, utsnitt_mappe))
+            skriver.writerow(_uten_innhold_rad(rad))
     return sti
 
 # Prompten er pilotens egentlige eksperiment. Den er bygget rundt kontrastene
@@ -427,7 +459,8 @@ def kjor(a):
     if not igjen:
         print("  Ingenting å gjøre.")
         if os.path.isfile(ut_sti):
-            print(f"  Uten innhold: {skriv_uten_innhold(ut_sti, mappe)}")
+            print(f"  Uten innhold: {skriv_uten_innhold(ut_sti)}")
+            print(f"  Gjennomgang:  {skriv_gjennomgang_md(ut_sti, mappe)}")
         return ut_sti
 
     print(f"  {len(igjen)} bokser å dømme  ({a.modus}-modus, "
@@ -457,11 +490,13 @@ def kjor(a):
     # Den innholdsfrie søsterfilen skrives like fortløpende som hovedfilen —
     # gjennomgangen skal kunne starte mens batchen går. Deriveringen først
     # bringer den i takt med allerede dømte rader ved gjenopptak.
-    ui_sti = skriv_uten_innhold(ut_sti, mappe)
+    ui_sti = skriv_uten_innhold(ut_sti)
+    md_sti = skriv_gjennomgang_md(ut_sti, mappe)
+    f_md = open(md_sti, "a", encoding="utf-8")
+    md_mappe = os.path.dirname(os.path.abspath(md_sti))
     f_ui = open(ui_sti, "a", newline="", encoding="utf-8")
     skriver_ui = csv.DictWriter(f_ui, fieldnames=UTEN_INNHOLD_FELT,
-                                extrasaction="ignore",
-                                quoting=csv.QUOTE_ALL)
+                                extrasaction="ignore")
     laas = threading.Lock()
     telling = {"n": 0, "feil": 0}
     tider = []
@@ -477,8 +512,10 @@ def kjor(a):
         with laas:
             skriver.writerow(rad_ut)
             f_ut.flush()
-            skriver_ui.writerow(_uten_innhold_rad(rad_ut, mappe))
+            skriver_ui.writerow(_uten_innhold_rad(rad_ut))
             f_ui.flush()
+            f_md.write(_md_rad(rad_ut, mappe, md_mappe))
+            f_md.flush()
             telling["n"] += 1
             if res["feil"]:
                 telling["feil"] += 1
@@ -495,6 +532,7 @@ def kjor(a):
     finally:
         f_ut.close()
         f_ui.close()
+        f_md.close()
 
     gaatt = time.monotonic() - t_start
     tider.sort()
@@ -509,7 +547,8 @@ def kjor(a):
         print(f"  ⚠ {telling['feil']} rader med feil/uparsbart svar "
               f"— alle talt som «usikker». Kjør på nytt med --gjenoppta.")
     print(f"  Dommer: {ut_sti}")
-    print(f"  Uten innhold: {skriv_uten_innhold(ut_sti, mappe)}")
+    print(f"  Uten innhold: {skriv_uten_innhold(ut_sti)}")
+    print(f"  Gjennomgang:  {skriv_gjennomgang_md(ut_sti, mappe)}")
     return ut_sti
 
 
