@@ -50,8 +50,9 @@ from PIL import Image, ImageDraw
 
 from filter_felles import (KRITERIER, PDF_DPI, SKALA, STD_KRITERIUM,
                            STD_SLURV_FAKTOR, STD_TERSKEL, bygg_datasett,
-                           dok_nr, les_fasit, les_kjorte_dok,
-                           les_prediksjoner, skriv_oppsummering)
+                           dok_nr, les_fasit, les_fasit_rader,
+                           les_kjorte_dok, les_prediksjoner,
+                           skriv_oppsummering)
 from filter_review import _ocr_les_cache, _rekt_frem, _render_side
 
 MARKOR = (230, 20, 20)        # rød ramme rundt boksen som skal dømmes
@@ -222,7 +223,11 @@ def _jobb_for_fil(oppgave):
             continue
         bilde = _render_side(dok, si)
         w0, h0 = bilde.width, bilde.height
-        bw, bh = side_pred[0]["bw"], side_pred[0]["bh"]
+        # bw/bh = 0 er mot-fasit-sentinellen: koordinatene er allerede i
+        # render-rommet (pt × SKALA), så skalering og rotasjon regnes mot
+        # den faktiske renderingen.
+        bw = side_pred[0]["bw"] or w0
+        bh = side_pred[0]["bh"] or h0
         sx, sy = w0 / bw, h0 / bh
 
         # Samme rotasjon som pipelinen OCR-et med: uten den står teksten
@@ -356,10 +361,12 @@ def eksporter(ds, valgte, mappe, ut_mappe, margin_x=STD_MARGIN,
     per_fil = defaultdict(list)
     for nr, p in enumerate(valgte, 1):
         p["_nr"] = nr
-        p["_label_id"] = ";".join(
-            i for i in (ds.fasit_bokser[j]["label_id"] for j in p["dekker"]) if i)
-        p["_dekkere"] = (min(ds.dekning_foer[j] for j in p["dekker"])
-                         if p["dekker"] else 0)
+        if "_label_id" not in p:
+            p["_label_id"] = ";".join(
+                i for i in (ds.fasit_bokser[j]["label_id"]
+                            for j in p["dekker"]) if i)
+            p["_dekkere"] = (min(ds.dekning_foer[j] for j in p["dekker"])
+                             if p["dekker"] else 0)
         per_fil[p["navn"]].append(p)
 
     oppgaver = [(navn, per_fil[navn], mappe, utsnitt_mappe, margin_x, margin_y,
@@ -423,7 +430,16 @@ def main():
     p = argparse.ArgumentParser(
         description="Eksporterer PNG-utsnitt av foreslåtte sladdebokser + "
                     "manifest, som inngang til VLM-dømming (vlm_dommer.py).")
-    p.add_argument("--res-csv", required=True, help="Resultat-CSV fra modellen")
+    p.add_argument("--res-csv", default=None,
+                   help="Resultat-CSV fra modellen (ikke nødvendig med "
+                        "--mot-fasit)")
+    p.add_argument("--mot-fasit", action="store_true", dest="mot_fasit",
+                   help="Eksporter FASIT-boksene (labels) i stedet for "
+                        "modellens prediksjoner — VLM-en som fasit-revisor. "
+                        "Alle labels tas med (ingen utvalgsfaktorer); "
+                        "--kjorte-liste begrenser til en dokumentliste. "
+                        "NB: rotasjon og OCR-kontekst krever --ocr-cache "
+                        "med cache for dokumentene.")
     p.add_argument("--fasit-csv", required=True, help="Labels-CSV (fasit)")
     p.add_argument("--mappe", required=True, help="Mappe med PDF-dokumentene")
     p.add_argument("--ut-mappe", required=True, help="Mappe for utsnitt+manifest")
@@ -508,23 +524,72 @@ def main():
                    help="Gammel oppførsel: bare dokumenter med fasit-rader")
     a = p.parse_args()
 
-    fasit = les_fasit(a.fasit_csv)
-    pred = les_prediksjoner(a.res_csv)
     kjorte = les_kjorte_dok(a.kjorte_liste) if a.kjorte_liste else None
-    ds = bygg_datasett(fasit, pred, terskel=a.terskel,
-                       slurv_faktor=a.slurv_faktor,
-                       inkluder_ulabelte=a.inkluder_ulabelte,
-                       kjorte_dok=kjorte, kriterium=a.kriterium)
-    skriv_oppsummering(ds)
+    if a.mot_fasit:
+        # VLM-en som fasit-revisor: hver label er en sladd et menneske har
+        # gjort. Dommen «nei» er da en påstand om label-støy — utfallet
+        # leses i gjennomgang_label.md (❌-radene bærer label_id).
+        ds = None
+        rader_f, ekskludert, _kol = les_fasit_rader(a.fasit_csv)
+        navn_for = {}
+        for fn in sorted(os.listdir(a.mappe)):
+            if fn.lower().endswith(".pdf"):
+                nr = dok_nr(fn)
+                if nr is not None:
+                    navn_for.setdefault(nr, fn)
+        valgte, mangler = [], 0
+        for r in rader_f:
+            if kjorte is not None and r["dok_nr"] not in kjorte:
+                continue
+            navn = navn_for.get(r["dok_nr"])
+            if navn is None:
+                mangler += 1
+                continue
+            x0, y0, x1, y1 = r["boks"]
+            valgte.append({
+                "navn": navn, "dok_nr": r["dok_nr"], "side": r["side"],
+                "px": [x0 * SKALA, y0 * SKALA, x1 * SKALA, y1 * SKALA],
+                "bw": 0, "bh": 0, "klasse": "FASIT", "kilde": "fasit",
+                "conf": None, "paddle_rec": None,
+                "w": r["w"], "h": r["h"], "kortside": r["kortside"],
+                "langside": r["langside"], "elongation": r["elongation"],
+                "_label_id": (r["rad"].get("id") or "").strip(),
+                "_dekkere": "",
+            })
+        stat = {"mot_fasit": True,
+                "n_bom_total": 0, "n_bom_eksportert": 0, "bom_faktor": 0.0,
+                "n_dekkende_total": len(valgte),
+                "n_dekkende_eksportert": len(valgte), "treff_faktor": 1.0,
+                "seed": a.seed, "kilder": "fasit"}
+        print(f"MOT-FASIT — eksporterer labels, ikke prediksjoner")
+        print(f"  Labels lest:    {len(rader_f)}"
+              + (f"  (ekskludert: "
+                 + ", ".join(f"{k}={v}" for k, v in sorted(ekskludert.items()))
+                 + ")" if ekskludert else ""))
+        if kjorte is not None:
+            print(f"  --kjorte-liste: {len(valgte) + mangler} innenfor listen")
+        if mangler:
+            print(f"  Uten PDF i {a.mappe}: {mangler} — hoppet over")
+        print(f"  Eksporteres:    {len(valgte)}")
+    else:
+        if not a.res_csv:
+            p.error("--res-csv er påkrevd (unntatt med --mot-fasit)")
+        fasit = les_fasit(a.fasit_csv)
+        pred = les_prediksjoner(a.res_csv)
+        ds = bygg_datasett(fasit, pred, terskel=a.terskel,
+                           slurv_faktor=a.slurv_faktor,
+                           inkluder_ulabelte=a.inkluder_ulabelte,
+                           kjorte_dok=kjorte, kriterium=a.kriterium)
+        skriv_oppsummering(ds)
 
-    treff_utvalg = None if a.treff_utvalg < 0 else a.treff_utvalg
-    valgte, stat = velg_bokser(ds, treff_utvalg, seed=a.seed,
-                               maks_bom=a.maks_bom, kilder=a.kilde)
-    print(f"\nUtvalg for VLM-dømming:")
-    print(f"  BOM:      {stat['n_bom_eksportert']:>6} av {stat['n_bom_total']}"
-          f"   (faktor {stat['bom_faktor']:.2f})")
-    print(f"  Dekkende: {stat['n_dekkende_eksportert']:>6} av "
-          f"{stat['n_dekkende_total']}   (faktor {stat['treff_faktor']:.2f})")
+        treff_utvalg = None if a.treff_utvalg < 0 else a.treff_utvalg
+        valgte, stat = velg_bokser(ds, treff_utvalg, seed=a.seed,
+                                   maks_bom=a.maks_bom, kilder=a.kilde)
+        print(f"\nUtvalg for VLM-dømming:")
+        print(f"  BOM:      {stat['n_bom_eksportert']:>6} av "
+              f"{stat['n_bom_total']}   (faktor {stat['bom_faktor']:.2f})")
+        print(f"  Dekkende: {stat['n_dekkende_eksportert']:>6} av "
+              f"{stat['n_dekkende_total']}   (faktor {stat['treff_faktor']:.2f})")
     if not valgte:
         print("  Ingenting å eksportere.")
         return
@@ -558,7 +623,7 @@ def main():
         "margin_x_pt": margin_x, "margin_y_pt": [margin_opp, margin_ned],
         "full_bredde": a.full_bredde, "fra_toppen": a.fra_toppen,
         "maks_px": a.maks_px,
-        "res_csv": os.path.abspath(a.res_csv),
+        "res_csv": os.path.abspath(a.res_csv) if a.res_csv else None,
         "fasit_csv": os.path.abspath(a.fasit_csv),
         "mappe": os.path.abspath(a.mappe),
         "kjorte_liste": (os.path.abspath(a.kjorte_liste)
@@ -566,8 +631,10 @@ def main():
         "kriterium": a.kriterium, "terskel": a.terskel,
         "slurv_faktor": a.slurv_faktor,
         "inkluder_ulabelte": a.inkluder_ulabelte,
-        "n_fasit_i_scope": ds.n_fasit, "n_dekket_foer": ds.dekket_foer,
-        "n_dok_i_scope": len(ds.scope_dok),
+        "n_fasit_i_scope": ds.n_fasit if ds else len(valgte),
+        "n_dekket_foer": ds.dekket_foer if ds else None,
+        "n_dok_i_scope": (len(ds.scope_dok) if ds
+                          else len({p["dok_nr"] for p in valgte})),
     })
     with open(os.path.join(a.ut_mappe, "utvalg.json"), "w",
               encoding="utf-8") as f:

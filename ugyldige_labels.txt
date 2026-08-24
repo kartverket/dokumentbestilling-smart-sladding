@@ -22,3 +22,4 @@ cfa26e5c-42b2-4813-9700-a5462b953f87    # koordinat
 d73b681d-e8cc-4a07-bbf0-4744ee730764    # referanse
 3645c061-7027-47e3-949c-f26c25b84a59    # referanse
 ab7b7959-aa88-497b-b911-6d116991839e
+8f43cb26-ee78-4d72-b1b7-621b87a8109a    # kontonummer
