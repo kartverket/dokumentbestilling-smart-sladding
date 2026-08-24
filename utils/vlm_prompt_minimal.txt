@@ -6,7 +6,10 @@ Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
 
 - Svar «ja» når tallet er eller sannsynligvis er et fødselsnummer.
 - Svar «nei» BARE når du tydelig ser at tallet er noe annet: kontonummer, organisasjonsnummer, koordinat, beløp, dato alene, matrikkel-/saks-/dokumentnummer, og skriv hva det er i «holdepunkt».
-- Et FIRMA har aldri fødselsnummer. Tilhører tallet et selskap (AS, ANS, foretak, sameie, kommune), er det et organisasjonsnummer: ni sifre som starter på 8 eller 9, i skjemafelt ofte utfylt til elleve sifre med «00» foran (00916348401 = orgnr 916348401). Et ekte fødselsnummer kan ALDRI starte med 00, for dag 00 finnes ikke.
+- Organisasjons- og foretaksnummer skal IKKE sladdes og er ALLTID «nei» — også når tallet står i et felt merket «Fødselsnr./Org.nr.», og også når det er utfylt til elleve sifre med «00» foran (00916348401 = orgnr 916348401). Et firma/en organisasjon/virksomhet/foretak (AS, ANS, foretak, sameie, kommune) har aldri fødselsnummer, og et ekte fødselsnummer kan aldri starte med 00, for dag 00 finnes ikke. Det finnes ikke noe «fødselsnummer for et AS».
+- Tall i kart og tekniske tegninger er punktnumre, koordinater eller mål — fem-seks sifre midt i et kart eller målebrev er et punktnummer, svar «nei».
+- En dato i et datofelt (Dato, tinglyst, utstedt) er ikke et fødselsnummer, svar «nei». Bare en fødselsdato som hører sammen med et personnummer er del av et fødselsnummer.
+- Svaret skal stemme med din egen begrunnelse
 - Ellers: svar «usikker». Å fjerne sladden fra et ekte fødselsnummer er tjue ganger så ille som å la en unødvendig sladd stå.
 
 Svar kun med JSON:
