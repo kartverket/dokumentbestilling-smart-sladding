@@ -115,14 +115,58 @@ def _md_rad(rad, utsnitt_mappe, md_mappe):
     return "| " + " | ".join(c.replace("|", "/") for c in celler) + " |\n"
 
 
-def skriv_gjennomgang_md(ut_sti, utsnitt_mappe):
-    """Deriverer *_gjennomgang.md fra dommer-CSV-en. Returnerer stien."""
+def _sidefil(ut_sti, navn, flatt_suffiks):
+    """Sti til en avledet fil. I katalog-oppsettet (full_info.csv i egen
+    kjøringskatalog) får sidefilene kanoniske navn; i det flate oppsettet
+    beholdes stem+suffiks slik at gamle kjøringer og selvtesten er urørt."""
+    mappe = os.path.dirname(os.path.abspath(ut_sti))
+    if os.path.basename(ut_sti) == "full_info.csv":
+        return os.path.join(mappe, navn)
     stem, _ = os.path.splitext(ut_sti)
-    sti = stem + "_gjennomgang.md"
+    return stem + flatt_suffiks
+
+
+def _md_label_rad(rad, utsnitt_mappe, md_mappe):
+    fil = rad.get("utsnitt", "")
+    rel = os.path.relpath(os.path.join(utsnitt_mappe, fil), md_mappe)
+    riktig = rad.get("riktig") or _riktig(
+        rad.get("klasse", ""), (rad.get("svar") or "").strip().lower())
+    celler = [f"[{os.path.splitext(fil)[0]}]({rel})", riktig,
+              rad.get("klasse", ""), rad.get("svar", ""),
+              rad.get("label_id", ""), rad.get("holdepunkt", ""),
+              rad.get("begrunnelse", "")]
+    return "| " + " | ".join(c.replace("|", "/") for c in celler) + " |\n"
+
+
+def skriv_gjennomgang_label_md(ut_sti, utsnitt_mappe):
+    """Deriverer gjennomgang med label_id (uuid fra fasit-CSV-en) — for å slå
+    dommer direkte opp mot labels ved fasit-vedlikehold. Returnerer stien."""
+    sti = _sidefil(ut_sti, "gjennomgang_label.md", "_gjennomgang_label.md")
     md_mappe = os.path.dirname(os.path.abspath(sti))
+    navn = os.path.basename(os.path.dirname(os.path.abspath(ut_sti))
+                            if os.path.basename(ut_sti) == "full_info.csv"
+                            else os.path.splitext(ut_sti)[0])
     with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
          open(sti, "w", encoding="utf-8") as f_ut:
-        f_ut.write(f"# Gjennomgang: {os.path.basename(stem)}\n\n"
+        f_ut.write(f"# Gjennomgang med label-id: {navn}\n\n"
+                   f"| utsnitt | riktig | klasse | svar | label_id "
+                   f"| holdepunkt | begrunnelse |\n"
+                   f"|---|---|---|---|---|---|---|\n")
+        for rad in csv.DictReader(f_inn):
+            f_ut.write(_md_label_rad(rad, utsnitt_mappe, md_mappe))
+    return sti
+
+
+def skriv_gjennomgang_md(ut_sti, utsnitt_mappe):
+    """Deriverer *_gjennomgang.md fra dommer-CSV-en. Returnerer stien."""
+    sti = _sidefil(ut_sti, "gjennomgang.md", "_gjennomgang.md")
+    md_mappe = os.path.dirname(os.path.abspath(sti))
+    navn = os.path.basename(os.path.dirname(os.path.abspath(ut_sti))
+                            if os.path.basename(ut_sti) == "full_info.csv"
+                            else os.path.splitext(ut_sti)[0])
+    with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
+         open(sti, "w", encoding="utf-8") as f_ut:
+        f_ut.write(f"# Gjennomgang: {navn}\n\n"
                    f"❌ er radene som truer recall.\n\n"
                    f"| utsnitt | riktig | klasse | svar | sikkerhet "
                    f"| holdepunkt | begrunnelse |\n"
@@ -134,8 +178,7 @@ def skriv_gjennomgang_md(ut_sti, utsnitt_mappe):
 
 def skriv_uten_innhold(ut_sti):
     """Deriverer *_uten_innhold.csv fra dommer-CSV-en. Returnerer stien."""
-    stem, _ = os.path.splitext(ut_sti)
-    sti = stem + "_uten_innhold.csv"
+    sti = _sidefil(ut_sti, "uten_innhold.csv", "_uten_innhold.csv")
     with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
          open(sti, "w", newline="", encoding="utf-8") as f_ut:
         skriver = csv.DictWriter(f_ut, fieldnames=UTEN_INNHOLD_FELT,
@@ -451,6 +494,15 @@ def kjor(a):
 
     ut_sti = a.ut_csv or os.path.join(os.path.dirname(
         os.path.abspath(a.manifest)), f"dommer_{a.modus}.csv")
+    if not ut_sti.lower().endswith(".csv"):
+        # Katalog per kjøring: alle fire filene samles under kjøringsnavnet.
+        kat = ut_sti
+        os.makedirs(kat, exist_ok=True)
+        ut_sti = os.path.join(kat, "full_info.csv")
+        gammel = kat + ".csv"
+        if not os.path.isfile(ut_sti) and os.path.isfile(gammel):
+            os.replace(gammel, ut_sti)
+            print(f"  Flyttet {gammel} -> {ut_sti} (katalog-oppsett)")
     ferdige = set()
     if not a.gjenoppta and os.path.isfile(ut_sti):
         print(f"  ⚠ --start-paa-nytt: overskriver {ut_sti}")
@@ -479,6 +531,8 @@ def kjor(a):
         if os.path.isfile(ut_sti):
             print(f"  Uten innhold: {skriv_uten_innhold(ut_sti)}")
             print(f"  Gjennomgang:  {skriv_gjennomgang_md(ut_sti, mappe)}")
+            print(f"  Med label-id: "
+                  f"{skriv_gjennomgang_label_md(ut_sti, mappe)}")
         return ut_sti
 
     print(f"  {len(igjen)} bokser å dømme  ({a.modus}-modus, "
@@ -512,6 +566,8 @@ def kjor(a):
     md_sti = skriv_gjennomgang_md(ut_sti, mappe)
     f_md = open(md_sti, "a", encoding="utf-8")
     md_mappe = os.path.dirname(os.path.abspath(md_sti))
+    mdl_sti = skriv_gjennomgang_label_md(ut_sti, mappe)
+    f_mdl = open(mdl_sti, "a", encoding="utf-8")
     f_ui = open(ui_sti, "a", newline="", encoding="utf-8")
     skriver_ui = csv.DictWriter(f_ui, fieldnames=UTEN_INNHOLD_FELT,
                                 extrasaction="ignore")
@@ -534,6 +590,8 @@ def kjor(a):
             f_ui.flush()
             f_md.write(_md_rad(rad_ut, mappe, md_mappe))
             f_md.flush()
+            f_mdl.write(_md_label_rad(rad_ut, mappe, md_mappe))
+            f_mdl.flush()
             telling["n"] += 1
             if res["feil"]:
                 telling["feil"] += 1
@@ -551,6 +609,7 @@ def kjor(a):
         f_ut.close()
         f_ui.close()
         f_md.close()
+        f_mdl.close()
 
     gaatt = time.monotonic() - t_start
     tider.sort()
@@ -567,6 +626,7 @@ def kjor(a):
     print(f"  Dommer: {ut_sti}")
     print(f"  Uten innhold: {skriv_uten_innhold(ut_sti)}")
     print(f"  Gjennomgang:  {skriv_gjennomgang_md(ut_sti, mappe)}")
+    print(f"  Med label-id: {skriv_gjennomgang_label_md(ut_sti, mappe)}")
     return ut_sti
 
 

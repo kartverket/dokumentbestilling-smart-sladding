@@ -549,6 +549,8 @@ def main():
     a = p.parse_args()
 
     manifest = les_csv(a.manifest)
+    if os.path.isdir(a.dommer):
+        a.dommer = os.path.join(a.dommer, "full_info.csv")
     if a.dommer.startswith("regel:"):
         dommer = dommer_fra_regel(manifest, a.dommer.split(":", 1)[1])
         print(f"Basislinje «{a.dommer}» — ingen modell involvert")
