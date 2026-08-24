@@ -52,14 +52,15 @@ STD_MAKS_TOKENS = 700
 
 # Settes til None hvis endepunktet avviser feltet — delt mellom trådene.
 _TENKNING = {"verdi": "none"}
-UT_FELT = ["nr", "utsnitt", "klasse", "kilde", "label_id",
-           "svar", "sikkerhet", "tall", "begrunnelse",
-           # Sjekklisten modellen fyller ut FØR dommen. Den lagres fordi
-           # avlesningen er langt mer pålitelig enn slutningen: med «linjen»
-           # og «sifre_paa_linjen» på disk kan vlm_evaluer anvende
-           # fnr-regelen deterministisk i etterkant, uten ny GPU-kjøring.
-           "linjen", "sifre_paa_linjen", "dato_gyldig", "holdepunkt",
-           "sekunder", "feil", "raatekst"]
+# Samme kolonneorden som UTEN_INNHOLD_FELT, med det sensitive og tekniske
+# LAGT TIL på slutten — de to filene skal kunne leses side om side.
+# «tall», «linjen», «sifre_paa_linjen» og «raatekst» er sjekklisten modellen
+# fyller ut FØR dommen. Den lagres fordi avlesningen er langt mer pålitelig
+# enn slutningen: med «linjen» og «sifre_paa_linjen» på disk kan vlm_evaluer
+# anvende fnr-regelen deterministisk i etterkant, uten ny GPU-kjøring.
+UT_FELT = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet", "begrunnelse",
+           "dato_gyldig", "holdepunkt", "sekunder", "label_id", "nr", "kilde",
+           "tall", "linjen", "sifre_paa_linjen", "feil", "raatekst"]
 
 # Innholdsfri søsterfil: dommer-CSV-en over inneholder avskrifter av EKTE
 # fødselsnumre («tall», «linjen», «sifre_paa_linjen», «raatekst») og er
@@ -67,8 +68,9 @@ UT_FELT = ["nr", "utsnitt", "klasse", "kilde", "label_id",
 # deles fritt under gjennomgang. «utsnitt» skrives som file://-URI: VSCode-
 # EDITOREN linkifiserer bare URL-er med skjema (terminalen tar rene stier,
 # editoren gjør det ikke), og cmd+klikk åpner da PNG-en direkte. «riktig»
-# holder dommen mot fasit-klassen: ✓ = dommen stemmer (BOM fikk nei, dekkende
-# fikk ja), ✗ = den motsier fasit, ? = usikker eller feilet kall.
+# holder dommen mot fasit-klassen: ✅ = dommen stemmer (BOM fikk nei, dekkende
+# fikk ja), 🟡 = ja på en BOM (tapt gevinst, ufarlig), ❌ = nei på en
+# dekkende boks (ville avsladdet et ekte fnr), ❓ = usikker/feilet kall.
 # Regenereres i sin helhet fra hovedfilen etter hver kjøring — også en
 # gjenopptatt eller ferdig en.
 UTEN_INNHOLD_FELT = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet",
@@ -79,8 +81,22 @@ UTEN_INNHOLD_FELT = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet",
 def _riktig(klasse, svar):
     onsket = "nei" if klasse == "BOM" else "ja"
     if svar not in ("ja", "nei"):
-        return "?"
-    return "✓" if svar == onsket else "✗"
+        return "⚪"
+    if svar == onsket:
+        return "✅"
+    # De to gale svarene er ikke like gale: «ja» på en BOM lar bare en
+    # unødvendig sladding stå (🟡), «nei» på en dekkende boks ville
+    # avsladdet et ekte fnr (❌) — det er dem gjennomgangen skal finne.
+    return "🟡" if klasse == "BOM" else "❌"
+
+
+def _uten_innhold_rad(rad, utsnitt_mappe):
+    rad = dict(rad)
+    rad["utsnitt"] = "file://" + os.path.abspath(
+        os.path.join(utsnitt_mappe, rad.get("utsnitt", "")))
+    rad["riktig"] = _riktig(rad.get("klasse", ""),
+                            (rad.get("svar") or "").strip().lower())
+    return rad
 
 
 def skriv_uten_innhold(ut_sti, utsnitt_mappe):
@@ -90,14 +106,11 @@ def skriv_uten_innhold(ut_sti, utsnitt_mappe):
     with open(ut_sti, newline="", encoding="utf-8") as f_inn, \
          open(sti, "w", newline="", encoding="utf-8") as f_ut:
         skriver = csv.DictWriter(f_ut, fieldnames=UTEN_INNHOLD_FELT,
-                                 extrasaction="ignore")
+                                 extrasaction="ignore",
+                                 quoting=csv.QUOTE_ALL)
         skriver.writeheader()
         for rad in csv.DictReader(f_inn):
-            rad["utsnitt"] = "file://" + os.path.abspath(
-                os.path.join(utsnitt_mappe, rad.get("utsnitt", "")))
-            rad["riktig"] = _riktig(rad.get("klasse", ""),
-                                    (rad.get("svar") or "").strip().lower())
-            skriver.writerow(rad)
+            skriver.writerow(_uten_innhold_rad(rad, utsnitt_mappe))
     return sti
 
 # Prompten er pilotens egentlige eksperiment. Den er bygget rundt kontrastene
@@ -420,10 +433,35 @@ def kjor(a):
     print(f"  {len(igjen)} bokser å dømme  ({a.modus}-modus, "
           f"{a.samtidige} samtidige, modell {a.modell})")
     ny_fil = not (a.gjenoppta and os.path.isfile(ut_sti))
+    if not ny_fil:
+        with open(ut_sti, newline="", encoding="utf-8-sig") as f:
+            leser = csv.DictReader(f)
+            gamle = list(leser) if leser.fieldnames != UT_FELT else None
+        if gamle is not None:
+            print(f"  Kolonneoppsettet er endret — skriver {ut_sti} om "
+                  f"i ny orden ({len(gamle)} rader)")
+            with open(ut_sti, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=UT_FELT,
+                                   extrasaction="ignore")
+                w.writeheader()
+                for r in gamle:
+                    r.setdefault("riktig", _riktig(
+                        r.get("klasse", ""),
+                        (r.get("svar") or "").strip().lower()))
+                    w.writerow({k: r.get(k, "") for k in UT_FELT})
     f_ut = open(ut_sti, "w" if ny_fil else "a", newline="", encoding="utf-8")
     skriver = csv.DictWriter(f_ut, fieldnames=UT_FELT, extrasaction="ignore")
     if ny_fil:
         skriver.writeheader()
+        f_ut.flush()
+    # Den innholdsfrie søsterfilen skrives like fortløpende som hovedfilen —
+    # gjennomgangen skal kunne starte mens batchen går. Deriveringen først
+    # bringer den i takt med allerede dømte rader ved gjenopptak.
+    ui_sti = skriv_uten_innhold(ut_sti, mappe)
+    f_ui = open(ui_sti, "a", newline="", encoding="utf-8")
+    skriver_ui = csv.DictWriter(f_ui, fieldnames=UTEN_INNHOLD_FELT,
+                                extrasaction="ignore",
+                                quoting=csv.QUOTE_ALL)
     laas = threading.Lock()
     telling = {"n": 0, "feil": 0}
     tider = []
@@ -434,9 +472,13 @@ def kjor(a):
         rad_ut = {k: rad.get(k, "") for k in
                   ("nr", "utsnitt", "klasse", "kilde", "label_id")}
         rad_ut.update(res)
+        rad_ut["riktig"] = _riktig(rad_ut.get("klasse", ""),
+                                   (rad_ut.get("svar") or "").strip().lower())
         with laas:
             skriver.writerow(rad_ut)
             f_ut.flush()
+            skriver_ui.writerow(_uten_innhold_rad(rad_ut, mappe))
+            f_ui.flush()
             telling["n"] += 1
             if res["feil"]:
                 telling["feil"] += 1
@@ -452,6 +494,7 @@ def kjor(a):
             list(pool.map(arbeid, igjen))
     finally:
         f_ut.close()
+        f_ui.close()
 
     gaatt = time.monotonic() - t_start
     tider.sort()
