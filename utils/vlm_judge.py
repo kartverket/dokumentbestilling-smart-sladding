@@ -486,6 +486,35 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
 
 # ── Run ───────────────────────────────────────────────────────
 
+def _sync_klasse(out_path, klasse_per_nr):
+    """Re-labels stored judgement rows whose klasse disagrees with the
+    manifest — i.e. labels added to ugyldige_labels.txt after the rows were
+    judged. The verdicts stand; only klasse and «riktig» change, so the
+    derived review files stop flagging known noise as recall threats.
+    Returns the number of rows changed."""
+    if not os.path.isfile(out_path):
+        return 0
+    with open(out_path, newline="", encoding="utf-8-sig") as f:
+        leser = csv.DictReader(f)
+        old_rows = list(leser)
+        field = leser.fieldnames
+    changed = 0
+    for r in old_rows:
+        want = klasse_per_nr.get(r.get("nr"))
+        if want and r.get("klasse") != want:
+            r["klasse"] = want
+            r["riktig"] = _correct(want, (r.get("svar") or "").strip().lower())
+            changed += 1
+    if changed:
+        tmp = out_path + ".tmp"
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=field, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(old_rows)
+        os.replace(tmp, out_path)
+    return changed
+
+
 def run(a):
     with open(a.manifest, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
@@ -531,6 +560,12 @@ def run(a):
         if not os.path.isfile(out_path) and os.path.isfile(old):
             os.replace(old, out_path)
             print(f"  Moved {old} -> {out_path} (directory layout)")
+    if a.resume:
+        synced = _sync_klasse(out_path,
+                              {r["nr"]: r.get("klasse", "") for r in rows})
+        if synced:
+            print(f"  {synced} stored rows re-labelled from the manifest "
+                  f"(ugyldige_labels.txt grew since they were judged)")
     done = set()
     if not a.resume and os.path.isfile(out_path):
         print(f"  ⚠ --restart: overwriting {out_path}")

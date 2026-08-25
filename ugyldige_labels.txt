@@ -179,7 +179,6 @@ b3d93a96-1685-479b-bbda-bdced8230e79    # kontonummer
 366c4bce-cff2-4fcd-af77-d64491856032    # kontonummer
 105cc2e5-da5d-478d-aa85-75cd8618a165    # dato
 aa7cd3f0-2693-4342-8233-93aaede68baf    # kontonummer
-aa7cd3f0-2693-4342-8233-93aaede68baf    # kontonummer
 cd74eeea-59b7-4849-8189-3697bae25642    # kontonummer
 8349f159-a4da-43a2-8389-2bdba8ff40ae    # kontonummer
 1d90b4e9-ce65-4a84-9a25-70c21542764a    # kontonummer
@@ -207,3 +206,4 @@ ee74366c-c457-4eb8-b692-45642d115f5e    # kontonummer
 3788c0b7-f14f-45bf-afc6-75b83d2d05de    # kontonummer
 99e23751-a720-4deb-8c1b-07eebece2c16    # kontonummer
 6c0fccf7-03a5-4690-96f9-cd943681f329    # kontonummer
+1b60a6ce-5a37-46e3-bf14-7f7ed645b2ae    # orgnr
