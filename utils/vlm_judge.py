@@ -598,9 +598,11 @@ def run(a):
     writer_ui = csv.DictWriter(f_ui, fieldnames=WITHOUT_CONTENT_FIELD,
                                 extrasaction="ignore")
     laas = threading.Lock()
-    tally = {"n": 0, "feil": 0, "cache": 0}
+    tally = {"n": 0, "feil": 0, "cache": 0, "judged": 0}
     timings = []
     t_start = time.monotonic()
+    # Cache hits are free, so the rate is counted over the judged boxes only.
+    mark = {"t": t_start, "judged": 0}
 
     def work(row):
         res = judge_one(row, a, folder, prompt, cache_dir)
@@ -625,13 +627,19 @@ def run(a):
             if from_cache:
                 tally["cache"] += 1
             else:
+                tally["judged"] += 1
                 timings.append(res["sekunder"])
             if tally["n"] % 25 == 0 or tally["n"] == len(left):
-                gone = time.monotonic() - t_start
+                now = time.monotonic()
+                gone = now - t_start
+                block = tally["judged"] - mark["judged"]
+                rate = (f"{(now - mark['t']) / block:5.2f}" if block
+                        else "    -")
                 print(f"    {tally['n']:>6}/{len(left)}  "
-                      f"{gone:6.0f}s  {gone / tally['n']:5.2f} s/box  "
+                      f"{gone:6.0f}s  {rate} s/box  "
                       f"{tally['feil']} errors  "
                       f"{tally['cache']} from cache", flush=True)
+                mark["t"], mark["judged"] = now, tally["judged"]
 
     try:
         with ThreadPoolExecutor(max_workers=a.concurrent) as pool:
@@ -644,9 +652,13 @@ def run(a):
 
     gone = time.monotonic() - t_start
     timings.sort()
-    print(f"\n  Done: {tally['n']} judgements in {gone:.0f}s "
-          f"({gone / max(tally['n'], 1):.2f} s/box wall clock, "
-          f"{a.concurrent} concurrent)")
+    if tally["judged"]:
+        print(f"\n  Done: {tally['n']} judgements in {gone:.0f}s "
+              f"({gone / tally['judged']:.2f} s/box over the {tally['judged']} "
+              f"judged, {a.concurrent} concurrent)")
+    else:
+        print(f"\n  Done: {tally['n']} judgements in {gone:.0f}s "
+              f"(everything came from the cache)")
     if cache_dir:
         print(f"  Cache: {tally['cache']} of {tally['n']} answers reused "
               f"({cache_dir})")
