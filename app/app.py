@@ -10,8 +10,8 @@ app = Flask(__name__)
 load_dotenv()
 base_url = os.getenv('DOKUMENT_URL', default='http://localhost:3000/pantebok')
 
-# Hvor applikasjonsloggen havner, og hvor mange døgn historikk som
-# beholdes. Settes av compose; defaultene er containerstiene.
+# Where the application log goes and how many days of history to keep. Set by
+# compose; the defaults are the container paths.
 ML_LOG_DIR = os.getenv('ML_LOG_DIR', '/data/ml_logs')
 LOG_BACKUP_DAYS = int(os.getenv('LOG_BACKUP_DAYS', '30'))
 
@@ -29,9 +29,9 @@ def get_bounding_boxes():
 
     try:
         elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
-        # Kommaseparerte XX_YYY-koder fra grunnboken, f.eks.
-        # ?rettsstiftelsestyper=SR_JOU,SR_BSK — aktiverer regelprofiler per
-        # dokumenttype (se KOORDFAM_KODER i config). Utelatt/tom = som før.
+        # Comma-separated XX_YYY codes from the grunnbok, e.g.
+        # ?rettsstiftelsestyper=SR_JOU,SR_BSK enables per-document-type rule
+        # profiles (see KOORDFAM_CODES in config). Omitted/empty = as before.
         rettsstiftelsestyper = [k.strip() for k in
                                 request.args.get('rettsstiftelsestyper', '')
                                 .split(',') if k.strip()]

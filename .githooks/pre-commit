@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+# pre-commit - stops commits that contain valid fødselsnummer.
+#
+# Install with:
+#   git config core.hooksPath .githooks
+#
+# The check lives in utils/fnr_vakt.py. It looks only at the lines the
+# commit adds, and flags only numbers that pass mod-11 and carry a valid
+# date. See that file's docstring for the forms covered and the exemption.
+
+rot=$(git rev-parse --show-toplevel) || exit 0
+vakt="$rot/utils/fnr_vakt.py"
+
+# A missing guard is an anomaly, not a reason to let the commit through.
+if [ ! -f "$vakt" ]; then
+    echo "fnr guard: $vakt not found. Renamed or deleted?" >&2
+    echo "Commit stopped. If this is deliberate: git commit --no-verify" >&2
+    exit 1
+fi
+
+if [ -x "$rot/venv/bin/python" ]; then
+    py="$rot/venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    py=python3
+elif command -v python >/dev/null 2>&1; then
+    py=python
+else
+    echo "fnr guard: no python found, cannot check for fødselsnummer" >&2
+    echo "Commit stopped. If this is deliberate: git commit --no-verify" >&2
+    exit 1
+fi
+
+exec "$py" "$vakt" --staged

@@ -1,12 +1,12 @@
-FARGEKODER
-==========
-Grønn ramme:   ACCEPTED  — ML fant den, saksbehandler godkjente
-Oransje ramme: REJECTED  — ML fant den, saksbehandler avviste (false positive)
-Rød ramme:     MANUELL   — Saksbehandler la til selv (true negative / model bom)
+COLOR CODES
+===========
+Green frame:  ACCEPTED — ML found it, the case worker accepted it
+Orange frame: REJECTED — ML found it, the case worker rejected it (false positive)
+Red frame:    BY HAND  — the case worker added it (true negative / model miss)
 
-MAPPER
-======
-false_positive/  — Sider med minst én REJECTED-boks (oransje)
-true_negative/   — Sider med minst én manuell boks (rød)
+DIRECTORIES
+===========
+false_positive/  — pages with at least one REJECTED box (orange)
+true_negative/   — pages with at least one hand-placed box (red)
 
-Merk: En side kan ligge i begge mapper hvis den har både FP og TN.
+Note: a page with both FP and TN appears in both directories.

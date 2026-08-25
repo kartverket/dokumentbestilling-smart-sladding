@@ -5,74 +5,71 @@ import logging.handlers
 
 
 class ZippedTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
-    """Roterer ved døgnskiftet og zipper døgnet som ble avsluttet.
+    """Rotates at midnight and zips the day that just ended.
 
-    Bruker base-klassens doRollover, som gjør to ting riktig vi tidligere
-    gjorde feil: den navngir filen etter datoen loggen *dekker* (utledet
-    fra rolloverAt - interval, ikke fra now()), og den håndterer
-    backupCount. Vi bidrar bare med de to hookene stdlib er laget for:
-    namer (filnavnet) og rotator (komprimeringen).
+    Uses the base class doRollover, which gets two things right we used to get
+    wrong: it names the file after the date the log *covers* (from
+    rolloverAt - interval, not now()), and it honours backupCount. We only
+    supply the two stdlib hooks: namer and rotator.
 
-    backupCount teller zip-filer. Med when="midnight" er det én per døgn,
-    så tallet leses som antall dager historikk.
+    backupCount counts zip files, one per day with when="midnight", so the
+    number reads as days of history.
     """
 
     def __init__(self, filename, **kwargs):
-        # Mappen må finnes før base-klassen åpner filen.
-        mappe = os.path.dirname(os.path.abspath(filename))
-        if mappe:
-            os.makedirs(mappe, exist_ok=True)
+        # The folder must exist before the base class opens the file.
+        folder = os.path.dirname(os.path.abspath(filename))
+        if folder:
+            os.makedirs(folder, exist_ok=True)
         super().__init__(filename, **kwargs)
-        self.namer = self._navngi
-        self.rotator = self._komprimer
+        self.namer = self._name
+        self.rotator = self._compress
 
     @staticmethod
-    def _navngi(standardnavn):
-        """«app.log.2026-08-19» -> «app.log.2026-08-19.zip».
+    def _name(default_name):
+        """"app.log.2026-08-19" -> "app.log.2026-08-19.zip".
 
-        Finnes navnet allerede, legges det på et løpenummer. Uten det
-        ville base-klassen slette den eksisterende zipen først, og et
-        ekstra rollover på samme dato — etter nedetid over døgnskiftet,
-        eller fordi både master og worker roterer — spiste et helt døgn
-        med historikk.
+        A sequence number is appended if the name already exists. Without it
+        the base class would delete the existing zip first, so a second
+        rollover on the same date, after downtime across midnight, or because
+        both master and worker rotate, ate a whole day of history.
         """
-        kandidat = f"{standardnavn}.zip"
+        candidate = f"{default_name}.zip"
         n = 2
-        while os.path.exists(kandidat):
-            kandidat = f"{standardnavn}.{n}.zip"
+        while os.path.exists(candidate):
+            candidate = f"{default_name}.{n}.zip"
             n += 1
-        return kandidat
+        return candidate
 
     @staticmethod
-    def _komprimer(kilde, mal):
+    def _compress(source, mal):
         with zipfile.ZipFile(mal, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(kilde, arcname=os.path.basename(kilde))
-        os.remove(kilde)
+            zipf.write(source, arcname=os.path.basename(source))
+        os.remove(source)
 
     def getFilesToDelete(self):
-        """Zip-filene som faller utenfor backupCount, eldste først.
+        """Zip files falling outside backupCount, oldest first.
 
-        Egen implementasjon fordi base-klassens extMatch varierer mellom
-        python-versjoner i om den godtar et ekstra «.zip»-suffiks. Uten
-        treff sletter den ingenting, og retensjonen blir uendelig — som
-        var feilen her før.
+        Reimplemented because the base class extMatch varies across python
+        versions in whether it accepts an extra ".zip" suffix. Without a match
+        it deletes nothing and retention becomes infinite, which is the bug we had.
         """
         if self.backupCount <= 0:
             return []
 
-        mappe, grunnavn = os.path.split(self.baseFilename)
+        folder, base_name = os.path.split(self.baseFilename)
         monster = re.compile(
-            rf"^{re.escape(grunnavn)}\.(\d{{4}}-\d{{2}}-\d{{2}}[\d\-_:.]*?)(?:\.(\d+))?\.zip$"
+            rf"^{re.escape(base_name)}\.(\d{{4}}-\d{{2}}-\d{{2}}[\d\-_:.]*?)(?:\.(\d+))?\.zip$"
         )
 
-        treff = []
-        for navn in os.listdir(mappe or "."):
-            m = monster.match(navn)
+        hit = []
+        for name in os.listdir(folder or "."):
+            m = monster.match(name)
             if m:
-                # Sorter på (periode, løpenummer) så eldste ryker først.
-                treff.append(((m.group(1), int(m.group(2) or 0)), os.path.join(mappe, navn)))
+                # Sort on (period, sequence) so the oldest goes first.
+                hit.append(((m.group(1), int(m.group(2) or 0)), os.path.join(folder, name)))
 
-        treff.sort()
-        if len(treff) <= self.backupCount:
+        hit.sort()
+        if len(hit) <= self.backupCount:
             return []
-        return [sti for _, sti in treff[: len(treff) - self.backupCount]]
+        return [path for _, path in hit[: len(hit) - self.backupCount]]

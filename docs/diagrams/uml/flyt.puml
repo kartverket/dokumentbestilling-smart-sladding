@@ -1,18 +1,18 @@
 @startuml
-title Smart sladding – overordnet flyt
+title Smart sladding - overall flow
 
 start
-:PDF inn;
-:Sidene gjøres om til bilder;
+:PDF in;
+:Render the pages to images;
 
 fork
-  :OCR leser teksten og finner\ngyldige fødselsnummer;
+  :OCR reads the text and finds\nvalid fødselsnummer;
 fork again
-  :Bildemodell (YOLO) ser etter\nområder som ligner fødselsnummer;
+  :Image model (YOLO) looks for\nregions resembling a fødselsnummer;
 end fork
 
-:Funnene slås sammen\nog kvalitetssjekkes;
-:Sladdebokser legges\nover fødselsnumrene;
-:Resultat ut: bokser som JSON;
+:Findings are merged\nand quality-checked;
+:Sladd boxes are placed\nover the fødselsnummer;
+:Result out: boxes as JSON;
 stop
 @enduml

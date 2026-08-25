@@ -6,48 +6,46 @@ import logging
 
 
 def hentDokumenterTilSladding():
-    dokumenter = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
+    response = requests.get(f'{database_base_url()}/ubehandlede_dokumenter')
 
-    if dokumenter.status_code != 200:
-        logging.error(f'Kunne ikke hente ubehandlede dokumenter. Statuskode: {dokumenter.status_code}')
-        raise Exception('Kunne ikke hente ubehandlede dokumenter')
+    if response.status_code != 200:
+        logging.error(f'Could not fetch unprocessed documents. Status code: {response.status_code}')
+        raise Exception('Could not fetch unprocessed documents')
 
-    logging.info(f'Det er {len(dokumenter.json())} ubehandlede dokumenter')
+    logging.info(f'There are {len(response.json())} unprocessed documents')
 
-    for dokument in dokumenter.json():
-        ident = dokument.get('dokumentIdent')
+    for document in response.json():
+        ident = document.get('dokumentIdent')
         dokumentaar = ident.get('dokumentaar')
         dokumentnummer = ident.get('dokumentnummer')
         embetenummer = ident.get('embetenummer')
 
         docid = f"{dokumentaar}_{dokumentnummer}_{embetenummer}"
 
-        er_elektronisk_tinglyst = dokument.get('erElektroniskTinglyst')
+        er_elektronisk_tinglyst = document.get('erElektroniskTinglyst')
         if er_elektronisk_tinglyst:
-            logging.info(f'Dokument {docid} er elektronisk tinglyst')
+            logging.info(f'Document {docid} is elektronisk tinglyst')
 
         dokumentStatus = requests.get(f'{database_base_url()}/dokumentstatus/{dokumentaar}/{dokumentnummer}/{embetenummer}')
 
         if dokumentStatus.status_code != 200:
-            logging.error(f'Kunne ikke hente status for dokument: {dokumentaar}_{dokumentnummer}_{embetenummer}. Statuskode: {dokumentStatus.status_code}')
+            logging.error(f'Could not fetch status for document: {dokumentaar}_{dokumentnummer}_{embetenummer}. Status code: {dokumentStatus.status_code}')
             continue
 
         if dokumentStatus.text != '"KLAR_FOR_BEHANDLING"':
-            logging.info(f'Status fra dokument: {dokumentaar}_{dokumentnummer}_{embetenummer} er endret til {dokumentStatus.text}. Hopper over.')
+            logging.info(f'Status for document: {dokumentaar}_{dokumentnummer}_{embetenummer} changed to {dokumentStatus.text}. Skipping.')
             continue
 
         document_url = f'{api_base_url()}intern/pantebok/gjenpart/{docid}?attestering=false'
 
-        logging.info(f'Kjører modell på dokument: {document_url}')
+        logging.info(f'Running model on document: {document_url}')
 
         try:
             pdf_bytes = pdf_utils.get_pdf_bytes(document_url)
         except ValueError as e:
-            # Check if document is protected/restricted (skjermet)
             if "SKJERMET_DOCUMENT" in str(e):
                 logging.info(f'Document {docid} is protected (skjermet), skipping')
                 continue
-            # Other errors
             logging.error(f'Failed to retrieve PDF for dokument: {docid}')
             logging.error(f'Error: {str(e)}')
             continue
@@ -67,7 +65,7 @@ def hentDokumenterTilSladding():
                     'Content-Type': 'application/pdf',
                     'Content-Length': str(len(pdf_bytes))
                 },
-                timeout=600  # 10 minute timeout for large PDFs
+                timeout=600  # large PDFs
             )
 
             if response.status_code != 200:
@@ -107,12 +105,12 @@ def hentDokumenterTilSladding():
         response = requests.put(f'{database_base_url()}/labels/{dokumentaar}/{dokumentnummer}/{embetenummer}?mlFerdigBehandlet=true', json=transformed_sladdinger)
 
         if response.status_code == 200:
-            logging.info(f'Sendt sladdinger for dokument: {docid} til databasen og markert som mlFerdigBehandlet')
+            logging.info(f'Sent sladdinger for document: {docid} to the database, marked mlFerdigBehandlet')
         else:
-            logging.error(f'Kunne ikke sende sladdinger for dokument: {docid} til databasen. Statuskode: {response.status_code}')
+            logging.error(f'Could not send sladdinger for document: {docid} to the database. Status code: {response.status_code}')
 
 if __name__ == '__main__':
-    # Logging basic config, save log as json
+    # JSON-shaped log lines, for the log collector.
     logging.basicConfig(
         level=logging.INFO,
         format= "{'time':'%(asctime)s', 'name': '%(name)s', 'level': '%(levelname)s', 'message': '%(message)s'}",

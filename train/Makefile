@@ -1,7 +1,7 @@
 
 # YOLO FNR Detection Pipeline
 
-# ===Variabler===
+# ===Variables===
 
 # ---- Inputs -------------------------------------------------
 # folder with source PDFs
@@ -39,38 +39,34 @@ BATCH ?= 4
 DEVICE ?= cuda
 PATIENCE ?= 20
 # Name for the training run (output in <PROJECT>/<NAME>/) and, unless
-# PUBLISER_NAVN says otherwise, the name of the published model.
+# PUBLISH_NAME says otherwise, the name of the published model.
 NAME ?= trening_$(shell date +%Y-%m-%dT%H-%M-%S)
 # Project directory for training output. $SLADD_RUNS on the server.
 PROJECT ?= $(if $(SLADD_RUNS),$(SLADD_RUNS),runs/detect)
 # Set RESUME=1 to resume from last.pt of a previous run
 RESUME ?=
 
-# ---- Publisering --------------------------------------------
-# Vektlageret. Trening skriver rått til $(PROJECT); «publiser» lager en
-# navngitt modell med metadata her, som er det deploy.sh og valideringen
-# peker på. Se server.env.
-VEKTER ?= $(if $(SLADD_VEKTER),$(SLADD_VEKTER),vekter)
-# Navn på den publiserte modellen (default: navnet på treningskjøringen)
-PUBLISER_NAVN ?= $(NAME)
-# best (default) eller last
-PUBLISER_VEKTER ?= best
-# Sett OVERSKRIV=1 for å erstatte en modell som alt er publisert
-OVERSKRIV ?=
+# ---- Publishing ---------------------------------------------
+# The weights store. Training writes raw runs to $(PROJECT); "publiser" puts a named model with metadata here.
+WEIGHTS ?= $(if $(SLADD_WEIGHTS),$(SLADD_WEIGHTS),vekter)
+# Name of the published model (default: the name of the training run)
+PUBLISH_NAME ?= $(NAME)
+# best (default) or last
+PUBLISH_WEIGHTS ?= best
+# Set OVERWRITE=1 to replace a model that is already published
+OVERWRITE ?=
 
 PYTHON ?= python
 YOLO := $(shell dirname $(shell which $(PYTHON)))/yolo
 SCRIPTS := scripts
 
 .DEFAULT_GOAL := all
-.PHONY: all split train publiser convert verify coverage smoke count clean help
+.PHONY: all split train publiser convert verify coverage smoke count help
 
-# Hele veien: datasett -> trening -> ferdig modell i vektlageret. En
-# treningskjøring som ikke er publisert er ikke til å bruke — den heter
-# best.pt som alle andre og sier ikke hva den er trent på.
+# An unpublished run is unusable: it is named best.pt like every other and does not say what it trained on.
 all: split train publiser
 
-# ===Treningssteg===
+# ===Training steps===
 
 # ---- Step 1: CSV -> YOLO format -----------------------------
 convert: $(DATASET)/.converted
@@ -128,16 +124,16 @@ train: split $(DATASET)/data.yaml
 		$(if $(PROJECT),project=$(PROJECT)) \
 		$(if $(RESUME),resume=True)
 
-# ---- Step 6: publisering ------------------------------------
+# ---- Step 6: publishing -------------------------------------
 publiser:
-	$(PYTHON) $(SCRIPTS)/publiser_modell.py \
+	$(PYTHON) $(SCRIPTS)/publish_model.py \
 		--run "$(PROJECT)/$(NAME)" \
-		--navn "$(PUBLISER_NAVN)" \
-		--ut "$(VEKTER)" \
-		--vekter $(PUBLISER_VEKTER) \
+		--name "$(PUBLISH_NAME)" \
+		--out "$(WEIGHTS)" \
+		--weights $(PUBLISH_WEIGHTS) \
 		--dataset "$(DATASET)" \
-		--info basismodell=$(MODEL) \
-		--info strategi=$(STRATEGY) \
+		--info base_model=$(MODEL) \
+		--info strategy=$(STRATEGY) \
 		--info pdfs=$(PDFS) \
 		--info labels_csv=$(CSV) \
 		--info metadata_csv=$(METADATA) \
@@ -148,7 +144,7 @@ publiser:
 		--info train_ratio=$(TRAIN_RATIO) \
 		--info val_ratio=$(VAL_RATIO) \
 		--info seed=$(SEED) \
-		$(if $(OVERSKRIV),--overskriv)
+		$(if $(OVERWRITE),--overwrite)
 
 $(DATASET)/data.yaml: $(DATASET)/.split
 	@echo "path: $(abspath $(DATASET))" > $@
@@ -196,13 +192,12 @@ help:
 	@echo "make               split + train + publiser"
 	@echo "make split         convert CSV/PDFs and split into train/val/test"
 	@echo "make train         train YOLO (runs split first if needed)"
-	@echo 'make publiser      copy <PROJECT>/<NAME>/weights/best.pt into $$SLADD_VEKTER'
-	@echo "                   as <navn>/<navn>.pt + modell.json (training metadata)"
+	@echo 'make publiser      copy <PROJECT>/<NAME>/weights/best.pt into $$SLADD_WEIGHTS'
+	@echo "                   as <name>/<name>.pt + modell.json (training metadata)"
 	@echo "make verify        draw labels on images for visual check"
 	@echo "make coverage      find pages without labels"
 	@echo "make smoke         3-epoch smoke test on $(MODEL)"
 	@echo "make count         count matching documents before training"
-	@echo "make clean         remove $(DATASET)/"
 	@echo ""
 	@echo "Vars: PDFS CSV DATASET TRAIN_RATIO VAL_RATIO STRATEGY METADATA PER_YEAR DOC_TYPE YEAR_FROM YEAR_TO MODEL EPOCHS IMGSZ BATCH DEVICE PATIENCE"
-	@echo "      NAME PROJECT VEKTER PUBLISER_NAVN PUBLISER_VEKTER OVERSKRIV"
+	@echo "      NAME PROJECT WEIGHTS PUBLISH_NAME PUBLISH_WEIGHTS OVERWRITE"

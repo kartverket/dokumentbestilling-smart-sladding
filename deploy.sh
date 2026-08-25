@@ -1,100 +1,81 @@
 #!/usr/bin/env bash
-# Bygg, test og promoter app-imaget på GPU-serveren.
+# Build, test and promote the app image on the GPU server.
 #
-# Prinsippet: et image bygges én gang og får en uforanderlig tag. Etter
-# det flyttes bare *hvilken* tag som kjører hvor. Prod bygger aldri, så
-# det som står på port 5071 endrer seg ikke av at noen bygger noe nytt,
-# og rollback er å peke tilbake på en tag som allerede har kjørt.
+# An image is built once and gets an immutable tag. After that, only *which*
+# tag runs where changes. Prod never builds, and rollback means pointing back
+# at a tag that has already run. Images exist only on this server, so a tag
+# you delete is gone for good. See "prune".
 #
-# Imagene lagres bare lokalt på serveren. Det betyr at en tag du sletter
-# er borte for godt — se «prune» nedenfor.
-#
-# Bruk:
-#   ./deploy.sh build [tag] [vekter=STI]
-#                                Bygg image. Vektene tas fra SLADD_PRODVEKTER
-#                                hvis «vekter=» utelates; tag utledes fra git
-#                                og modellnavnet.
-#   ./deploy.sh test <tag>       Start taggen på testporten (5072) og helsesjekk.
-#   ./deploy.sh promote <tag>    Sett taggen i prod (5071). Ruller tilbake ved feil.
-#   ./deploy.sh rollback         Tilbake til forrige tag som kjørte i prod.
-#   ./deploy.sh status           Hva kjører hvor, og er det friskt.
-#   ./deploy.sh versions         Lokalt bygde tagger, nyest først.
-#   ./deploy.sh start prod|test  Start igjen med taggen som står i .env.
-#   ./deploy.sh stop prod|test   Stopp containeren og frigi GPU-minnet.
-#   ./deploy.sh logs prod|test   Følg loggen.
-#   ./deploy.sh prune [antall]   Slett gamle images. Kan ikke angres.
+# Usage:
+#   ./deploy.sh build [tag] [weights=PATH]
+#                                Build an image. Weights default to
+#                                SLADD_PRODWEIGHTS; the tag is derived from
+#                                git and the model name.
+#   ./deploy.sh test <tag>       Run the tag on the test port (5072), health check.
+#   ./deploy.sh promote <tag>    Put the tag in prod (5071). Rolls back on failure.
+#   ./deploy.sh rollback         Back to the previous tag that ran in prod.
+#   ./deploy.sh status           What runs where, and is it healthy.
+#   ./deploy.sh versions         Locally built tags, newest first.
+#   ./deploy.sh start prod|test  Start again with the tag recorded in .env.
+#   ./deploy.sh stop prod|test   Stop the container and free the GPU memory.
+#   ./deploy.sh logs prod|test   Follow the log.
+#   ./deploy.sh prune [keep]     Delete old images. Cannot be undone.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# server.env eier serverstiene: hvor loggene skal ligge, og hvilken modell
-# et bygg henter når ingen oppgis. Vi mapper SLADD_LOGS -> LOG_ROOT, som er
-# navnet compose bruker i volume-monteringene. Finnes ikke filen, faller
-# compose tilbake på /data/docker, og «build» krever «vekter=».
+# SLADD_LOGS maps to LOG_ROOT because that is the name compose mounts by.
 if [[ -f server.env ]]; then
     # shellcheck source=server.env
     source ./server.env
-    [[ -n ${SLADD_LOGS:-} ]]      && export LOG_ROOT="$SLADD_LOGS"
-    [[ -n ${SLADD_LOGG_DAGER:-} ]] && export LOG_BACKUP_DAYS="$SLADD_LOGG_DAGER"
+    [[ -n ${SLADD_LOGS:-} ]]     && export LOG_ROOT="$SLADD_LOGS"
+    [[ -n ${SLADD_LOG_DAYS:-} ]] && export LOG_BACKUP_DAYS="$SLADD_LOG_DAYS"
 fi
 
 IMAGE=${IMAGE:-smart-sladding}
-ENV_FIL=.env
-HISTORIKK=.deploy-historikk
+ENV_FILE=.env
+HISTORY=.deploy-historikk
 PROD_PORT=5071
 
-# Vektene ligger utenfor byggekonteksten. Docker kopierer bare fra
-# konteksten, så den valgte modellen stages her rett før bygget og
-# fjernes rett etter (se cmd_build).
+# The weights live outside the build context, so they are staged here. Path is fixed by the Dockerfile.
 STAGING=.byggvekter
 
-# Hvilken modell et image ble bygget med, lest tilbake fra imaget selv.
-MERKE_MODELL=no.kartverket.smsl.modell
-MERKE_MODELL_SHA=no.kartverket.smsl.modell.sha256
-MERKE_MODELL_KILDE=no.kartverket.smsl.modell.kilde
+LABEL_MODEL=no.kartverket.smsl.modell
+LABEL_MODEL_SHA=no.kartverket.smsl.modell.sha256
+LABEL_MODEL_SRC=no.kartverket.smsl.modell.kilde
 
-# ── hjelpere ─────────────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────
 
-feil() { echo "FEIL: $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-hent_env() {
-    [[ -f $ENV_FIL ]] || return 0
-    # grep-en må ikke få velte kalleren: uten «|| true» gjør pipefail en
-    # manglende nøkkel til exit 1, og «x=$(hent_env NOKKEL)» dreper da
-    # skriptet under set -e før feilmeldingen vår rekker å bli skrevet.
-    { grep "^${1}=" "$ENV_FIL" 2>/dev/null || true; } | tail -1 | cut -d= -f2-
+get_env() {
+    [[ -f $ENV_FILE ]] || return 0
+    # "|| true" keeps a missing key from killing the caller under set -e + pipefail.
+    { grep "^${1}=" "$ENV_FILE" 2>/dev/null || true; } | tail -1 | cut -d= -f2-
 }
 
-sett_env() {
-    local nokkel=$1 verdi=$2 tmp
-    touch "$ENV_FIL"
+set_env() {
+    local key=$1 value=$2 tmp
+    touch "$ENV_FILE"
     tmp=$(mktemp)
-    if grep -q "^${nokkel}=" "$ENV_FIL"; then
-        sed "s|^${nokkel}=.*|${nokkel}=${verdi}|" "$ENV_FIL" > "$tmp"
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        sed "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" > "$tmp"
     else
-        cat "$ENV_FIL" > "$tmp"
-        echo "${nokkel}=${verdi}" >> "$tmp"
+        cat "$ENV_FILE" > "$tmp"
+        echo "${key}=${value}" >> "$tmp"
     fi
-    mv "$tmp" "$ENV_FIL"
+    mv "$tmp" "$ENV_FILE"
 }
 
-# Sorterbar og sporbar: dato + commit + modell. "-dirty" hvis treet ikke
-# er rent, så et image bygget på ucommittede endringer aldri kan forveksles
-# med en commit — og aldri havner i prod ved et uhell (se cmd_promote).
-#
-# Modellnavnet må stå i taggen. Vektene ligger utenfor repoet, så commiten
-# alene sier ikke lenger hva imaget inneholder: samme kode med to modeller
-# ville ellers fått samme tag, og «rollback» ville rullet tilbake koden uten
-# modellen. sha256-en av vektfilen ligger som merkelapp på imaget.
+# date + commit + model: the commit alone would not distinguish two models built from the same code.
 auto_tag() {
-    local modell=$1 sha suffiks=""
-    sha=$(git rev-parse --short=8 HEAD 2>/dev/null) || feil "ikke et git-repo — oppgi tag manuelt"
-    git diff --quiet && git diff --cached --quiet || suffiks="-dirty"
-    echo "$(date +%Y%m%d)-${sha}-$(tag_slug "$modell")${suffiks}"
+    local model=$1 sha suffix=""
+    sha=$(git rev-parse --short=8 HEAD 2>/dev/null) || die "not a git repo. Give the tag manually"
+    git diff --quiet && git diff --cached --quiet || suffix="-dirty"
+    echo "$(date +%Y%m%d)-${sha}-$(tag_slug "$model")${suffix}"
 }
 
-# Docker-tagger tåler bare [a-zA-Z0-9._-]. Modellnavn kommer fra mappenavn
-# på serveren og kan inneholde hva som helst.
+# Docker tags only accept [a-zA-Z0-9._-]; model names come from arbitrary directory names.
 tag_slug() {
     printf '%s' "$1" \
         | tr '[:upper:]' '[:lower:]' \
@@ -102,8 +83,8 @@ tag_slug() {
         | cut -c1-40
 }
 
-# sha256sum finnes på Linux, shasum på macOS.
-fil_sha256() {
+# sha256sum on Linux, shasum on macOS.
+file_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d" " -f1
     else
@@ -111,342 +92,326 @@ fil_sha256() {
     fi
 }
 
-# Modellnavnet et image ble bygget med. Tomt for images bygget før
-# merkelappene fantes.
-modell_i_image() {
+# Empty for images built before the labels existed.
+image_model() {
     docker image inspect "${IMAGE}:${1}" \
-        --format "{{index .Config.Labels \"${MERKE_MODELL}\"}}" 2>/dev/null || true
+        --format "{{index .Config.Labels \"${LABEL_MODEL}\"}}" 2>/dev/null || true
 }
 
-# Utleder modellnavnet fra stien til vektfilen. Publiserte modeller heter
-# <navn>/<navn>.pt og er selvbeskrivende; rå ultralytics-kjøringer heter
-# <run>/weights/best.pt, og da er run-navnet det eneste navnet som finnes.
-modell_navn_fra_sti() {
-    local sti=$1 navn
-    navn=$(basename "$sti"); navn=${navn%.pt}
-    if [[ $navn == best || $navn == last ]]; then
-        navn=$(basename "$(dirname "$(dirname "$sti")")")
+# Published models are <name>/<name>.pt; raw runs are <run>/weights/best.pt, where only the run dir names it.
+model_name_from_path() {
+    local path=$1 name
+    name=$(basename "$path"); name=${name%.pt}
+    if [[ $name == best || $name == last ]]; then
+        name=$(basename "$(dirname "$(dirname "$path")")")
     fi
-    echo "$navn"
+    echo "$name"
 }
 
-image_finnes() {
+image_exists() {
     docker image inspect "${IMAGE}:${1}" >/dev/null 2>&1
 }
 
-krev_image() {
-    image_finnes "$1" \
-        || feil "finner ikke ${IMAGE}:${1}. Imagene finnes bare lokalt, så den må bygges: ./deploy.sh build ${1}"
+require_image() {
+    image_exists "$1" \
+        || die "cannot find ${IMAGE}:${1}. Images exist only locally, so it must be built: ./deploy.sh build ${1}"
 }
 
-# «prod» eller «test» — alt annet er en skrivefeil vi ikke skal gjette på.
-krev_mal() {
+# "prod" or "test". Anything else is a typo we must not guess at.
+require_target() {
     case ${1:-} in
         prod|test) return 0 ;;
-        '') feil "oppgi mål: «prod» eller «test»" ;;
-        *) feil "ukjent mål «${1}». Bruk «prod» eller «test»" ;;
+        '') die "give a target: \"prod\" or \"test\"" ;;
+        *) die "unknown target \"${1}\". Use \"prod\" or \"test\"" ;;
     esac
 }
 
-# Test-tjenesten ligger bak en compose-profil; prod har ingen.
-profil_for() {
+# The test service sits behind a compose profile; prod has none.
+profile_for() {
     [[ $1 == test ]] && echo "--profile test" || true
 }
 
-# Porten et mål eksponeres på. 5071 er prod og bare prod.
+# The port a target is exposed on. 5071 is prod and only prod.
 port_for() {
     if [[ $1 == prod ]]; then
         echo "$PROD_PORT"
     else
-        local p; p=$(hent_env TEST_PORT); p=${p:-5072}
-        [[ $p == "$PROD_PORT" ]] && feil "TEST_PORT er satt til ${PROD_PORT}, som er prod-porten"
+        local p; p=$(get_env TEST_PORT); p=${p:-5072}
+        [[ $p == "$PROD_PORT" ]] && die "TEST_PORT is set to ${PROD_PORT}, which is the prod port"
         echo "$p"
     fi
 }
 
-# Taggen .env sier skal kjøre for et mål.
+# The tag .env says should run for a target.
 tag_for() {
-    if [[ $1 == prod ]]; then hent_env PROD_TAG; else hent_env TEST_TAG; fi
+    if [[ $1 == prod ]]; then get_env PROD_TAG; else get_env TEST_TAG; fi
 }
 
-# Venter til /health svarer. Modellene lastes først ved første /model-kall,
-# så en frisk container svarer normalt innen sekunder.
-helsesjekk() {
-    local port=$1 forsok=${2:-45} i
-    for (( i=1; i<=forsok; i++ )); do
+# Models load on the first /model call, so a healthy container answers within seconds.
+health_check() {
+    local port=$1 tries=${2:-45} i
+    for (( i=1; i<=tries; i++ )); do
         if curl -fsS --max-time 3 "http://localhost:${port}/health" >/dev/null 2>&1; then
-            echo "  /health svarer på port ${port} (etter ${i} forsøk)"
+            echo "  /health answers on port ${port} (after ${i} tries)"
             return 0
         fi
         sleep 2
     done
-    echo "  /health svarte ikke på port ${port} innen $(( forsok * 2 )) sekunder" >&2
+    echo "  /health did not answer on port ${port} within $(( tries * 2 )) seconds" >&2
     return 1
 }
 
-# ── kommandoer ───────────────────────────────────────────────────────
+# ── commands ─────────────────────────────────────────────────────────
 
 cmd_build() {
-    local tag="" vekter="" arg
+    local tag="" weights="" arg
     for arg in "$@"; do
         case $arg in
-            vekter=*) vekter=${arg#vekter=} ;;
-            -*)  feil "ukjent flagg «${arg}». Bruk: ./deploy.sh build [tag] [vekter=STI]" ;;
-            *)   [[ -z $tag ]] || feil "for mange argumenter: «${arg}»"
+            weights=*) weights=${arg#weights=} ;;
+            -*)  die "unknown flag \"${arg}\". Usage: ./deploy.sh build [tag] [weights=PATH]" ;;
+            *)   [[ -z $tag ]] || die "too many arguments: \"${arg}\""
                  tag=$arg ;;
         esac
     done
 
     local proxy=${PROXY:-http://159.162.48.7:3128}
 
-    # Hvilken modell som bygges inn er et eksplisitt valg, men det vanlige
-    # valget står i server.env. Uten en modell får vi et image som starter
-    # fint og feiler først ved første /model-kall.
-    vekter=${vekter:-${SLADD_PRODVEKTER:-}}
-    [[ -n $vekter ]] \
-        || feil "ingen vekter valgt. Sett SLADD_PRODVEKTER i server.env, eller oppgi dem: ./deploy.sh build vekter=\$SLADD_VEKTER/<modell>/<modell>.pt"
-    [[ -f $vekter ]] \
-        || feil "finner ikke vektfilen «${vekter}». Se hva som er publisert: ls \$SLADD_VEKTER"
+    # Without a model the image starts fine and fails on the first /model call.
+    weights=${weights:-${SLADD_PRODWEIGHTS:-}}
+    [[ -n $weights ]] \
+        || die "no weights chosen. Set SLADD_PRODWEIGHTS in server.env, or pass them: ./deploy.sh build weights=\$SLADD_WEIGHTS/<model>/<model>.pt"
+    [[ -f $weights ]] \
+        || die "cannot find the weights file \"${weights}\". See what is published: ls \$SLADD_WEIGHTS"
 
-    local bunt navn sha
-    bunt=$(cd "$(dirname "$vekter")" && pwd)
-    navn=$(modell_navn_fra_sti "$vekter")
-    sha=$(fil_sha256 "$vekter")
-    tag=${tag:-$(auto_tag "$navn")}
+    local bundle name sha
+    bundle=$(cd "$(dirname "$weights")" && pwd)
+    name=$(model_name_from_path "$weights")
+    sha=$(file_sha256 "$weights")
+    tag=${tag:-$(auto_tag "$name")}
 
-    if image_finnes "$tag"; then
-        echo "${IMAGE}:${tag} finnes allerede. Bygger på nytt og overskriver taggen."
+    if image_exists "$tag"; then
+        echo "${IMAGE}:${tag} already exists. Rebuilding and overwriting the tag."
     fi
 
-    echo "Modell: ${navn}"
-    echo "  fil:    ${vekter}"
+    echo "Model: ${name}"
+    echo "  file:   ${weights}"
     echo "  sha256: ${sha:0:16}…"
 
-    # Docker kopierer bare fra byggekonteksten, så modellen må innom repoet.
-    # Mappen ryddes uansett hvordan bygget ender — den skal aldri bli
-    # liggende og forveksles med et modellager.
+    # Cleaned up however the build ends, so it is never mistaken for a model store.
     rm -rf "$STAGING"
     mkdir -p "$STAGING"
     trap 'rm -rf "$STAGING"' EXIT
-    cp "$vekter" "$STAGING/modell.pt"
-    if [[ -f $bunt/modell.json ]]; then
-        cp "$bunt/modell.json" "$STAGING/modell.json"
+    cp "$weights" "$STAGING/modell.pt"
+    if [[ -f $bundle/modell.json ]]; then
+        cp "$bundle/modell.json" "$STAGING/modell.json"
     else
-        echo "  ADVARSEL: ingen modell.json ved siden av vektfilen. Imaget vet da ikke"
-        echo "            hva modellen er trent på. Publiser modellen med"
-        echo "            «make -C \$SLADD_TRAIN publiser» i stedet for å kopiere .pt-filen."
+        echo "  WARNING: no modell.json next to the weights file. The image will not"
+        echo "           know what the model was trained on. Publish the model with"
+        echo "           \"make -C \$SLADD_TRAIN publiser\" instead of copying the .pt file."
     fi
 
     echo
-    echo "Bygger ${IMAGE}:${tag} ..."
+    echo "Building ${IMAGE}:${tag} ..."
     docker build \
         --build-arg HTTP_PROXY="$proxy" \
         --build-arg HTTPS_PROXY="$proxy" \
-        --label org.opencontainers.image.revision="$(git rev-parse HEAD 2>/dev/null || echo ukjent)" \
+        --label org.opencontainers.image.revision="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
         --label org.opencontainers.image.version="$tag" \
-        --label "${MERKE_MODELL}=${navn}" \
-        --label "${MERKE_MODELL_SHA}=${sha}" \
-        --label "${MERKE_MODELL_KILDE}=${vekter}" \
+        --label "${LABEL_MODEL}=${name}" \
+        --label "${LABEL_MODEL_SHA}=${sha}" \
+        --label "${LABEL_MODEL_SRC}=${weights}" \
         -t "${IMAGE}:${tag}" .
 
     echo
-    echo "Ferdig: ${IMAGE}:${tag}  (modell ${navn})"
-    echo "Test den:      ./deploy.sh test ${tag}"
+    echo "Done: ${IMAGE}:${tag}  (model ${name})"
+    echo "Test it:  ./deploy.sh test ${tag}"
 }
 
 cmd_test() {
     local tag=${1:-}
-    [[ -n $tag ]] || feil "oppgi tag: ./deploy.sh test <tag>   (se ./deploy.sh versions)"
-    krev_image "$tag"
+    [[ -n $tag ]] || die "give a tag: ./deploy.sh test <tag>   (see ./deploy.sh versions)"
+    require_image "$tag"
 
     local port; port=$(port_for test)
 
-    sett_env TEST_TAG "$tag"
-    echo "Starter ${IMAGE}:${tag} på port ${port} ..."
+    set_env TEST_TAG "$tag"
+    echo "Starting ${IMAGE}:${tag} on port ${port} ..."
     docker compose --profile test up -d --force-recreate test
 
-    if helsesjekk "$port"; then
+    if health_check "$port"; then
         echo
-        echo "Test kjører på http://localhost:${port}"
-        echo "  curl -X POST http://localhost:${port}/model -H 'Content-Type: application/pdf' --data-binary @dokument.pdf"
-        echo "Fornøyd?       ./deploy.sh promote ${tag}"
-        echo "Stopp testen:  ./deploy.sh stop test"
+        echo "Test runs on http://localhost:${port}"
+        echo "  curl -X POST http://localhost:${port}/model -H 'Content-Type: application/pdf' --data-binary @document.pdf"
+        echo "Happy with it?  ./deploy.sh promote ${tag}"
+        echo "Stop the test:  ./deploy.sh stop test"
     else
         echo
-        echo "Se hva som gikk galt: ./deploy.sh logs test" >&2
+        echo "See what went wrong: ./deploy.sh logs test" >&2
         exit 1
     fi
 }
 
 cmd_promote() {
     local tag=${1:-}
-    [[ -n $tag ]] || feil "oppgi tag eksplisitt: ./deploy.sh promote <tag>   (se ./deploy.sh versions)"
-    krev_image "$tag"
+    [[ -n $tag ]] || die "give the tag explicitly: ./deploy.sh promote <tag>   (see ./deploy.sh versions)"
+    require_image "$tag"
 
     if [[ $tag == *-dirty ]]; then
-        feil "«${tag}» er bygget på ucommittede endringer og skal ikke i prod. Commit, bygg på nytt, og promoter den taggen."
+        die "\"${tag}\" was built on uncommitted changes and must not go to prod. Commit, rebuild, and promote that tag."
     fi
 
-    local forrige; forrige=$(hent_env PROD_TAG)
-    echo "Prod (port ${PROD_PORT}): ${forrige:-ingenting}  ->  ${tag}"
-    echo "Modell:                  $(modell_i_image "$forrige")  ->  $(modell_i_image "$tag")"
-    read -r -p "Fortsette? [j/N] " svar
-    case $svar in
-        j|J|ja|Ja|JA) ;;
-        *) echo "Avbrutt."; exit 0 ;;
+    local previous; previous=$(get_env PROD_TAG)
+    echo "Prod (port ${PROD_PORT}): ${previous:-nothing}  ->  ${tag}"
+    echo "Model:                   $(image_model "$previous")  ->  $(image_model "$tag")"
+    read -r -p "Continue? [j/N] " answer
+    case $answer in
+        j|J|yes|Ja|JA) ;;
+        *) echo "Aborted."; exit 0 ;;
     esac
 
-    sett_env PROD_TAG "$tag"
+    set_env PROD_TAG "$tag"
     docker compose up -d --force-recreate prod
 
-    if helsesjekk "$PROD_PORT"; then
-        printf '%s\t%s\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$tag" "${forrige:--}" >> "$HISTORIKK"
+    if health_check "$PROD_PORT"; then
+        printf '%s\t%s\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$tag" "${previous:--}" >> "$HISTORY"
         echo
-        echo "${tag} er i prod på port ${PROD_PORT}."
-        [[ -n $forrige ]] && echo "Tilbake til ${forrige}:  ./deploy.sh rollback"
+        echo "${tag} is in prod on port ${PROD_PORT}."
+        [[ -n $previous ]] && echo "Back to ${previous}:  ./deploy.sh rollback"
     else
         echo >&2
-        if [[ -n $forrige ]] && image_finnes "$forrige"; then
-            echo "Ruller tilbake til ${forrige} ..." >&2
-            sett_env PROD_TAG "$forrige"
+        if [[ -n $previous ]] && image_exists "$previous"; then
+            echo "Rolling back to ${previous} ..." >&2
+            set_env PROD_TAG "$previous"
             docker compose up -d --force-recreate prod
-            helsesjekk "$PROD_PORT" || echo "ADVARSEL: ${forrige} svarer heller ikke. Prod er nede." >&2
+            health_check "$PROD_PORT" || echo "WARNING: ${previous} does not answer either. Prod is down." >&2
         else
-            echo "Ingen forrige tag å rulle tilbake til. Prod er nede." >&2
+            echo "No previous tag to roll back to. Prod is down." >&2
         fi
         exit 1
     fi
 }
 
 cmd_rollback() {
-    [[ -s $HISTORIKK ]] || feil "ingen deploy-historikk i ${HISTORIKK}"
-    local forrige; forrige=$(tail -1 "$HISTORIKK" | cut -f3)
-    [[ -n $forrige && $forrige != "-" ]] || feil "forrige deploy hadde ingen tag å gå tilbake til"
-    image_finnes "$forrige" \
-        || feil "${forrige} står i historikken, men imaget finnes ikke lenger lokalt. Bygg det på nytt fra commiten taggen navngir."
-    echo "Ruller prod tilbake til ${forrige}."
-    cmd_promote "$forrige"
+    [[ -s $HISTORY ]] || die "no deploy history in ${HISTORY}"
+    local previous; previous=$(tail -1 "$HISTORY" | cut -f3)
+    [[ -n $previous && $previous != "-" ]] || die "the previous deploy had no tag to go back to"
+    image_exists "$previous" \
+        || die "${previous} is in the history, but the image no longer exists locally. Rebuild it from the commit the tag names."
+    echo "Rolling prod back to ${previous}."
+    cmd_promote "$previous"
 }
 
 cmd_status() {
     local prod_tag test_tag
-    prod_tag=$(hent_env PROD_TAG || true)
-    test_tag=$(hent_env TEST_TAG || true)
+    prod_tag=$(get_env PROD_TAG || true)
+    test_tag=$(get_env TEST_TAG || true)
 
-    echo "Image: ${IMAGE}  (bare lokalt på denne serveren)"
-    echo "Logger: ${LOG_ROOT:-/data/docker}  (${LOG_BACKUP_DAYS:-30} døgn historikk)"
-    echo "Vekter: ${SLADD_VEKTER:-(ikke satt)}  (standardmodell: ${SLADD_PRODVEKTER:-ingen})"
-    echo "Prod  (port ${PROD_PORT}):  ${prod_tag}  modell: $(modell_i_image "$prod_tag")"
-    echo "Test  (port $(port_for test)):  ${test_tag}  modell: $(modell_i_image "$test_tag")"
+    echo "Image:   ${IMAGE}  (local to this server only)"
+    echo "Logs:    ${LOG_ROOT:-/data/docker}  (${LOG_BACKUP_DAYS:-30} days of history)"
+    echo "Weights: ${SLADD_WEIGHTS:-(not set)}  (default model: ${SLADD_PRODWEIGHTS:-none})"
+    echo "Prod  (port ${PROD_PORT}):  ${prod_tag}  model: $(image_model "$prod_tag")"
+    echo "Test  (port $(port_for test)):  ${test_tag}  model: $(image_model "$test_tag")"
     echo
     docker compose --profile test ps -a --format 'table {{.Name}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || true
     echo
-    echo "Siste deployer til prod (tid, tag, forrige tag):"
-    tail -5 "$HISTORIKK" 2>/dev/null || echo "  (ingen)"
+    echo "Last deploys to prod (time, tag, previous tag):"
+    tail -5 "$HISTORY" 2>/dev/null || echo "  (none)"
 }
 
-# Taggen navngir modellen, men bare i forkortet form. Merkelappen på
-# imaget er fasiten, så den leses ut per tag.
+# The tag shortens the model name, so the image label is read per tag as the authority.
 cmd_versions() {
-    local tag opprettet storrelse
-    printf '%-46s %-16s %-9s %s\n' TAG ALDER STØRRELSE MODELL
-    while IFS=$'\t' read -r tag opprettet storrelse; do
+    local tag created size
+    printf '%-46s %-16s %-9s %s\n' TAG AGE SIZE MODEL
+    while IFS=$'\t' read -r tag created size; do
         [[ -z $tag || $tag == "<none>" ]] && continue
         printf '%-46s %-16s %-9s %s\n' \
-            "$tag" "$opprettet" "$storrelse" "$(modell_i_image "$tag")"
+            "$tag" "$created" "$size" "$(image_model "$tag")"
     done < <(docker images "$IMAGE" \
                 --format '{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}' \
                 --filter 'dangling=false')
 }
 
 cmd_logs() {
-    local mal=${1:-prod}; krev_mal "$mal"
-    local -a profil=(); read -r -a profil <<< "$(profil_for "$mal")"
-    docker compose ${profil[@]+"${profil[@]}"} logs -f "$mal"
+    local target=${1:-prod}; require_target "$target"
+    local -a profile=(); read -r -a profile <<< "$(profile_for "$target")"
+    docker compose ${profile[@]+"${profile[@]}"} logs -f "$target"
 }
 
 cmd_start() {
-    local mal=${1:-}; krev_mal "$mal"
-    local -a profil=(); read -r -a profil <<< "$(profil_for "$mal")"
+    local target=${1:-}; require_target "$target"
+    local -a profile=(); read -r -a profile <<< "$(profile_for "$target")"
 
-    # Starter det .env allerede peker på — bytter aldri versjon. Skal du
-    # bytte, er det «promote» (prod) eller «test <tag>» (test).
-    local tag; tag=$(tag_for "$mal")
+    # Starts what .env points at; switching version is "promote" or "test <tag>".
+    local tag; tag=$(tag_for "$target")
     [[ -n $tag && $tag != "ikke-satt" ]] \
-        || feil "ingen tag satt for ${mal}. Kjør «./deploy.sh $( [[ $mal == prod ]] && echo 'promote' || echo 'test' ) <tag>» først."
-    krev_image "$tag"
+        || die "no tag set for ${target}. Run \"./deploy.sh $( [[ $target == prod ]] && echo 'promote' || echo 'test' ) <tag>\" first."
+    require_image "$tag"
 
-    local port; port=$(port_for "$mal")
-    echo "Starter ${mal} (${IMAGE}:${tag}) på port ${port} ..."
-    docker compose ${profil[@]+"${profil[@]}"} up -d "$mal"
+    local port; port=$(port_for "$target")
+    echo "Starting ${target} (${IMAGE}:${tag}) on port ${port} ..."
+    docker compose ${profile[@]+"${profile[@]}"} up -d "$target"
 
-    helsesjekk "$port" || { echo "Se hva som gikk galt: ./deploy.sh logs ${mal}" >&2; exit 1; }
+    health_check "$port" || { echo "See what went wrong: ./deploy.sh logs ${target}" >&2; exit 1; }
 }
 
 cmd_stop() {
-    local mal=${1:-}; krev_mal "$mal"
-    local -a profil=(); read -r -a profil <<< "$(profil_for "$mal")"
+    local target=${1:-}; require_target "$target"
+    local -a profile=(); read -r -a profile <<< "$(profile_for "$target")"
 
-    # Å stoppe prod er å ta ned produksjon. Test kan stoppes uten spørsmål.
-    if [[ $mal == prod ]]; then
-        echo "Dette tar ned produksjon på port ${PROD_PORT}."
-        read -r -p "Fortsette? [j/N] " svar
-        case $svar in
-            j|J|ja|Ja|JA) ;;
-            *) echo "Avbrutt."; return 0 ;;
+    # Stopping prod takes production down. Test can be stopped without asking.
+    if [[ $target == prod ]]; then
+        echo "This takes production down on port ${PROD_PORT}."
+        read -r -p "Continue? [j/N] " answer
+        case $answer in
+            j|J|yes|Ja|JA) ;;
+            *) echo "Aborted."; return 0 ;;
         esac
     fi
 
-    # «stop», ikke «rm»: containeren blir stående, så «start» henter opp
-    # nøyaktig samme oppsett igjen. GPU-minnet frigis uansett, siden
-    # prosessen dør. restart-policyen tar den ikke opp av seg selv etter
-    # en eksplisitt stopp.
-    docker compose ${profil[@]+"${profil[@]}"} stop "$mal"
-    echo "${mal} er stoppet. Start igjen med: ./deploy.sh start ${mal}"
+    # "stop", not "rm", so "start" brings up exactly the same setup again.
+    docker compose ${profile[@]+"${profile[@]}"} stop "$target"
+    echo "${target} is stopped. Start again with: ./deploy.sh start ${target}"
 }
 
-# Imagene er store (titalls GB), så disken fylles fort. Men de finnes
-# bare her: sletter du en tag, er den eneste veien tilbake å bygge den
-# på nytt fra commiten taggen navngir. Vi verner de N nyeste, taggen i
-# prod, taggen i test, og alt som står i deploy-historikken.
+# Deletion is irreversible, so the N newest, prod, test and everything in the history are protected.
 cmd_prune() {
-    local behold=${1:-5}
-    local prod_tag; prod_tag=$(hent_env PROD_TAG)
-    local test_tag; test_tag=$(hent_env TEST_TAG)
-    local historiske=""
-    [[ -f $HISTORIKK ]] && historiske=$(cut -f2,3 "$HISTORIKK" | tr '\t' '\n' | sort -u)
+    local keep=${1:-5}
+    local prod_tag; prod_tag=$(get_env PROD_TAG)
+    local test_tag; test_tag=$(get_env TEST_TAG)
+    local historic=""
+    [[ -f $HISTORY ]] && historic=$(cut -f2,3 "$HISTORY" | tr '\t' '\n' | sort -u)
 
-    local -a slett=()
+    local -a doomed=()
     while read -r tag; do
         [[ -z $tag || $tag == "<none>" ]] && continue
         [[ $tag == "$prod_tag" || $tag == "$test_tag" ]] && continue
-        grep -qxF "$tag" <<< "$historiske" && continue
-        slett+=("$tag")
-    done < <(docker images "$IMAGE" --format '{{.Tag}}' | tail -n "+$(( behold + 1 ))")
+        grep -qxF "$tag" <<< "$historic" && continue
+        doomed+=("$tag")
+    done < <(docker images "$IMAGE" --format '{{.Tag}}' | tail -n "+$(( keep + 1 ))")
 
-    if [[ ${#slett[@]} -eq 0 ]]; then
-        echo "Ingenting å rydde (verner de ${behold} nyeste, prod, test og alt i historikken)."
+    if [[ ${#doomed[@]} -eq 0 ]]; then
+        echo "Nothing to clean up (protecting the ${keep} newest, prod, test and everything in the history)."
         return 0
     fi
 
-    echo "Sletter ${#slett[@]} image(r) permanent:"
-    printf '  %s\n' "${slett[@]}"
+    echo "Deleting ${#doomed[@]} image(s) permanently:"
+    printf '  %s\n' "${doomed[@]}"
     echo
-    echo "Imagene finnes bare lokalt. Eneste vei tilbake er å bygge på nytt"
-    echo "fra commiten taggen navngir."
-    read -r -p "Fortsette? [j/N] " svar
-    case $svar in
-        j|J|ja|Ja|JA) ;;
-        *) echo "Avbrutt."; return 0 ;;
+    echo "The images exist only locally. The only way back is to rebuild from"
+    echo "the commit the tag names."
+    read -r -p "Continue? [j/N] " answer
+    case $answer in
+        j|J|yes|Ja|JA) ;;
+        *) echo "Aborted."; return 0 ;;
     esac
-    for tag in "${slett[@]}"; do docker rmi "${IMAGE}:${tag}" || true; done
+    for tag in "${doomed[@]}"; do docker rmi "${IMAGE}:${tag}" || true; done
 }
 
-# ── ruting ───────────────────────────────────────────────────────────
+# ── routing ──────────────────────────────────────────────────────────
 
-kmd=${1:-status}
+cmd=${1:-status}
 shift || true
-case $kmd in
+case $cmd in
     build)      cmd_build "$@" ;;
     test)       cmd_test "$@" ;;
     promote)    cmd_promote "$@" ;;
@@ -459,5 +424,5 @@ case $kmd in
     prune)      cmd_prune "$@" ;;
     -h|--help|help)
         awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0" ;;
-    *) feil "ukjent kommando «${kmd}». Kjør ./deploy.sh --help" ;;
+    *) die "unknown command \"${cmd}\". Run ./deploy.sh --help" ;;
 esac

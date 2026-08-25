@@ -3,67 +3,66 @@ from datetime import datetime
 from pathlib import Path
 
 
-def lagre_resultat(resultat, mappe=".", beskrivelse=None, logg=None):
-    if resultat is None:
+def write_result_files(result, folder=".", description=None, log=None):
+    if result is None:
         return None
 
-    tidsstempel = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    mappenavn = f"result-{tidsstempel}"
-    if beskrivelse:
-        mappenavn += f"-{beskrivelse}"
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    dir_name = f"result-{timestamp}"
+    if description:
+        dir_name += f"-{description}"
 
-    kjoring_mappe = Path(mappe) / mappenavn
-    kjoring_mappe.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(folder) / dir_name
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    sammendrag_fil = kjoring_mappe / "sammendrag.csv"
-    detaljer_fil = kjoring_mappe / "detaljer.csv"
+    summary_file = run_dir / "sammendrag.csv"
+    details_file = run_dir / "detaljer.csv"
 
-    # --- sammendrag ---
-    with open(sammendrag_fil, "w", newline="", encoding="utf-8") as f:
+    with open(summary_file, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
 
-        w.writerow(["## Overordnet"])
-        w.writerow(["recall_pst", "truffet", "fasit", "pred",
-                    "overflod", "samlet_overlapp_pst", "terskel_pst"])
+        w.writerow(["## Overall"])
+        w.writerow(["recall_pct", "hit", "fasit", "pred",
+                    "surplus", "total_overlap_pct", "threshold_pct"])
         w.writerow([
-            round(resultat["recall"] * 100, 1),
-            resultat["truffet"],
-            resultat["fasit"],
-            resultat["pred"],
-            resultat["overflod"],
-            round(resultat.get("samlet_overlapp", 0.0) * 100, 1),
-            round(resultat.get("terskel", 0.0) * 100, 1),
+            round(result["recall"] * 100, 1),
+            result["hit"],
+            result["fasit"],
+            result["pred"],
+            result["surplus"],
+            round(result.get("total_overlap", 0.0) * 100, 1),
+            round(result.get("threshold", 0.0) * 100, 1),
         ])
 
         w.writerow([])
         w.writerow(["## Recall per type"])
-        w.writerow(["type", "truffet", "fasit_totalt", "recall_pst"])
-        for t, (tr, tot) in sorted(resultat["pr_type"].items()):
-            w.writerow([t or "(tom)", tr, tot, round(tr / tot * 100, 1) if tot else 0])
+        w.writerow(["type", "hit", "truth_total", "recall_pct"])
+        for t, (tr, tot) in sorted(result["pr_type"].items()):
+            w.writerow([t or "(empty)", tr, tot, round(tr / tot * 100, 1) if tot else 0])
 
-        bom = resultat.get("bom_filer", [])
-        if bom:
+        miss = result.get("miss_files", [])
+        if miss:
             w.writerow([])
             w.writerow(["## Filer med bom"])
-            w.writerow(["fil", "side", "bom", "fasit_totalt"])
-            for rad in bom:
-                w.writerow([rad["fil"], rad["side"], rad["bom"], rad["fasit_totalt"]])
+            w.writerow(["fil", "side", "bom", "truth_total"])
+            for row in miss:
+                w.writerow([row["fil"], row["side"], row["bom"], row["truth_total"]])
 
-    # --- detaljer per fasit-boks ---
-    with open(detaljer_fil, "w", newline="", encoding="utf-8") as f:
+    # One row per truth box
+    with open(details_file, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[
             "fil", "side", "fasit_nr", "type",
-            "dekning_pst", "resultat", "kilde", "conf",
+            "coverage_pct", "result", "kilde", "conf",
             "fasit_x0", "fasit_y0", "fasit_x1", "fasit_y1",
         ])
         w.writeheader()
-        w.writerows(resultat.get("detaljer", []))
+        w.writerows(result.get("details", []))
 
-    if logg is not None:
-        logg_fil = kjoring_mappe / "logg.txt"
-        logg_fil.write_text(logg, encoding="utf-8")
-        print(f"Logg:       {logg_fil}")
+    if log is not None:
+        log_file = run_dir / "logg.txt"
+        log_file.write_text(log, encoding="utf-8")
+        print(f"Log:      {log_file}")
 
-    print(f"Sammendrag: {sammendrag_fil}")
-    print(f"Detaljer:   {detaljer_fil}")
-    return kjoring_mappe
+    print(f"Summary:  {summary_file}")
+    print(f"Details:  {details_file}")
+    return run_dir

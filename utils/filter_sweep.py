@@ -1,27 +1,18 @@
 """
-Fasit-sentrisk evaluering av filterkonfigurasjoner.
+Ground-truth-centric evaluation of filter configurations.
 
-Måler hver konfigurasjon på det som faktisk betyr noe:
+    lost    = ground-truth boxes that lose ALL coverage (removing one
+              prediction while another still covers the box costs nothing)
+    ov.rm   = pure oversladdinger (BOM) removed
+    red.rm  = covering predictions removed without loss, free gain
 
-    tapt    = fasit-bokser som mister ALL dekning etter filtrering
-              (én prediksjon fjernet mens en annen fortsatt dekker samme
-              fasit-boks koster ingenting — feltet er fremdeles sladdet)
-    ov.fj   = rene oversladdinger (BOM) fjernet
-    red.fj  = dekkende prediksjoner fjernet uten tap — gratis gevinst
-    recall% = andel fasit-bokser fortsatt dekket
+The Pareto front keeps only the non-dominated configurations: per level of
+`lost`, the one removing most oversladdinger. Without --holdout, "best of 500
+configurations" is mostly overfitting.
 
-Pareto-fronten koker de hundrevis av kombinasjonene ned til de få som ikke er
-dominert av en annen: for hvert nivå av `tapt`, konfigurasjonen som fjerner
-flest oversladdinger. Det er hele avveiningskurven, uten støyen.
-
-Med --holdout velges konfigurasjonen på ett sett dokumenter og måles på et
-annet. Uten det er «beste av 500 konfigurasjoner» stort sett overtilpasning.
-
-Kjør:
-    python utils/filter_sweep.py \\
-        --fasit-csv /path/to/labels.csv \\
-        --res-csv /path/to/resultat.csv \\
-        --kostnad 20 --holdout 0.3 --ut /tmp/sweep.txt
+Run:
+    python utils/filter_sweep.py --truth-csv labels.csv --res-csv resultat.csv \\
+        --cost 20 --holdout 0.3 --out /tmp/sweep.txt
 """
 
 import argparse
@@ -33,1164 +24,1155 @@ from itertools import product
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from filter_felles import (ANBEFALT_TERSKEL, KRITERIER, STD_KRITERIUM,
-                           STD_SLURV_FAKTOR, STD_TERSKEL, baseline,
-                           bygg_datasett, evaluer, lag_filter,
-                           lag_filter_per_kilde, les_fasit, les_kjorte_dok, les_prediksjoner,
-                           match_metrikker, pareto_front, skriv_oppsummering,
-                           splitt_dokumenter)
+from filter_common import (RECOMMENDED_THRESHOLDS, CRITERIA, STD_CRITERION,
+                           STD_SLOPPINESS_FACTOR, STD_THRESHOLD, baseline,
+                           build_dataset, measure_filter, make_filter,
+                           make_filter_per_source, read_truth_boxes, read_processed_docs, read_predictions,
+                           match_metrics, pareto_front, write_summary,
+                           split_by_document)
 
-# En sweep-rad: måling, kort etikett, og spesifikasjonen som gjenskaper
-# filteret. spec = {None: kwargs} for et globalt filter, ellers {kilde: kwargs}.
-Rad = namedtuple("Rad", "m etikett spec")
+# spec = {None: kwargs} for a global filter, else {kilde: kwargs}.
+Row = namedtuple("Row", "m label spec")
 
 
-def lag_predikat(spec):
+def make_predicate(spec):
     if None in spec:
-        return lag_filter(**spec[None])
-    return lag_filter_per_kilde(spec)
+        return make_filter(**spec[None])
+    return make_filter_per_source(spec)
 
 
-# ── Sortering ────────────────────────────────────────────────
+# ── Sorting ────────────────────────────────────────────────
 
 SORT_FNS = {
-    "netto":   lambda m: (-m.netto, m.tapt),
-    "ov.fj":   lambda m: (-m.ov_fj, m.tapt),
-    "tapt":    lambda m: (m.tapt, -m.ov_fj),
-    "recall":  lambda m: (-m.recall_etter, -m.ov_fj),
-    "pres":    lambda m: (-m.pres_etter, -m.netto),
-    "ov/tapt": lambda m: (-m.ov_per_tapt, m.tapt),
+    "net":   lambda m: (-m.net, m.lost),
+    "ov.rm":   lambda m: (-m.ov_rm, m.lost),
+    "lost":    lambda m: (m.lost, -m.ov_rm),
+    "recall":  lambda m: (-m.recall_after, -m.ov_rm),
+    "prec":    lambda m: (-m.prec_after, -m.net),
+    "ov/lost": lambda m: (-m.ov_per_lost, m.lost),
 }
-SORT_ALIAS = {"rik.fj": "tapt", "ov/rik": "ov/tapt"}
+SORT_ALIAS = {"correct.rm": "lost", "ov/correct": "ov/lost"}
 
 
-def _sort_fn(navn):
-    return SORT_FNS[SORT_ALIAS.get(navn, navn)]
+def _sort_fn(name):
+    return SORT_FNS[SORT_ALIAS.get(name, name)]
 
 
-# ── Tabellformat ─────────────────────────────────────────────
+# ── Table format ─────────────────────────────────────────────
 
-HODE_MAAL = (f" {'tapt':>6} {'tapt%':>7} │ {'ov.fj':>7} {'ov%':>6} │"
-             f" {'red.fj':>7} │ {'netto':>9} {'ov/tapt':>8} │"
+HEADER_TARGET = (f" {'lost':>6} {'lost%':>7} │ {'ov.rm':>7} {'ov%':>6} │"
+             f" {'red.rm':>7} │ {'net':>9} {'ov/lost':>8} │"
              f" {'recall%':>8} {'pres%':>7}")
 
 
-def _maal_celler(m):
-    ov_tapt = f"{m.ov_per_tapt:.1f}" if m.tapt else ("∞" if m.ov_fj else "–")
-    return (f" {m.tapt:>6} {m.tapt_pst:>6.2f}% │ {m.ov_fj:>7} {m.ov_pst:>5.1f}% │"
-            f" {m.red_fj:>7} │ {m.netto:>+9.0f} {ov_tapt:>8} │"
-            f" {m.recall_etter:>7.2f}% {m.pres_etter:>6.1f}%")
+def _target_cells(m):
+    ov_lost = f"{m.ov_per_lost:.1f}" if m.lost else ("∞" if m.ov_rm else "–")
+    return (f" {m.lost:>6} {m.lost_pct:>6.2f}% │ {m.ov_rm:>7} {m.ov_pct:>5.1f}% │"
+            f" {m.red_rm:>7} │ {m.net:>+9.0f} {ov_lost:>8} │"
+            f" {m.recall_after:>7.2f}% {m.prec_after:>6.1f}%")
 
 
 def _g(v):
-    return f"{v:g}" if v is not None else "av"
+    return f"{v:g}" if v is not None else "off"
 
 
-def _skjules(m, maks_tapt, maks_tapt_pst, min_ov_tapt):
-    return ((maks_tapt is not None and m.tapt > maks_tapt)
-            or (maks_tapt_pst is not None and m.tapt_pst > maks_tapt_pst)
-            or (min_ov_tapt is not None and m.ov_per_tapt <= min_ov_tapt))
+def _hidden(m, max_lost, max_lost_pct, min_ov_lost):
+    return ((max_lost is not None and m.lost > max_lost)
+            or (max_lost_pct is not None and m.lost_pct > max_lost_pct)
+            or (min_ov_lost is not None and m.ov_per_lost <= min_ov_lost))
 
 
-def _skjult_tekst(n, maks_tapt, maks_tapt_pst, min_ov_tapt):
-    krav = []
-    if maks_tapt is not None:
-        krav.append(f"tapt > {maks_tapt:g}")
-    if maks_tapt_pst is not None:
-        krav.append(f"tapt > {maks_tapt_pst:g}%")
-    if min_ov_tapt is not None:
-        krav.append(f"ov/tapt ≤ {min_ov_tapt:g}")
-    return f"  ({n} rader skjult: {' eller '.join(krav)})"
+def _hidden_text(n, max_lost, max_lost_pct, min_ov_lost):
+    requirements = []
+    if max_lost is not None:
+        requirements.append(f"lost > {max_lost:g}")
+    if max_lost_pct is not None:
+        requirements.append(f"lost > {max_lost_pct:g}%")
+    if min_ov_lost is not None:
+        requirements.append(f"ov/lost ≤ {min_ov_lost:g}")
+    return f"  ({n} rows hidden: {' or '.join(requirements)})"
 
 
-# (kort per-kilde-kode, langt CLI-flagg) per filterparameter
-PARAM_KODER = (
+# (short per-kilde code, long CLI flag) per filter parameter
+PARAM_CODES = (
     ("min_elongation", "e", "--elongation"),
-    ("maks_elongation", "emaks", "--maks-elongation"),
-    ("maks_hoyde", "h", "--maks-hoyde"),
-    ("min_hoyde", "hmin", "--min-hoyde"),
-    ("maks_bredde", "b", "--maks-bredde"),
-    ("min_bredde", "bmin", "--min-bredde"),
-    ("min_kortside", "kmin", "--min-kortside"),
-    ("maks_kortside", "kmaks", "--maks-kortside"),
-    ("min_langside", "lmin", "--min-langside"),
-    ("maks_langside", "lmaks", "--maks-langside"),
-    ("maks_areal", "a", "--maks-areal"),
-    ("min_areal_px", "amin", "--min-areal-px"),
-    ("conf_terskel", "c", "--conf"),
-    ("min_siffer", "smin", "--min-siffer"),
-    ("maks_bokstaver", "bmaks", "--maks-bokstaver"),
-    ("min_siffer_run", "rmin", "--min-siffer-run"),
-    ("krev_fnr_kandidat", "fnr", "--krev-fnr-kandidat"),
-    ("avvis_desimal", "des", "--avvis-desimal"),
+    ("max_elongation", "emaks", "--max-elongation"),
+    ("max_height", "h", "--max-height"),
+    ("min_height", "hmin", "--min-height"),
+    ("max_width", "b", "--max-width"),
+    ("min_width", "bmin", "--min-width"),
+    ("min_short_side", "kmin", "--min-short-side"),
+    ("max_short_side", "kmaks", "--max-short-side"),
+    ("min_long_side", "lmin", "--min-long-side"),
+    ("max_long_side", "lmaks", "--max-long-side"),
+    ("max_area", "a", "--max-area"),
+    ("min_area_px", "amin", "--min-area-px"),
+    ("conf_threshold", "c", "--conf-threshold"),
+    ("min_digits", "smin", "--min-digits"),
+    ("max_letters", "bmaks", "--max-letters"),
+    ("min_digits_run", "rmin", "--min-digits-run"),
+    ("require_fnr_candidate", "fnr", "--require-fnr-candidate"),
+    ("reject_decimal", "des", "--reject-decimal"),
     ("rec_veto", "rveto", "--rec-veto"),
-    ("ocr_conf_fritak", "cfritak", "--ocr-conf-fritak"),
-    ("avvis_00_run", "r00", "--avvis-00-run"),
-    ("avvis_orgnr", "orgnr", "--avvis-orgnr"),
-    ("avvis_org_ord", "orgord", "--avvis-org-ord"),
-    ("linje_veto", "lveto", "--linje-veto"),
-    ("avvis_run_6_10", "run610", "--avvis-run-6-10"),
-    ("uten_tekst_conf", "utconf", "--uten-tekst-conf"),
-    ("maks_luke", "luke", "--maks-luke"),
-    ("avvis_desimal_luke", "desluke", "--avvis-desimal-luke"),
+    ("ocr_conf_exempt", "cfritak", "--ocr-conf-exempt"),
+    ("reject_00_run", "r00", "--reject-00-run"),
+    ("reject_orgnr", "orgnr", "--reject-orgnr"),
+    ("reject_org_ord", "orgord", "--reject-org-ord"),
+    ("line_veto", "lveto", "--line-veto"),
+    ("reject_run_6_10", "run610", "--reject-run-6-10"),
+    ("without_text_conf", "utconf", "--without-text-conf"),
+    ("max_gap", "luke", "--max-gap"),
+    ("reject_decimal_gap", "desluke", "--reject-decimal-gap"),
 )
 
 
-# CLI-flagg som er av/på (store_const) og ikke tar noen verdi
-_FLAGG_UTEN_VERDI = frozenset(("krev_fnr_kandidat", "avvis_desimal",
-                               "avvis_00_run", "avvis_orgnr",
-                               "avvis_desimal_luke"))
+# store_const flags that take no value
+_FLAG_WITHOUT_VALUE = frozenset(("require_fnr_candidate", "reject_decimal",
+                               "reject_00_run", "reject_orgnr",
+                               "reject_decimal_gap"))
 
 
-def review_kommando(spec):
-    """Gjenskaper filteret som argumenter til filter_review.py."""
-    def _par(kw):
-        return ",".join(f"{kort}={kw[navn]:g}"
-                        for navn, kort, _flagg in PARAM_KODER
-                        if kw.get(navn) is not None)
+def review_command(spec):
+    """Rebuilds the filter as arguments to filter_review.py."""
+    def _pair(kw):
+        return ",".join(f"{short}={kw[name]:g}"
+                        for name, short, _flag in PARAM_CODES
+                        if kw.get(name) is not None)
     if None in spec:
         kw = spec[None]
-        biter = [flagg if navn in _FLAGG_UTEN_VERDI
-                 else f"{flagg} {kw[navn]:g}"
-                 for navn, _kort, flagg in PARAM_KODER
-                 if kw.get(navn) is not None]
-        return " ".join(biter) or "(ingen filter)"
-    biter = [f'"{k}:{_par(kw)}"' for k, kw in sorted(spec.items()) if _par(kw)]
-    return ("--per-kilde " + " ".join(biter)) if biter else "(ingen filter)"
+        parts = [flag if name in _FLAG_WITHOUT_VALUE
+                 else f"{flag} {kw[name]:g}"
+                 for name, _short, flag in PARAM_CODES
+                 if kw.get(name) is not None]
+        return " ".join(parts) or "(no filter)"
+    parts = [f'"{k}:{_pair(kw)}"' for k, kw in sorted(spec.items()) if _pair(kw)]
+    return ("--per-source " + " ".join(parts)) if parts else "(no filter)"
 
 
 # ── Sweeps ───────────────────────────────────────────────────
 
-def _sweep_en_param(ds, navn, verdier, filter_fn, kostnad):
+def _sweep_one_param(ds, name, values, filter_fn, cost):
     print(f"\n{'─' * 118}")
-    print(f"Sweep: {navn}")
+    print(f"Sweep: {name}")
     print(f"{'─' * 118}")
-    print(f"  {'Verdi':>8} │{HODE_MAAL}")
+    print(f"  {'Value':>8} │{HEADER_TARGET}")
     print(f"  {'─' * 8}─┼{'─' * 106}")
-    for v in verdier:
-        m = evaluer(ds, lag_filter(**filter_fn(v)), kostnad=kostnad)
-        print(f"  {_g(v):>8} │{_maal_celler(m)}")
+    for v in values:
+        m = measure_filter(ds, make_filter(**filter_fn(v)), cost=cost)
+        print(f"  {_g(v):>8} │{_target_cells(m)}")
 
 
-STD_FELT = ("min_elongation", "maks_hoyde", "maks_bredde", "conf_terskel")
-STD_HODER = ("elong", "hoyde", "bredde", "conf≥")
+STD_FIELD = ("min_elongation", "max_height", "max_width", "conf_threshold")
+STD_HEADERS = ("elong", "height", "width", "conf≥")
 
 
-def _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v, conf_v, kostnad,
-                         sort_key, felt=STD_FELT, hoder=STD_HODER,
-                         tittel=None, kun_kilde=None, bare_front=True,
-                         maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None,
-                         csv_rader=None, maks_rader=None, etikett_prefiks=""):
-    """Sweeper alle kombinasjoner. kun_kilde: filtrer bare den kilden,
-    men mål effekten globalt (dekning kommer fra alle kilder samlet).
+def _sweep_combinations(ds, elong_v, height_v, width_v, conf_v, cost,
+                         sort_key, field=STD_FIELD, headers=STD_HEADERS,
+                         title=None, only_source=None, only_front=True,
+                         max_lost=None, max_lost_pct=None, min_ov_lost=None,
+                         csv_rows=None, max_rows=None, label_prefix=""):
+    """Sweeps all combinations. only_source filters just that kilde but
+    measures globally, since coverage comes from all kilder combined.
 
-    etikett_prefiks merker radene i den samlede Pareto-tabellen. De fire
-    aksene betyr ulike ting i ulike rutenett, og «av/6/av/av» er ikke til å
-    tyde uten å vite hvilket rutenett raden kom fra.
+    label_prefix marks the rows in the shared Pareto table: the four axes
+    mean different things per grid, so "off/6/off/off" is otherwise unreadable.
     """
-    kandidater = ds.per_kilde[kun_kilde] if kun_kilde else None
+    candidates = ds.per_source[only_source] if only_source else None
 
     filter_info = ""
-    if maks_tapt is not None:
-        filter_info += f"  [tapt ≤ {maks_tapt:g}]"
-    if maks_tapt_pst is not None:
-        filter_info += f"  [tapt ≤ {maks_tapt_pst:g}%]"
-    if min_ov_tapt is not None:
-        filter_info += f"  [ov/tapt > {min_ov_tapt:g}]"
+    if max_lost is not None:
+        filter_info += f"  [lost ≤ {max_lost:g}]"
+    if max_lost_pct is not None:
+        filter_info += f"  [lost ≤ {max_lost_pct:g}%]"
+    if min_ov_lost is not None:
+        filter_info += f"  [ov/lost > {min_ov_lost:g}]"
 
-    har_conf = any(c is not None for c in conf_v)
-    h0, h1, h2, h3 = hoder
-    param_hode = (f"  {h0:>6} {h1:>6} {h2:>7} {h3:>6} │"
-                  if har_conf else f"  {h0:>6} {h1:>6} {h2:>7} │")
+    has_conf = any(c is not None for c in conf_v)
+    h0, h1, h2, h3 = headers
+    param_header = (f"  {h0:>6} {h1:>6} {h2:>7} {h3:>6} │"
+                  if has_conf else f"  {h0:>6} {h1:>6} {h2:>7} │")
 
-    rader = []
-    for min_e, maks_h, maks_b, c_t in product(elong_v, hoyde_v, bredde_v, conf_v):
-        kw = dict(zip(felt, (min_e, maks_h, maks_b, c_t)))
-        m = evaluer(ds, lag_filter(**kw), kostnad=kostnad, kandidater=kandidater)
-        etikett = (etikett_prefiks
-                   + f"{_g(min_e)}/{_g(maks_h)}/{_g(maks_b)}/{_g(c_t)}"
-                   + (f" [{kun_kilde}]" if kun_kilde else ""))
-        rader.append(Rad(m, etikett, {kun_kilde: kw} if kun_kilde else {None: kw}))
-        if csv_rader is not None:
-            rad = {"omfang": kun_kilde or "alle"}
-            for navn, _kort, _flagg in PARAM_KODER:
-                rad[navn] = kw.get(navn)
-            csv_rader.append({
-                **rad,
-                "tapt": m.tapt, "tapt_pst": round(m.tapt_pst, 4),
-                "ov_fj": m.ov_fj, "ov_pst": round(m.ov_pst, 3),
-                "red_fj": m.red_fj, "slurv_fj": m.slurv_fj,
-                "kritisk_fj": m.kritisk_fj, "n_fj": m.n_fj,
-                "ov_areal_fj_pt2": round(m.ov_areal_fj),
-                "netto": round(m.netto, 2),
-                "recall_etter": round(m.recall_etter, 4),
-                "pres_etter": round(m.pres_etter, 3),
+    rows = []
+    for min_e, max_h, max_b, c_t in product(elong_v, height_v, width_v, conf_v):
+        kw = dict(zip(field, (min_e, max_h, max_b, c_t)))
+        m = measure_filter(ds, make_filter(**kw), cost=cost, candidates=candidates)
+        label = (label_prefix
+                   + f"{_g(min_e)}/{_g(max_h)}/{_g(max_b)}/{_g(c_t)}"
+                   + (f" [{only_source}]" if only_source else ""))
+        rows.append(Row(m, label, {only_source: kw} if only_source else {None: kw}))
+        if csv_rows is not None:
+            row = {"scope": only_source or "all"}
+            for name, _short, _flag in PARAM_CODES:
+                row[name] = kw.get(name)
+            csv_rows.append({
+                **row,
+                "lost": m.lost, "lost_pct": round(m.lost_pct, 4),
+                "ov_rm": m.ov_rm, "ov_pct": round(m.ov_pct, 3),
+                "red_rm": m.red_rm, "slurv_rm": m.oversize_rm,
+                "critical_rm": m.critical_rm, "n_rm": m.n_rm,
+                "ov_area_rm_pt2": round(m.ov_area_rm),
+                "net": round(m.net, 2),
+                "recall_after": round(m.recall_after, 4),
+                "prec_after": round(m.prec_after, 3),
             })
 
-    aktuelle = [r for r in rader
-                if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
-    n_skjult = len(rader) - len(aktuelle)
+    relevant = [r for r in rows
+                if not _hidden(r.m, max_lost, max_lost_pct, min_ov_lost)]
+    n_hidden = len(rows) - len(relevant)
 
-    if bare_front:
-        vis = pareto_front(aktuelle)
-        note = (f"Pareto-front: {len(vis)} av {len(rader)} konfigurasjoner "
-                f"— resten er dominert eller likeverdig")
+    if only_front:
+        show = pareto_front(relevant)
+        note = (f"Pareto front: {len(show)} of {len(rows)} configurations "
+                f"— the rest are dominated or equivalent")
     else:
-        vis = sorted(aktuelle, key=lambda r: _sort_fn(sort_key)(r.m))
-        note = f"alle {len(vis)} konfigurasjoner, sortert: {sort_key}"
-    if maks_rader is not None:
-        vis = vis[:maks_rader]
+        show = sorted(relevant, key=lambda r: _sort_fn(sort_key)(r.m))
+        note = f"all {len(show)} configurations, sorted by: {sort_key}"
+    if max_rows is not None:
+        show = show[:max_rows]
 
     print(f"\n{'═' * 145}")
-    print(f"{tittel or 'KOMBINASJONS-SWEEP'}"
-          f"   ({ds.dekket_foer} dekkede fasit-bokser, {ds.n_bom} oversladdinger"
-          + (f", filter kun på '{kun_kilde}' ({len(kandidater)} pred), "
-             f"øvrige urørt" if kun_kilde else "") + ")")
-    print(f"  {note}   [kostnad {kostnad:g}]{filter_info}")
+    print(f"{title or 'COMBINATION SWEEP'}"
+          f"   ({ds.covered_before} covered ground-truth boxes, "
+          f"{ds.n_miss} oversladdinger"
+          + (f", filter only on '{only_source}' ({len(candidates)} pred), "
+             f"rest untouched" if only_source else "") + ")")
+    print(f"  {note}   [cost {cost:g}]{filter_info}")
     print(f"{'═' * 145}")
-    print(param_hode + HODE_MAAL)
-    print(f"  {'─' * (len(param_hode) - 4)}┼{'─' * 106}")
+    print(param_header + HEADER_TARGET)
+    print(f"  {'─' * (len(param_header) - 4)}┼{'─' * 106}")
 
-    for rad in vis:
-        e, h, b, c = (rad.spec[kun_kilde if kun_kilde else None][n]
-                      for n in felt)
+    for row in show:
+        e, h, b, c = (row.spec[only_source if only_source else None][n]
+                      for n in field)
         params = (f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} {_g(c):>6} │"
-                  if har_conf else f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} │")
-        print(params + _maal_celler(rad.m))
+                  if has_conf else f"  {_g(e):>6} {_g(h):>6} {_g(b):>7} │")
+        print(params + _target_cells(row.m))
 
-    if n_skjult:
-        print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
-    return rader
+    if n_hidden:
+        print(_hidden_text(n_hidden, max_lost, max_lost_pct, min_ov_lost))
+    return rows
 
 
-def _sweep_kryss_kilder(ds, per_kilde_rader, kostnad, sort_key, maks_kand=8,
-                        felt=STD_FELT,
-                        maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None):
-    """Kombinerer de beste kandidatene per kilde og måler globalt.
+def _sweep_cross_sources(ds, per_source_rows, cost, sort_key, max_candidates=8,
+                        field=STD_FIELD,
+                        max_lost=None, max_lost_pct=None, min_ov_lost=None):
+    """Combines the best candidates per kilde and measures globally.
 
-    Kandidatene beskjæres med SAMME objektiv som sluttabellen sorteres på —
-    ellers kan optimum være beskåret bort før kryssproduktet.
+    Candidates are pruned with the SAME objective the final table sorts on,
+    else the optimum can be pruned away before the cross product.
     """
-    kilder = sorted(per_kilde_rader)
-    if len(kilder) < 2:
+    sources = sorted(per_source_rows)
+    if len(sources) < 2:
         return []
 
     sort_fn = _sort_fn(sort_key)
-    kandidater = []
-    for k in kilder:
-        beste = sorted(per_kilde_rader[k], key=lambda r: sort_fn(r.m))[:maks_kand]
-        kandidater.append([(k, r.spec[k]) for r in beste])
+    candidates = []
+    for k in sources:
+        best = sorted(per_source_rows[k], key=lambda r: sort_fn(r.m))[:max_candidates]
+        candidates.append([(k, r.spec[k]) for r in best])
 
-    rader = []
-    for kombo in product(*kandidater):
-        spec = {k: kw for (k, kw) in kombo}
-        m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
-        etikett = "  ".join(
-            f"{k} " + "/".join(_g(kw.get(n)) for n in felt)
+    rows = []
+    for combo in product(*candidates):
+        spec = {k: kw for (k, kw) in combo}
+        m = measure_filter(ds, make_filter_per_source(spec), cost=cost)
+        label = "  ".join(
+            f"{k} " + "/".join(_g(kw.get(n)) for n in field)
             for k, kw in sorted(spec.items()))
-        rader.append(Rad(m, etikett, spec))
+        rows.append(Row(m, label, spec))
 
     print(f"\n{'═' * 145}")
-    print("KRYSS-KILDE SWEEP  (uavhengige parametre per kilde, målt globalt)")
-    print(f"  Pareto-fronten av {len(rader)} kombinasjoner "
-          f"[kostnad {kostnad:g}, topp {maks_kand} kandidater per kilde]")
+    print("CROSS-KILDE SWEEP  (independent parameters per kilde, measured globally)")
+    print(f"  Pareto front of {len(rows)} combinations "
+          f"[cost {cost:g}, top {max_candidates} candidates per kilde]")
     print(f"{'═' * 145}")
 
-    akse_navn = "/".join(n.split("_")[-1][:4] for n in felt)
-    kolonne = max(24, max(len(k) for k in kilder) + len(akse_navn) + 6)
-    hode = "  " + "  │  ".join(f"{k + f' ({akse_navn})':>{kolonne}}"
-                               for k in kilder)
-    print(hode + "  │" + HODE_MAAL)
-    print(f"  {'─' * (len(hode) + 106)}")
+    axis_name = "/".join(n.split("_")[-1][:4] for n in field)
+    column = max(24, max(len(k) for k in sources) + len(axis_name) + 6)
+    header = "  " + "  │  ".join(f"{k + f' ({axis_name})':>{column}}"
+                               for k in sources)
+    print(header + "  │" + HEADER_TARGET)
+    print(f"  {'─' * (len(header) + 106)}")
 
-    aktuelle = [r for r in rader
-                if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
-    for rad in pareto_front(aktuelle)[:15]:
-        celler = "  │  ".join(
-            f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in felt):>{kolonne}}"
-            for k, kw in sorted(rad.spec.items()))
-        print("  " + celler + "  │" + _maal_celler(rad.m))
-    n_skjult = len(rader) - len(aktuelle)
-    if n_skjult:
-        print(_skjult_tekst(n_skjult, maks_tapt, maks_tapt_pst, min_ov_tapt))
-    return rader
+    relevant = [r for r in rows
+                if not _hidden(r.m, max_lost, max_lost_pct, min_ov_lost)]
+    for row in pareto_front(relevant)[:15]:
+        cells = "  │  ".join(
+            f"{f'{k} ' + '/'.join(_g(kw.get(n)) for n in field):>{column}}"
+            for k, kw in sorted(row.spec.items()))
+        print("  " + cells + "  │" + _target_cells(row.m))
+    n_hidden = len(rows) - len(relevant)
+    if n_hidden:
+        print(_hidden_text(n_hidden, max_lost, max_lost_pct, min_ov_lost))
+    return rows
 
 
-def _sweep_terskel(fasit, pred, terskler, valgt, slurv_faktor,
-                   inkluder_ulabelte, kjorte, kriterium=STD_KRITERIUM):
-    """Viser hvordan utgangspunktet endrer seg med overlapp-terskelen.
+def _sweep_threshold(truth, pred, thresholds, chosen, oversize_factor,
+                   include_unlabelled, processed, criterion=STD_CRITERION):
+    """Shows how the baseline moves with the overlap threshold.
 
-    Terskelen er MONOTON innenfor ett kriterium: en fasit-boks som er dekket
-    ved 40 % er nødvendigvis dekket ved 15 %. Å skru terskelen opp kan derfor
-    bare FJERNE treff, aldri legge til. Vil du se treff som kommer til, må
-    selve regelen byttes — se --kriterium-diff.
+    MONOTONE within one criterion: a box covered at 40 % is necessarily covered
+    at 15 %, so raising the threshold only REMOVES hits. To see hits appear, the
+    rule itself must change. See --criterion-diff.
     """
     print(f"\n{'─' * 118}")
-    print(f"Sweep: OVERLAPP-TERSKEL (kriterium «{kriterium}», "
-          f"utgangspunkt uten geometrifiltre)")
+    print(f"Sweep: OVERLAP THRESHOLD (criterion «{criterion}», "
+          f"baseline without geometry filters)")
     print(f"{'─' * 118}")
-    print(f"  {'Terskel':>8} │ {'TREFF':>8} {'SLURV':>8} {'BOM':>8} │"
-          f" {'dekket':>8} {'udekket':>8} {'recall%':>8} {'pres%':>7} "
-          f"{'dekkere/boks':>13}")
+    print(f"  {'Thresh':>8} │ {'TREFF':>8} {'SLURV':>8} {'BOM':>8} │"
+          f" {'covered':>8} {'missing':>8} {'recall%':>8} {'pres%':>7} "
+          f"{'covers/box':>13}")
     print(f"  {'─' * 8}─┼─{'─' * 88}")
-    for t in terskler:
-        d = bygg_datasett(fasit, pred, terskel=t, slurv_faktor=slurv_faktor,
-                          inkluder_ulabelte=inkluder_ulabelte,
-                          kjorte_dok=kjorte, kriterium=kriterium)
+    for t in thresholds:
+        d = build_dataset(truth, pred, threshold=t, oversize_factor=oversize_factor,
+                          include_unlabelled=include_unlabelled,
+                          processed_doc=processed, criterion=criterion)
         b = baseline(d)
-        snitt = sum(d.dekning_foer) / d.dekket_foer if d.dekket_foer else 0
-        markør = " ◀" if abs(t - valgt) < 1e-9 else ""
-        print(f"  {t:>8.2f} │ {d.n_treff:>8} {d.n_slurv:>8} {d.n_bom:>8} │"
-              f" {d.dekket_foer:>8} {d.n_fasit - d.dekket_foer:>8}"
-              f" {b.recall_etter:>7.2f}% {b.pres_etter:>6.1f}% {snitt:>13.2f}"
-              f"{markør}")
+        mean = sum(d.coverage_before) / d.covered_before if d.covered_before else 0
+        marker = " ◀" if abs(t - chosen) < 1e-9 else ""
+        print(f"  {t:>8.2f} │ {d.n_hit:>8} {d.n_oversize:>8} {d.n_miss:>8} │"
+              f" {d.covered_before:>8} {d.n_truth - d.covered_before:>8}"
+              f" {b.recall_after:>7.2f}% {b.prec_after:>6.1f}% {mean:>13.2f}"
+              f"{marker}")
 
 
-# ── Kriterie-diff ────────────────────────────────────────────
+# ── Criterion diff ────────────────────────────────────────────
 
-def _tilstand(fasit, pred, kriterium, terskel, slurv_faktor,
-              inkluder_ulabelte, kjorte):
-    """Snapshot av én matcheregel: hvem er dekket, og hva er hver pred klassifisert som.
+def _state(truth, pred, criterion, threshold, oversize_factor,
+              include_unlabelled, processed):
+    """Snapshot of one match rule: who is covered, and how each pred is classified.
 
-    bygg_datasett MUTERER prediksjons-dictene (p["klasse"], p["dekker"]), så
-    snapshotet må tas FØR neste regel bygges — ellers sammenligner man en regel
-    med seg selv. Fasit-indeksene er stabile mellom kall fordi scope kun
-    avhenger av labelte/kjørte dokumenter, ikke av terskelen.
+    build_dataset MUTATES the prediction dicts, so the snapshot must be taken
+    BEFORE the next rule is built, or a rule is compared with itself.
+    Ground-truth indices stay stable because scope depends on the
+    labelled/processed documents, not on the threshold.
     """
-    ds = bygg_datasett(fasit, pred, terskel=terskel, slurv_faktor=slurv_faktor,
-                       inkluder_ulabelte=inkluder_ulabelte, kjorte_dok=kjorte,
-                       kriterium=kriterium)
-    # Bare prediksjoner I SCOPE tas med. bygg_datasett tvinger prediksjoner på
-    # ulabelte dokumenter til BOM, og de ville ellers blåst opp BOM-cellene og
-    # gjort summene uenige med ds.n_bom.
+    ds = build_dataset(truth, pred, threshold=threshold, oversize_factor=oversize_factor,
+                       include_unlabelled=include_unlabelled, processed_doc=processed,
+                       criterion=criterion)
+    # In-scope predictions only: build_dataset forces predictions on unlabelled
+    # documents to BOM, which would inflate the BOM cells and make the sums
+    # disagree with ds.n_bom.
     i_scope = {id(p) for p in ds.pred}
     return {
         "ds": ds,
-        "dekket": [d > 0 for d in ds.dekning_foer],
+        "covered": [d > 0 for d in ds.coverage_before],
         "klasse": [p.get("klasse") if id(p) in i_scope else None for p in pred],
-        "etikett": f"{kriterium} ≥ {terskel:.0%}" if kriterium != "senter"
-                   else f"{kriterium} ≤ {terskel:.0%}",
+        "label": f"{criterion} ≥ {threshold:.0%}" if criterion != "center"
+                   else f"{criterion} ≤ {threshold:.0%}",
     }
 
 
-def _diff_kriterier(fasit, pred, spek_a, spek_b, slurv_faktor,
-                    inkluder_ulabelte, kjorte, ut_csv=None):
-    """Hva flytter seg når matcheregelen byttes fra A til B.
+def _diff_criteria(truth, pred, spec_a, spec_b, oversize_factor,
+                    include_unlabelled, processed, out_csv=None):
+    """What moves when the match rule is switched from A to B.
 
-    Innenfor samme kriterium er dette monotont (bare tap), men bytter man
-    regelform — areal → kortside — kan treff både forsvinne og komme til.
-    De som KOMMER TIL er interessante: de telles i dag som oversladding.
+    Changing the rule form (areal -> kortside) can both remove and add hits.
+    The ones that COME IN are interesting: today they count as oversladding.
     """
-    a = _tilstand(fasit, pred, *spek_a, slurv_faktor, inkluder_ulabelte, kjorte)
-    b = _tilstand(fasit, pred, *spek_b, slurv_faktor, inkluder_ulabelte, kjorte)
+    a = _state(truth, pred, *spec_a, oversize_factor, include_unlabelled, processed)
+    b = _state(truth, pred, *spec_b, oversize_factor, include_unlabelled, processed)
     ds_a, ds_b = a["ds"], b["ds"]
 
     print(f"\n{'═' * 118}")
-    print(f"KRITERIE-DIFF   A = {a['etikett']}   →   B = {b['etikett']}")
+    print(f"CRITERION DIFF   A = {a['label']}   →   B = {b['label']}")
     print(f"{'═' * 118}")
 
-    # ── Fasit-bokser: 2x2 ──
-    begge = kun_a = kun_b = ingen = 0
-    for da, db in zip(a["dekket"], b["dekket"]):
+    # ── Ground-truth boxes: 2x2 ──
+    begge = only_a = only_b = none = 0
+    for da, db in zip(a["covered"], b["covered"]):
         if da and db:
             begge += 1
         elif da:
-            kun_a += 1
+            only_a += 1
         elif db:
-            kun_b += 1
+            only_b += 1
         else:
-            ingen += 1
-    n = len(a["dekket"])
-    print(f"\n  FASIT-BOKSER ({n} i scope) — regnet som truffet:")
-    print(f"    {'':<26}{'B: truffet':>14}{'B: mangler':>14}")
-    print(f"    {'A: truffet':<26}{begge:>14}{kun_a:>14}   ← {kun_a} FALT UT")
-    print(f"    {'A: mangler':<26}{kun_b:>14}{ingen:>14}")
+            none += 1
+    n = len(a["covered"])
+    print(f"\n  GROUND-TRUTH BOXES ({n} in scope), counted as hit:")
+    print(f"    {'':<26}{'B: hit':>14}{'B: missing':>14}")
+    print(f"    {'A: hit':<26}{begge:>14}{only_a:>14}   ← {only_a} DROPPED OUT")
+    print(f"    {'A: missing':<26}{only_b:>14}{none:>14}")
     print(f"    {'':<26}{'↑':>14}")
-    print(f"    {kun_b} KOM TIL — disse teller i dag som bom/oversladding")
-    print(f"\n    recall A: {(begge + kun_a) / n * 100:.2f}%    "
-          f"recall B: {(begge + kun_b) / n * 100:.2f}%    "
-          f"netto: {(kun_b - kun_a) / n * 100:+.2f} pp")
+    print(f"    {only_b} CAME IN: these count as BOM/oversladding today")
+    print(f"\n    recall A: {(begge + only_a) / n * 100:.2f}%    "
+          f"recall B: {(begge + only_b) / n * 100:.2f}%    "
+          f"net: {(only_b - only_a) / n * 100:+.2f} pp")
 
-    # ── Prediksjoner: 3x3 ──
-    klasser = ("TREFF", "SLURV", "BOM")
-    kryss = {(x, y): 0 for x in klasser for y in klasser}
+    # ── Predictions: 3x3 ──
+    classes = ("TREFF", "SLURV", "BOM")
+    cross = {(x, y): 0 for x in classes for y in classes}
     for ka, kb in zip(a["klasse"], b["klasse"]):
-        if ka in klasser and kb in klasser:
-            kryss[(ka, kb)] += 1
-    print(f"\n  PREDIKSJONER — klasse under A (rad) vs B (kolonne):")
-    # Literalen holdes utenfor f-strengen: Python < 3.12 tillater ikke
-    # backslash inne i uttrykksdelen av en f-string.
-    hode = "A \\ B"
-    print(f"    {hode:<10}" + "".join(f"{k:>10}" for k in klasser) + f"{'sum':>10}")
-    for ka in klasser:
-        rad = [kryss[(ka, kb)] for kb in klasser]
-        print(f"    {ka:<10}" + "".join(f"{v:>10}" for v in rad) + f"{sum(rad):>10}")
+        if ka in classes and kb in classes:
+            cross[(ka, kb)] += 1
+    print(f"\n  PREDICTIONS, klasse under A (row) vs B (column):")
+    # Kept out of the f-string: Python < 3.12 forbids a backslash inside the
+    # expression part of an f-string.
+    header = "A \\ B"
+    print(f"    {header:<10}" + "".join(f"{k:>10}" for k in classes) + f"{'sum':>10}")
+    for ka in classes:
+        row = [cross[(ka, kb)] for kb in classes]
+        print(f"    {ka:<10}" + "".join(f"{v:>10}" for v in row) + f"{sum(row):>10}")
     print(f"    {'sum':<10}" + "".join(
-        f"{sum(kryss[(ka, kb)] for ka in klasser):>10}" for kb in klasser))
+        f"{sum(cross[(ka, kb)] for ka in classes):>10}" for kb in classes))
 
-    bom_til_treff = sum(kryss[("BOM", k)] for k in ("TREFF", "SLURV"))
-    treff_til_bom = sum(kryss[(k, "BOM")] for k in ("TREFF", "SLURV"))
-    print(f"\n    BOM → dekkende: {bom_til_treff:>7}  "
-          f"(målt som oversladding i dag, men treffer et felt under B)")
-    print(f"    dekkende → BOM: {treff_til_bom:>7}  "
-          f"(regnes som treff i dag, men er feil felt under B)")
-    print(f"    oversladding:   {ds_a.n_bom} → {ds_b.n_bom}  "
-          f"({(ds_b.n_bom - ds_a.n_bom) / ds_a.n_bom * 100:+.1f}%)"
-          if ds_a.n_bom else "")
+    miss_to_hit = sum(cross[("BOM", k)] for k in ("TREFF", "SLURV"))
+    hit_to_miss = sum(cross[(k, "BOM")] for k in ("TREFF", "SLURV"))
+    print(f"\n    BOM → covering: {miss_to_hit:>7}  "
+          f"(counted as oversladding today, but hits a field under B)")
+    print(f"    covering → BOM: {hit_to_miss:>7}  "
+          f"(counted as a hit today, but is the wrong field under B)")
+    print(f"    oversladding:   {ds_a.n_miss} → {ds_b.n_miss}  "
+          f"({(ds_b.n_miss - ds_a.n_miss) / ds_a.n_miss * 100:+.1f}%)"
+          if ds_a.n_miss else "")
 
-    # ── CSV for etterkontroll: hver boks som flyttet seg ──
-    if ut_csv:
+    # ── CSV for follow-up: every box that moved ──
+    if out_csv:
         import csv as _csv
-        with open(ut_csv, "w", newline="", encoding="utf-8") as f:
+        with open(out_csv, "w", newline="", encoding="utf-8") as f:
             w = _csv.writer(f)
-            w.writerow(["hva", "retning", "dok_nr", "side", "x0", "y0", "x1", "y1",
-                        "dek_f", "dek_kort", "iou", "senter_kort"])
-            for j, (da, db) in enumerate(zip(a["dekket"], b["dekket"])):
+            w.writerow(["hva", "retning", "doc_no", "side", "x0", "y0", "x1", "y1",
+                        "cov_area", "cov_short", "iou", "center_short"])
+            for j, (da, db) in enumerate(zip(a["covered"], b["covered"])):
                 if da == db:
                     continue
-                fb = ds_a.fasit_bokser[j]
-                # Beste prediksjon på samme side, for å vise HVA som traff
-                beste, bm = None, None
+                fb = ds_a.truth_boxes[j]
+                # Best prediction on the same page, to show WHAT hit
+                best, bm = None, None
                 for pp in ds_a.pred:
-                    if (pp["dok_nr"], pp["side"]) != (fb["dok_nr"], fb["side"]):
+                    if (pp["doc_no"], pp["side"]) != (fb["doc_no"], fb["side"]):
                         continue
-                    m = match_metrikker(pp["norm"], fb["norm"], fb["horisontal"])
-                    if m and (bm is None or m["dek_f"] > bm["dek_f"]):
-                        beste, bm = pp, m
+                    m = match_metrics(pp["norm"], fb["norm"], fb["horizontal"])
+                    if m and (bm is None or m["cov_area"] > bm["cov_area"]):
+                        best, bm = pp, m
                 w.writerow(["fasit", "falt_ut" if da else "kom_til",
-                            fb["dok_nr"], fb["side"], *[f"{v:.2f}" for v in fb["boks"]],
+                            fb["doc_no"], fb["side"], *[f"{v:.2f}" for v in fb["box"]],
                             *([f"{bm[k]:.3f}" for k in
-                               ("dek_f", "dek_kort", "iou", "senter_kort")]
+                               ("cov_area", "cov_short", "iou", "center_short")]
                               if bm else ["", "", "", ""])])
             for pp, ka, kb in zip(pred, a["klasse"], b["klasse"]):
                 if ka == kb or ka is None or kb is None:
                     continue
-                w.writerow(["pred", f"{ka}->{kb}", pp["dok_nr"], pp["side"],
+                w.writerow(["pred", f"{ka}->{kb}", pp["doc_no"], pp["side"],
                             *[f"{v:.1f}" for v in pp["px"]], "", "", "", ""])
-        print(f"\n    Flyttede bokser skrevet til {ut_csv}")
-        print(f"    Tegn dem for øyekontroll med filter_review.py --velg <pdf-ene>")
+        print(f"\n    Moved boxes written to {out_csv}")
+        print(f"    Draw them for inspection with filter_review.py --select <the pdfs>")
 
 
-# ── Formanalyse ──────────────────────────────────────────────
+# ── Shape analysis ──────────────────────────────────────────────
 
-MAAL = (("elongation", "elongation", 2), ("kortside", "kortside (pt)", 1),
-        ("langside", "langside (pt)", 1), ("areal_px", "areal (px²)", 0))
+TARGET = (("elongation", "elongation", 2), ("short_side", "kortside (pt)", 1),
+        ("long_side", "langside (pt)", 1), ("areal_px", "area (px²)", 0))
 
-PERSENTILER = (0.1, 1, 50, 99, 99.9)
+PERCENTILES = (0.1, 1, 50, 99, 99.9)
 
 
-def _persentil(sortert, pst):
-    if not sortert:
+def _percentile(rows_sorted, pct):
+    if not rows_sorted:
         return 0.0
-    i = (len(sortert) - 1) * pst / 100.0
-    lav, høy = int(i), min(int(i) + 1, len(sortert) - 1)
-    return sortert[lav] + (sortert[høy] - sortert[lav]) * (i - lav)
+    i = (len(rows_sorted) - 1) * pct / 100.0
+    low, high = int(i), min(int(i) + 1, len(rows_sorted) - 1)
+    return rows_sorted[low] + (rows_sorted[high] - rows_sorted[low]) * (i - low)
 
 
-def _sweep_fordeling(ds):
-    """Persentiler for form, per kilde og klasse.
+def _sweep_distribution(ds):
+    """Shape percentiles, per kilde and klasse.
 
-    Sladdeboksen dekker de 5 siste sifrene i et fødselsnummer, så formen er
-    fysisk begrenset. Ligger en BOM-boks utenfor det TREFF-boksene noen gang
-    har vært, er formen umulig — ikke bare uvanlig.
+    A sladd box covers the last 5 digits of an fnr, so its shape is physically
+    bounded: a BOM box outside every TREFF box ever seen is impossible, not
+    merely unusual.
     """
     print(f"\n{'═' * 145}")
-    print("FORM-FORDELING  (hva en 5-sifret sladding faktisk ser ut som)")
+    print("SHAPE DISTRIBUTION  (what a 5-digit sladding actually looks like)")
     print(f"{'═' * 145}")
-    hode = f"  {'kilde':>8} {'klasse':>7} {'n':>7} │ {'mål':<12}"
-    for pst in PERSENTILER:
-        hode += f" {('p' + format(pst, 'g')):>9}"
-    print(hode)
-    print(f"  {'─' * (len(hode) - 2)}")
+    header = f"  {'kilde':>8} {'klasse':>7} {'n':>7} │ {'metric':<12}"
+    for pct in PERCENTILES:
+        header += f" {('p' + format(pct, 'g')):>9}"
+    print(header)
+    print(f"  {'─' * (len(header) - 2)}")
 
-    for kilde in ds.kilder():
+    for source in ds.sources():
         for klasse in ("TREFF", "SLURV", "BOM"):
-            gruppe = [p for p in ds.per_kilde[kilde] if p["klasse"] == klasse]
-            if len(gruppe) < 20:      # for få til å si noe om haler
+            group = [p for p in ds.per_source[source] if p["klasse"] == klasse]
+            if len(group) < 20:      # too few to say anything about tails
                 continue
-            for nr, (nøkkel, navn, des) in enumerate(MAAL):
-                sortert = sorted(p[nøkkel] for p in gruppe)
-                venstre = (f"  {kilde:>8} {klasse:>7} {len(gruppe):>7} │"
+            for nr, (spec_key, name, des) in enumerate(TARGET):
+                rows_sorted = sorted(p[spec_key] for p in group)
+                left = (f"  {source:>8} {klasse:>7} {len(group):>7} │"
                            if nr == 0 else f"  {'':>8} {'':>7} {'':>7} │")
-                rad = venstre + f" {navn:<12}"
-                for pst in PERSENTILER:
-                    rad += f" {_persentil(sortert, pst):>9.{des}f}"
-                print(rad)
+                row = left + f" {name:<12}"
+                for pct in PERCENTILES:
+                    row += f" {_percentile(rows_sorted, pct):>9.{des}f}"
+                print(row)
             print(f"  {'·' * 100}")
 
 
-def _avled_grenser(ds, pst, bruk_conf=None):
-    """Grenser per kilde utledet fra TREFF-fordelingen, ikke fra netto.
+def _derive_bounds(ds, pct, use_conf=None):
+    """Per-kilde limits derived from the TREFF distribution, not from net.
 
-    Nedre grense = TREFF-persentil `pst` fra bunnen, øvre = fra toppen.
-    Ingen tilpasning mot ov.fj — grensene beskriver bare hvilke former
-    korrekte sladdinger har hatt.
+    Lower = TREFF percentile `pst` from the bottom, upper = from the top.
+    Nothing is fitted against ov.rm. The limits only describe which shapes
+    correct sladdinger have had.
     """
     spec = {}
-    for kilde in ds.kilder():
-        treff = [p for p in ds.per_kilde[kilde]
+    for source in ds.sources():
+        hit = [p for p in ds.per_source[source]
                  if p["klasse"] in ("TREFF", "SLURV")]
-        if len(treff) < 100:          # for få til å estimere haler
+        if len(hit) < 100:          # too few to estimate tails
             continue
         kw = {}
-        for nøkkel, felt_min, felt_maks in (
-                ("elongation", "min_elongation", "maks_elongation"),
-                ("kortside", "min_kortside", "maks_kortside"),
-                ("langside", "min_langside", "maks_langside")):
-            sortert = sorted(p[nøkkel] for p in treff)
-            kw[felt_min] = round(_persentil(sortert, pst), 2)
-            kw[felt_maks] = round(_persentil(sortert, 100 - pst), 2)
-        areal = sorted(p["areal_px"] for p in treff)
-        kw["min_areal_px"] = round(_persentil(areal, pst))
-        if bruk_conf is not None:
-            kw["conf_terskel"] = bruk_conf
-        spec[kilde] = kw
+        for spec_key, field_min, field_max in (
+                ("elongation", "min_elongation", "max_elongation"),
+                ("short_side", "min_short_side", "max_short_side"),
+                ("long_side", "min_long_side", "max_long_side")):
+            rows_sorted = sorted(p[spec_key] for p in hit)
+            kw[field_min] = round(_percentile(rows_sorted, pct), 2)
+            kw[field_max] = round(_percentile(rows_sorted, 100 - pct), 2)
+        area = sorted(p["areal_px"] for p in hit)
+        kw["min_area_px"] = round(_percentile(area, pct))
+        if use_conf is not None:
+            kw["conf_threshold"] = use_conf
+        spec[source] = kw
     return spec
 
 
-def _rapport_grenser(ds, ds_test, pst, kostnad):
-    """Måler den utledede form-grensen — trening og holdout."""
+def _report_bounds(ds, ds_test, pct, cost):
+    """Measures the derived shape limit on training and holdout."""
     print(f"\n{'═' * 145}")
-    print(f"FORM-GRENSE UTLEDET FRA TREFF  (nedre = p{pst:g}, øvre = p{100 - pst:g} "
-          f"av korrekte bokser per kilde)")
-    print("  Grensene er IKKE tilpasset ov.fj — de beskriver bare hvilke former")
-    print("  korrekte 5-siffer-sladdinger har hatt. Alt utenfor har umulig form.")
+    print(f"SHAPE LIMIT DERIVED FROM TREFF  (lower = p{pct:g}, "
+          f"upper = p{100 - pct:g} of correct boxes per kilde)")
+    print("  The limits are NOT fitted to ov.rm. They only describe which")
+    print("  shapes correct 5-digit sladdinger have had.")
     print(f"{'═' * 145}")
 
-    for merke, conf in (("uten conf-port", None), ("med conf≥0.5-port", 0.5)):
-        spec = _avled_grenser(ds, pst, bruk_conf=conf)
+    for mark, conf in (("without conf gate", None), ("with conf≥0.5 gate", 0.5)):
+        spec = _derive_bounds(ds, pct, use_conf=conf)
         if not spec:
-            print("  (for få TREFF-bokser per kilde til å estimere haler)")
+            print("  (too few TREFF boxes per kilde to estimate tails)")
             return
-        print(f"\n  {merke}:")
-        for kilde, kw in sorted(spec.items()):
-            print(f"    {kilde:>8}  elong [{kw['min_elongation']:g}, "
-                  f"{kw['maks_elongation']:g}]  kortside [{kw['min_kortside']:g}, "
-                  f"{kw['maks_kortside']:g}]  langside [{kw['min_langside']:g}, "
-                  f"{kw['maks_langside']:g}]  areal ≥ {kw['min_areal_px']:g}px²")
-        m = evaluer(ds, lag_filter_per_kilde(spec), kostnad=kostnad)
-        print(f"    trening: {_maal_celler(m)}")
+        print(f"\n  {mark}:")
+        for source, kw in sorted(spec.items()):
+            print(f"    {source:>8}  elong [{kw['min_elongation']:g}, "
+                  f"{kw['max_elongation']:g}]  kortside [{kw['min_short_side']:g}, "
+                  f"{kw['max_short_side']:g}]  langside [{kw['min_long_side']:g}, "
+                  f"{kw['max_long_side']:g}]  area ≥ {kw['min_area_px']:g}px²")
+        m = measure_filter(ds, make_filter_per_source(spec), cost=cost)
+        print(f"    training: {_target_cells(m)}")
         if ds_test is not None:
-            t = evaluer(ds_test, lag_filter_per_kilde(spec), kostnad=kostnad)
-            print(f"    holdout: {_maal_celler(t)}")
-        print(f"    → filter_review.py {review_kommando(spec)}")
+            t = measure_filter(ds_test, make_filter_per_source(spec), cost=cost)
+            print(f"    holdout:  {_target_cells(t)}")
+        print(f"    → filter_review.py {review_command(spec)}")
 
 
 # ── Pareto-front ─────────────────────────────────────────────
 
-def _pareto_tabell(rader, kostnad, ds_test=None, tittel="PARETO-FRONT",
-                   maks_tapt=None, maks_tapt_pst=None, min_ov_tapt=None):
-    """Viser de ikke-dominerte konfigurasjonene: for hvert nivå av `tapt`,
-    den som fjerner flest oversladdinger. Med ds_test måles hver av dem også
-    på holdout-settet, slik at overtilpasning blir synlig."""
-    front = pareto_front(rader, maal=lambda r: (r.m.tapt, r.m.ov_fj))
+def _pareto_table(rows, cost, ds_test=None, title="PARETO-FRONT",
+                   max_lost=None, max_lost_pct=None, min_ov_lost=None):
+    """The non-dominated configurations: for each level of `lost`, the one
+    removing most oversladdinger. With ds_test each is measured on the holdout
+    set as well, so overfitting becomes visible."""
+    front = pareto_front(rows, target=lambda r: (r.m.lost, r.m.ov_rm))
     front = [r for r in front
-             if not _skjules(r.m, maks_tapt, maks_tapt_pst, min_ov_tapt)]
+             if not _hidden(r.m, max_lost, max_lost_pct, min_ov_lost)]
     if not front:
         return []
 
-    bredde = max(28, max(len(r.etikett) for r in front) + 2)
+    width = max(28, max(len(r.label) for r in front) + 2)
     print(f"\n{'═' * 145}")
-    print(f"{tittel}   ({len(front)} ikke-dominerte av {len(rader)} "
-          f"konfigurasjoner)   [kostnad {kostnad:g}]")
+    print(f"{title}   ({len(front)} non-dominated of {len(rows)} "
+          f"configurations)   [cost {cost:g}]")
     if ds_test is not None:
-        print("  Venstre blokk = trening (der konfigurasjonen ble valgt), "
-              "høyre = holdout (uavhengige dokumenter).")
-        print("  Δ er holdout minus trening i prosentpoeng — store negative "
-              "Δov% eller positive Δtapt% betyr overtilpasning.")
+        print("  Left block = training (where the configuration was chosen), "
+              "right = holdout (independent documents).")
+        print("  Δ is holdout minus training in percentage points, large "
+              "negative Δov% or positive Δlost% means overfitting.")
     print(f"{'═' * 145}")
 
     if ds_test is None:
-        print(f"  {'konfigurasjon':<{bredde}}│{HODE_MAAL}")
-        print(f"  {'─' * bredde}┼{'─' * 106}")
+        print(f"  {'configuration':<{width}}│{HEADER_TARGET}")
+        print(f"  {'─' * width}┼{'─' * 106}")
         for r in front:
-            print(f"  {r.etikett:<{bredde}}│{_maal_celler(r.m)}")
+            print(f"  {r.label:<{width}}│{_target_cells(r.m)}")
         return front
 
-    print(f"  {'konfigurasjon':<{bredde}}│"
-          f" {'tapt':>5} {'tapt%':>7} {'ov.fj':>7} {'ov%':>6} {'netto':>8} │"
-          f" {'tapt':>5} {'tapt%':>7} {'ov.fj':>7} {'ov%':>6} {'netto':>8} │"
-          f" {'Δtapt%':>7} {'Δov%':>7}")
-    print(f"  {' ' * bredde}│{'  trening'.ljust(38)} │"
+    print(f"  {'configuration':<{width}}│"
+          f" {'lost':>5} {'lost%':>7} {'ov.rm':>7} {'ov%':>6} {'net':>8} │"
+          f" {'lost':>5} {'lost%':>7} {'ov.rm':>7} {'ov%':>6} {'net':>8} │"
+          f" {'Δlost%':>7} {'Δov%':>7}")
+    print(f"  {' ' * width}│{'  training'.ljust(38)} │"
           f"{'  holdout'.ljust(38)} │")
-    print(f"  {'─' * bredde}┼{'─' * 39}┼{'─' * 39}┼{'─' * 17}")
+    print(f"  {'─' * width}┼{'─' * 39}┼{'─' * 39}┼{'─' * 17}")
 
-    resultat = []
+    result = []
     for r in front:
-        t = evaluer(ds_test, lag_predikat(r.spec), kostnad=kostnad)
-        print(f"  {r.etikett:<{bredde}}│"
-              f" {r.m.tapt:>5} {r.m.tapt_pst:>6.2f}% {r.m.ov_fj:>7} "
-              f"{r.m.ov_pst:>5.1f}% {r.m.netto:>+8.0f} │"
-              f" {t.tapt:>5} {t.tapt_pst:>6.2f}% {t.ov_fj:>7} "
-              f"{t.ov_pst:>5.1f}% {t.netto:>+8.0f} │"
-              f" {t.tapt_pst - r.m.tapt_pst:>+6.2f}p {t.ov_pst - r.m.ov_pst:>+6.1f}p")
-        resultat.append((r, t))
-    return resultat
+        t = measure_filter(ds_test, make_predicate(r.spec), cost=cost)
+        print(f"  {r.label:<{width}}│"
+              f" {r.m.lost:>5} {r.m.lost_pct:>6.2f}% {r.m.ov_rm:>7} "
+              f"{r.m.ov_pct:>5.1f}% {r.m.net:>+8.0f} │"
+              f" {t.lost:>5} {t.lost_pct:>6.2f}% {t.ov_rm:>7} "
+              f"{t.ov_pct:>5.1f}% {t.net:>+8.0f} │"
+              f" {t.lost_pct - r.m.lost_pct:>+6.2f}p {t.ov_pct - r.m.ov_pct:>+6.1f}p")
+        result.append((r, t))
+    return result
 
 
-def _anbefaling(front, kostnad, ds_test=None):
-    """Peker ut konfigurasjonen med best netto på fronten."""
+def _recommendation(front, cost, ds_test=None):
     if not front:
         return
     if ds_test is not None:
-        beste = max(front, key=lambda rt: rt[1].netto)   # velg på holdout
-        r, t = beste
-        print(f"\n  Beste netto på HOLDOUT (kostnad {kostnad:g}): {r.etikett}")
-        print(f"    trening: tapt {r.m.tapt} ({r.m.tapt_pst:.2f}%), "
-              f"ov.fj {r.m.ov_fj} ({r.m.ov_pst:.1f}%), recall {r.m.recall_etter:.2f}%")
-        print(f"    holdout: tapt {t.tapt} ({t.tapt_pst:.2f}%), "
-              f"ov.fj {t.ov_fj} ({t.ov_pst:.1f}%), recall {t.recall_etter:.2f}%")
+        best = max(front, key=lambda rt: rt[1].net)   # choose on holdout
+        r, t = best
+        print(f"\n  Best net on HOLDOUT (cost {cost:g}): {r.label}")
+        print(f"    training: lost {r.m.lost} ({r.m.lost_pct:.2f}%), "
+              f"ov.rm {r.m.ov_rm} ({r.m.ov_pct:.1f}%), recall {r.m.recall_after:.2f}%")
+        print(f"    holdout:  lost {t.lost} ({t.lost_pct:.2f}%), "
+              f"ov.rm {t.ov_rm} ({t.ov_pct:.1f}%), recall {t.recall_after:.2f}%")
         spec = r.spec
     else:
-        r = max(front, key=lambda r: r.m.netto)
-        print(f"\n  Beste netto på fronten (kostnad {kostnad:g}): {r.etikett}")
-        print(f"    tapt {r.m.tapt} ({r.m.tapt_pst:.2f}%), "
-              f"ov.fj {r.m.ov_fj} ({r.m.ov_pst:.1f}%), "
-              f"red.fj {r.m.red_fj}, recall {r.m.recall_etter:.2f}%")
+        r = max(front, key=lambda r: r.m.net)
+        print(f"\n  Best net on the front (cost {cost:g}): {r.label}")
+        print(f"    lost {r.m.lost} ({r.m.lost_pct:.2f}%), "
+              f"ov.rm {r.m.ov_rm} ({r.m.ov_pct:.1f}%), "
+              f"red.rm {r.m.red_rm}, recall {r.m.recall_after:.2f}%")
         spec = r.spec
-    print(f"    filter_review.py ... {review_kommando(spec)}")
+    print(f"    filter_review.py ... {review_command(spec)}")
 
 
-# ── Hovedprogram ─────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────
 
 def main():
     p = argparse.ArgumentParser(
-        description="Fasit-sentrisk evaluering av filterkonfigurasjoner")
-    p.add_argument("--fasit-csv", required=True,
-                   help="Labels-CSV (ACCEPTED + manuell = fasit, REJECTED ekskluderes)")
+        description="Ground-truth-centric evaluation of filter configurations")
+    p.add_argument("--truth-csv", required=True,
+                   help="Labels CSV (ACCEPTED + manual = ground truth, "
+                        "REJECTED excluded)")
     p.add_argument("--res-csv", required=True,
-                   help="Resultat-CSV fra modellen (pikselkoordinater)")
-    p.add_argument("--terskel", type=float, default=STD_TERSKEL,
-                   help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
-    p.add_argument("--kriterium", default=STD_KRITERIUM,
-                   choices=sorted(KRITERIER),
-                   help="Regel for om en prediksjon og en fasit-boks er SAMME "
-                        "FELT. areal = ensidig arealdekning av fasit-boksen "
-                        "(dagens). kortside = overlapp langs fasit-boksens "
-                        "kortside, uavhengig av om siden er rotert. "
-                        f"(default: {STD_KRITERIUM})")
-    p.add_argument("--terskel-liste", default=None, metavar="T,T,...",
-                   help="Terskler i terskel-sweepen, komma-separert "
+                   help="Result CSV from the model (pixel coordinates)")
+    p.add_argument("--threshold", type=float, default=STD_THRESHOLD,
+                   help=f"Overlap threshold for coverage (default: {STD_THRESHOLD})")
+    p.add_argument("--criterion", default=STD_CRITERION,
+                   choices=sorted(CRITERIA),
+                   help="Rule for whether a prediction and a ground-truth box "
+                        "are the SAME FIELD. areal = one-sided area coverage of "
+                        "the ground-truth box (current). kortside = overlap "
+                        "along its short side, regardless of page rotation. "
+                        f"(default: {STD_CRITERION})")
+    p.add_argument("--threshold-list", default=None, metavar="T,T,...",
+                   help="Thresholds in the threshold sweep, comma separated "
                         "(default: 0.15,0.25,0.32,0.40,0.50,0.70,0.90)")
-    p.add_argument("--kriterium-diff", nargs=2, default=None,
+    p.add_argument("--criterion-diff", nargs=2, default=None,
                    metavar=("A", "B"),
-                   help="Sammenlign to matcheregler og vis hvor mange treff "
-                        "som faller ut og kommer til. Hver spesifikasjon er "
-                        "KRITERIUM:TERSKEL, f.eks. areal:0.15 kortside:0.60")
-    p.add_argument("--diff-csv", default=None, metavar="FIL",
-                   help="Skriv boksene som flyttet seg i --kriterium-diff til "
-                        "CSV, for øyekontroll")
-    p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
-                   help="Pred-areal > faktor × dekket fasit-areal ⇒ SLURV "
-                        f"(default: {STD_SLURV_FAKTOR})")
-    p.add_argument("--inkluder-ulabelte", action="store_true", default=True,
-                   help="(default på) Ta med prediksjoner på kjørte "
-                        "dokumenter uten rader i fasit-CSV-en — labels-filen "
-                        "dekker hele uttrekket, så de er gjennomgått med "
-                        "null fnr og prediksjoner der er ekte oversladdinger")
-    p.add_argument("--ekskluder-ulabelte", dest="inkluder_ulabelte",
+                   help="Compare two match rules and show how many hits drop "
+                        "out and come in. Each spec is CRITERION:THRESHOLD, "
+                        "e.g. areal:0.15 kortside:0.60")
+    p.add_argument("--diff-csv", default=None, metavar="FILE",
+                   help="Write the boxes that moved in --criterion-diff to CSV")
+    p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR,
+                   help="Pred area > factor × covered ground-truth area ⇒ SLURV "
+                        f"(default: {STD_SLOPPINESS_FACTOR})")
+    p.add_argument("--include-unlabelled", action="store_true", default=True,
+                   help="(default on) Include predictions on processed "
+                        "documents with no rows in the labels CSV, the labels "
+                        "file covers the whole uttrekk, so those were reviewed "
+                        "with zero fnr and predictions there are real "
+                        "oversladdinger")
+    p.add_argument("--exclude-unlabelled", dest="include_unlabelled",
                    action="store_false",
-                   help="Gammel oppførsel: hold dokumenter uten fasit-rader "
-                        "utenfor scope (for eldre labels-filer som ikke "
-                        "dekket hele uttrekket)")
-    p.add_argument("--form-pst", type=float, default=0.1, metavar="P",
-                   help="Persentil for form-grensen utledet fra TREFF-bokser: "
-                        "nedre grense = pP, øvre = p(100-P). Lavere = mer "
-                        "konservativt (default: 0.1)")
-    p.add_argument("--kjorte-liste", default=None, metavar="FIL",
-                   help="Fil med dokumentene modellen har kjørt på (ett navn "
-                        "eller nummer per linje). Uten den antas dokumentene "
-                        "i resultat-CSV-en, og et dokument der modellen ikke "
-                        "fant noe regnes som ukjørt.")
-    p.add_argument("--kostnad", type=float, default=1.0,
-                   help="Hvor mange fjernede oversladdinger én tapt fasit-boks "
-                        "er verdt. netto = ov.fj − kostnad × tapt (default: 1)")
-    p.add_argument("--holdout", type=float, default=None, metavar="ANDEL",
-                   help="Hold av denne andelen av DOKUMENTENE til uavhengig "
-                        "måling (f.eks. 0.3). Sweepen kjøres på resten, og "
-                        "Pareto-fronten måles på begge.")
+                   help="Old behaviour: keep documents without ground-truth "
+                        "rows out of scope (for older labels files that did "
+                        "not cover the whole uttrekk)")
+    p.add_argument("--form-pct", type=float, default=0.1, metavar="P",
+                   help="Percentile for the shape limit derived from TREFF "
+                        "boxes: lower = pP, upper = p(100-P). Lower is more "
+                        "conservative (default: 0.1)")
+    p.add_argument("--processed-list", default=None, metavar="FILE",
+                   help="File listing the documents the model ran on (one name "
+                        "or number per line). Without it the documents in the "
+                        "result CSV are assumed, and a document where the model "
+                        "found nothing counts as not run.")
+    p.add_argument("--cost", type=float, default=1.0,
+                   help="How many removed oversladdinger one lost ground-truth "
+                        "box is worth. net = ov.rm − cost × lost (default: 1)")
+    p.add_argument("--holdout", type=float, default=None, metavar="FRACTION",
+                   help="Hold back this fraction of the DOCUMENTS for "
+                        "independent measurement (e.g. 0.3). The sweep runs on "
+                        "the rest; the Pareto front is measured on both.")
     p.add_argument("--seed", type=int, default=42,
-                   help="Seed for holdout-splitten (default: 42)")
-    p.add_argument("--sort", default="netto",
+                   help="Seed for the holdout split (default: 42)")
+    p.add_argument("--sort", default="net",
                    choices=sorted(set(SORT_FNS) | set(SORT_ALIAS)),
-                   help="Sorteringskolonne (default: netto)")
-    p.add_argument("--maks-tapt", type=float, default=None,
-                   help="Skjul rader der flere enn N fasit-bokser går tapt")
-    p.add_argument("--maks-tapt-pst", "--maks-rik-pst", type=float, default=None,
-                   dest="maks_tapt_pst",
-                   help="Skjul rader der mer enn denne %% av dekkede fasit-bokser tapes")
-    p.add_argument("--min-ov-tapt", "--min-ov-rik", type=float, default=None,
-                   dest="min_ov_tapt",
-                   help="Vis kun rader der ov.fj/tapt > denne verdien")
-    p.add_argument("--alle-rader", action="store_true",
-                   help="Skriv alle konfigurasjoner i kombinasjons-tabellene, "
-                        "ikke bare Pareto-fronten. Gir en mye større fil.")
-    p.add_argument("--maks-rader", type=int, default=None,
-                   help="Maks antall rader per tabell")
-    p.add_argument("--ut", default=None, metavar="FIL",
-                   help="Skriv rapport til fil (default: auto-generert filnavn)")
-    p.add_argument("--ut-csv", default=None, metavar="FIL",
-                   help="Skriv alle sweep-rader til CSV for videre analyse")
+                   help="Sort column (default: net)")
+    p.add_argument("--max-lost", type=float, default=None,
+                   help="Hide rows losing more than N ground-truth boxes")
+    p.add_argument("--max-lost-pct", "--max-correct-pct", type=float, default=None,
+                   dest="max_lost_pct",
+                   help="Hide rows losing more than this %% of covered boxes")
+    p.add_argument("--min-ov-lost", type=float, default=None,
+                   dest="min_ov_lost",
+                   help="Only show rows where ov.rm/lost exceeds this value")
+    p.add_argument("--all-rows", action="store_true",
+                   help="Print every configuration in the combination tables, "
+                        "not just the Pareto front. Makes a much bigger file.")
+    p.add_argument("--max-rows", type=int, default=None,
+                   help="Max rows per table")
+    p.add_argument("--out", default=None, metavar="FILE",
+                   help="Write the report to a file (default: generated name)")
+    p.add_argument("--out-csv", default=None, metavar="FILE",
+                   help="Write all sweep rows to CSV for further analysis")
     args = p.parse_args()
 
     if args.holdout is not None and not 0 < args.holdout < 1:
-        p.error("--holdout må være mellom 0 og 1 (f.eks. 0.3)")
+        p.error("--holdout must be between 0 and 1 (e.g. 0.3)")
 
-    ut_fil = args.ut or (
+    out_file = args.out or (
         f"filter_sweep_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.txt")
 
     class _Tee:
-        """Skriver alt til fil, men kun utvalgte deler til terminalen."""
+        """Writes everything to file, only selected parts to the terminal."""
 
-        def __init__(self, filobj, terminal):
-            self.fil, self.terminal = filobj, terminal
-            self.til_terminal = True
+        def __init__(self, file_obj, terminal):
+            self.file, self.terminal = file_obj, terminal
+            self.to_terminal = True
 
-        def write(self, tekst):
-            self.fil.write(tekst)
-            if self.til_terminal:
-                self.terminal.write(tekst)
+        def write(self, text):
+            self.file.write(text)
+            if self.to_terminal:
+                self.terminal.write(text)
 
         def flush(self):
-            self.fil.flush()
+            self.file.flush()
             self.terminal.flush()
 
-    fil = open(ut_fil, "w", encoding="utf-8")
-    tee = _Tee(fil, sys.stdout)
+    file = open(out_file, "w", encoding="utf-8")
+    tee = _Tee(file, sys.stdout)
     sys.stdout = tee
     try:
-        fasit = les_fasit(args.fasit_csv)
-        pred = les_prediksjoner(args.res_csv)
-        kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
-        ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
-                                slurv_faktor=args.slurv_faktor,
-                                inkluder_ulabelte=args.inkluder_ulabelte,
-                                kjorte_dok=kjorte, kriterium=args.kriterium)
+        truth = read_truth_boxes(args.truth_csv)
+        pred = read_predictions(args.res_csv)
+        processed = read_processed_docs(args.processed_list) if args.processed_list else None
+        ds_full = build_dataset(truth, pred, threshold=args.threshold,
+                                oversize_factor=args.oversize_factor,
+                                include_unlabelled=args.include_unlabelled,
+                                processed_doc=processed, criterion=args.criterion)
 
-        print(f"Kriterium «{args.kriterium}», terskel {args.terskel:.0%}, "
-              f"slurv-faktor {args.slurv_faktor:g}, "
-              f"kostnad {args.kostnad:g}")
-        if args.kriterium in ANBEFALT_TERSKEL and abs(
-                args.terskel - ANBEFALT_TERSKEL[args.kriterium]) > 1e-9:
-            print(f"  Merk: anbefalt terskel for «{args.kriterium}» er "
-                  f"{ANBEFALT_TERSKEL[args.kriterium]:.0%} "
-                  f"(målt på label-par fra uttrekk 4 + 5)")
+        print(f"Criterion «{args.criterion}», threshold {args.threshold:.0%}, "
+              f"slurv factor {args.oversize_factor:g}, "
+              f"cost {args.cost:g}")
+        if args.criterion in RECOMMENDED_THRESHOLDS and abs(
+                args.threshold - RECOMMENDED_THRESHOLDS[args.criterion]) > 1e-9:
+            print(f"  Note: recommended threshold for «{args.criterion}» is "
+                  f"{RECOMMENDED_THRESHOLDS[args.criterion]:.0%} "
+                  f"(measured on label pairs from uttrekk 4 + 5)")
         print("")
-        skriv_oppsummering(ds_full)
+        write_summary(ds_full)
 
         ds_test = None
         if args.holdout is not None:
-            ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
-            n_dok_tren = len({p["dok_nr"] for p in ds.pred})
-            n_dok_test = len({p["dok_nr"] for p in ds_test.pred})
-            print(f"\n  Holdout-splitt (seed {args.seed}, andel "
-                  f"{args.holdout:g}, delt på dokument):")
-            print(f"    trening: {n_dok_tren:>6} dok, {len(ds.pred):>7} pred, "
-                  f"{ds.dekket_foer:>6} dekkede fasit-bokser, "
-                  f"{ds.n_bom:>6} oversladdinger")
-            print(f"    holdout: {n_dok_test:>6} dok, {len(ds_test.pred):>7} pred, "
-                  f"{ds_test.dekket_foer:>6} dekkede fasit-bokser, "
-                  f"{ds_test.n_bom:>6} oversladdinger")
+            ds, ds_test = split_by_document(ds_full, args.holdout, args.seed)
+            n_doc_train = len({p["doc_no"] for p in ds.pred})
+            n_doc_test = len({p["doc_no"] for p in ds_test.pred})
+            print(f"\n  Holdout split (seed {args.seed}, fraction "
+                  f"{args.holdout:g}, split by document):")
+            print(f"    training: {n_doc_train:>6} docs, {len(ds.pred):>7} pred, "
+                  f"{ds.covered_before:>6} covered ground-truth boxes, "
+                  f"{ds.n_miss:>6} oversladdinger")
+            print(f"    holdout:  {n_doc_test:>6} docs, {len(ds_test.pred):>7} pred, "
+                  f"{ds_test.covered_before:>6} covered ground-truth boxes, "
+                  f"{ds_test.n_miss:>6} oversladdinger")
         else:
             ds = ds_full
-            print("\n  (ingen holdout — bruk --holdout 0.3 for å se om den "
-                  "valgte konfigurasjonen holder på uavhengige dokumenter)")
+            print("\n  (no holdout, use --holdout 0.3 to see whether the "
+                  "chosen configuration holds on independent documents)")
 
-        tee.til_terminal = False
+        tee.to_terminal = False
 
-        terskler = ([float(t) for t in args.terskel_liste.split(",")]
-                    if args.terskel_liste
+        thresholds = ([float(t) for t in args.threshold_list.split(",")]
+                    if args.threshold_list
                     else [0.15, 0.25, 0.32, 0.40, 0.50, 0.70, 0.90])
-        _sweep_terskel(fasit, pred, terskler, args.terskel,
-                       args.slurv_faktor, args.inkluder_ulabelte, kjorte,
-                       kriterium=args.kriterium)
+        _sweep_threshold(truth, pred, thresholds, args.threshold,
+                       args.oversize_factor, args.include_unlabelled, processed,
+                       criterion=args.criterion)
 
-        if args.kriterium_diff:
-            spek = []
-            for rå in args.kriterium_diff:
-                navn, _, t = rå.partition(":")
-                if navn not in KRITERIER:
-                    p.error(f"ukjent kriterium {navn!r} i --kriterium-diff — "
-                            f"gyldige: {', '.join(sorted(KRITERIER))}")
+        if args.criterion_diff:
+            spec_text = []
+            for raw in args.criterion_diff:
+                name, _, t = raw.partition(":")
+                if name not in CRITERIA:
+                    p.error(f"unknown criterion {name!r} in --criterion-diff, "
+                            f"valid: {', '.join(sorted(CRITERIA))}")
                 if not t:
-                    p.error(f"mangler terskel i {rå!r} — skriv f.eks. {navn}:0.40")
-                spek.append((navn, float(t)))
-            _diff_kriterier(fasit, pred, spek[0], spek[1], args.slurv_faktor,
-                            args.inkluder_ulabelte, kjorte, args.diff_csv)
+                    p.error(f"missing threshold in {raw!r}, write e.g. {name}:0.40")
+                spec_text.append((name, float(t)))
+            _diff_criteria(truth, pred, spec_text[0], spec_text[1], args.oversize_factor,
+                            args.include_unlabelled, processed, args.diff_csv)
 
-        # bygg_datasett muterer prediksjonene — bygg opp igjen med valgt terskel
-        ds_full = bygg_datasett(fasit, pred, terskel=args.terskel,
-                                slurv_faktor=args.slurv_faktor,
-                                inkluder_ulabelte=args.inkluder_ulabelte,
-                                kjorte_dok=kjorte, kriterium=args.kriterium)
+        # build_dataset mutates the predictions, so rebuild with the chosen threshold
+        ds_full = build_dataset(truth, pred, threshold=args.threshold,
+                                oversize_factor=args.oversize_factor,
+                                include_unlabelled=args.include_unlabelled,
+                                processed_doc=processed, criterion=args.criterion)
         if args.holdout is not None:
-            ds, ds_test = splitt_dokumenter(ds_full, args.holdout, args.seed)
+            ds, ds_test = split_by_document(ds_full, args.holdout, args.seed)
         else:
             ds = ds_full
 
-        _sweep_en_param(ds, "MIN_ELONGATION max(w/h, h/w)",
+        _sweep_one_param(ds, "MIN_ELONGATION max(w/h, h/w)",
                         [1.1, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
-                        lambda v: {"min_elongation": v}, args.kostnad)
-        _sweep_en_param(ds, "MAKS_BOKS_HOYDE_PT",
+                        lambda v: {"min_elongation": v}, args.cost)
+        _sweep_one_param(ds, "MAKS_BOKS_HOYDE_PT",
                         [25, 30, 35, 40, 45, 50, 60, 80, 100],
-                        lambda v: {"maks_hoyde": v}, args.kostnad)
-        _sweep_en_param(ds, "MAKS_BOKS_BREDDE_PT",
+                        lambda v: {"max_height": v}, args.cost)
+        _sweep_one_param(ds, "MAKS_BOKS_BREDDE_PT",
                         [60, 80, 100, 120, 150, 200, 250],
-                        lambda v: {"maks_bredde": v}, args.kostnad)
+                        lambda v: {"max_width": v}, args.cost)
 
-        har_conf = any(x["conf"] is not None for x in ds.pred)
-        if har_conf:
-            _sweep_en_param(
-                ds, "CONF_TERSKEL (conf≥V beholdes uansett geometri; "
-                    "kombinert med e=1.5/h=50/b=120)",
+        has_conf = any(x["conf"] is not None for x in ds.pred)
+        if has_conf:
+            _sweep_one_param(
+                ds, "CONF_TERSKEL (conf≥V kept regardless of geometry; "
+                    "combined with e=1.5/h=50/b=120)",
                 [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-                lambda v: {"min_elongation": 1.5, "maks_hoyde": 50,
-                           "maks_bredde": 120, "conf_terskel": v},
-                args.kostnad)
+                lambda v: {"min_elongation": 1.5, "max_height": 50,
+                           "max_width": 120, "conf_threshold": v},
+                args.cost)
 
-        _sweep_en_param(ds, "MIN_BOKS_AREAL (px²) — bittesmå bokser",
+        _sweep_one_param(ds, "MIN_BOX_AREA (px²), tiny boxes",
                         [500, 700, 965, 1200, 1600, 2200, 3000],
-                        lambda v: {"min_areal_px": v}, args.kostnad)
-        _sweep_en_param(ds, "MIN_KORTSIDE_PT — for tynne til å være tekst "
-                            "(orienteringsuavhengig: stående bokser rammes ikke)",
+                        lambda v: {"min_area_px": v}, args.cost)
+        _sweep_one_param(ds, "MIN_SHORT_SIDE_PT: too thin to be text "
+                            "(orientation independent: upright boxes are safe)",
                         [3, 4, 5, 6, 7, 8, 10],
-                        lambda v: {"min_kortside": v}, args.kostnad)
-        _sweep_en_param(ds, "MIN_LANGSIDE_PT — for korte til å romme 5 sifre",
+                        lambda v: {"min_short_side": v}, args.cost)
+        _sweep_one_param(ds, "MIN_LANGSIDE_PT: too short to hold 5 digits",
                         [10, 15, 20, 25, 30, 40, 50],
-                        lambda v: {"min_langside": v}, args.kostnad)
-        _sweep_en_param(ds, "MAKS_ELONGATION — tynne, lange streker",
+                        lambda v: {"min_long_side": v}, args.cost)
+        _sweep_one_param(ds, "MAX_ELONGATION: thin, long strokes",
                         [6, 8, 10, 12, 15, 20, 30, 50],
-                        lambda v: {"maks_elongation": v}, args.kostnad)
+                        lambda v: {"max_elongation": v}, args.cost)
 
-        # ── OCR-trekk: strengere varianter av snill_sjekk ────────
-        # Gjelder kun kilde «yolo» med tekst i boksen — se _ocr_grunn i
-        # filter_felles. Alt annet er urørt uansett hva som settes her.
-        n_trekk = sum(1 for x in ds.pred if x.get("har_tokens"))
-        if not n_trekk:
-            print("\n(ingen trekk-kolonner i resultat-CSV-en — OCR-sweepen "
-                  "hoppes over. Kjør run.py på nytt for å få dem.)")
+        # ── OCR features: stricter variants of lenient_check ────────
+        # Only kilde «yolo» with text in the box is affected. See _ocr_grunn
+        # in filter_common. Everything else is untouched.
+        n_features = sum(1 for x in ds.pred if x.get("har_tokens"))
+        if not n_features:
+            print("\n(no feature columns in the result CSV, the OCR sweep is "
+                  "skipped. Re-run run.py to get them.)")
         else:
             print(f"\n{'═' * 145}")
-            print("OCR-TREKK — strengere snill_sjekk")
-            print(f"  {n_trekk} yolo-bokser med tekst er i spill; "
-                  f"øvrige {len(ds.pred) - n_trekk} prediksjoner er urørt")
+            print("OCR FEATURES: stricter lenient_check")
+            print(f"  {n_features} yolo boxes with text are in play; the other "
+                  f"{len(ds.pred) - n_features} predictions are untouched")
             print(f"{'═' * 145}")
 
-            _sweep_en_param(ds, "MIN_SIFFER i boksen (dagens: 1)",
+            _sweep_one_param(ds, "MIN_DIGITS in the box (current: 1)",
                             [2, 3, 4, 5, 6, 8, 11],
-                            lambda v: {"min_siffer": v}, args.kostnad)
-            _sweep_en_param(ds, "MAKS_BOKSTAVER i boksen (dagens: 1)",
+                            lambda v: {"min_digits": v}, args.cost)
+            _sweep_one_param(ds, "MAX_LETTERS in the box (current: 1)",
                             [0, 1, 2, 3],
-                            lambda v: {"maks_bokstaver": v}, args.kostnad)
-            _sweep_en_param(ds, "MIN_SIFFER_RUN — lengste sifferløp som "
-                                "overlapper boksen (koordinat = 5-7)",
+                            lambda v: {"max_letters": v}, args.cost)
+            _sweep_one_param(ds, "MIN_SIFFER_RUN: longest digit run "
+                                "overlapping the box (a coordinate = 5-7)",
                             [6, 7, 8, 9, 10, 11],
-                            lambda v: {"min_siffer_run": v}, args.kostnad)
-            _sweep_en_param(ds, "REC_VETO — min_siffer=2 slås bare på når "
-                                "Paddle leste boksen sikkert",
+                            lambda v: {"min_digits_run": v}, args.cost)
+            _sweep_one_param(ds, "REC_VETO: min_siffer=2 applies only where "
+                                "Paddle read the box confidently",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"min_siffer": 2, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "KREV_FNR_KANDIDAT — 11-sifret fnr-form på "
-                                "linjen, med rec_veto-port",
+                            lambda v: {"min_digits": 2, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "KREV_FNR_KANDIDAT: 11-digit fnr shape on "
+                                "the line, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"krev_fnr_kandidat": 1, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_DESIMAL — desimalskille i tallet, "
-                                "med rec_veto-port",
+                            lambda v: {"require_fnr_candidate": 1, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_DESIMAL: decimal separator in the "
+                                "number, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"avvis_desimal": 1, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_DESIMAL + CONF-FRITAK — desimalregelen "
-                                "(rec_veto 0.98) viker når deteksjons-conf ≥ V",
+                            lambda v: {"reject_decimal": 1, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_DESIMAL + CONF EXEMPTION: the decimal "
+                                "rule (rec_veto 0.98) yields at detection "
+                                "conf ≥ V",
                             [None, 0.40, 0.45, 0.50, 0.60, 0.70],
-                            lambda v: {"avvis_desimal": 1, "rec_veto": 0.98,
-                                       "ocr_conf_fritak": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_00_RUN — 10-12-sifret løp starter med "
-                                "00 (orgnr paddet til fnr-bredde), med "
-                                "rec_veto-port",
+                            lambda v: {"reject_decimal": 1, "rec_veto": 0.98,
+                                       "ocr_conf_exempt": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_00_RUN: a 10-12 digit run starts with "
+                                "00 (orgnr padded to fnr width), with a "
+                                "rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"avvis_00_run": 1, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_ORGNR — gyldig orgnr-mod11 i boksen, "
-                                "med rec_veto-port",
+                            lambda v: {"reject_00_run": 1, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_ORGNR: valid orgnr mod11 in the box, "
+                                "with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"avvis_orgnr": 1, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_ORG_ORD=1 — org-ord nær boksen, med "
-                                "rec_veto-port",
+                            lambda v: {"reject_orgnr": 1, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_ORG_ORD=1: org word near the box, "
+                                "with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"avvis_org_ord": 1, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_ORG_ORD=2 — org-ord nær boksen OG "
-                                "ingen fnr-kandidat, med rec_veto-port",
+                            lambda v: {"reject_org_ord": 1, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_ORG_ORD=2: org word near the box AND "
+                                "no fnr candidate, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
-                            lambda v: {"avvis_org_ord": 2, "rec_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "KREV_FNR_KANDIDAT + LINJE_VETO — som "
-                                "fnr-kandidat (rec_veto 0.98), men regelen "
-                                "gjelder først når HELE linjen er lest med "
-                                "rec_min_linje ≥ V (terskler over 0.999 "
-                                "krever trekk med 5 desimaler)",
+                            lambda v: {"reject_org_ord": 2, "rec_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "KREV_FNR_KANDIDAT + LINJE_VETO: as "
+                                "fnr candidate (rec_veto 0.98), but the rule "
+                                "applies only once the WHOLE line is read with "
+                                "rec_min_linje ≥ V (thresholds above 0.999 "
+                                "need features with 5 decimals)",
                             [None, 0.95, 0.98, 0.99, 0.995, 0.999, 0.9999],
-                            lambda v: {"krev_fnr_kandidat": 1,
-                                       "rec_veto": 0.98, "linje_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_RUN_BÅND — øvre grense for løpelengden "
-                                "(6..V) med rec 0.98/linje 0.99; 10-løp er "
-                                "ofte fnr med ensifret dag/måned",
+                            lambda v: {"require_fnr_candidate": 1,
+                                       "rec_veto": 0.98, "line_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_RUN_BAND: upper limit on run length "
+                                "(6..V) with rec 0.98/line 0.99; 10-runs are "
+                                "often fnr with a single-digit day/month",
                             [None, 8, 9, 10],
-                            lambda v: {"avvis_run_6_10": v,
-                                       "rec_veto": 0.98, "linje_veto": 0.99},
-                            args.kostnad)
-            _sweep_en_param(ds, "AVVIS_RUN_6_9 + LINJE_VETO — bånd 6-9, med "
-                                "rec_veto 0.98 og linje_veto ≥ V",
+                            lambda v: {"reject_run_6_10": v,
+                                       "rec_veto": 0.98, "line_veto": 0.99},
+                            args.cost)
+            _sweep_one_param(ds, "AVVIS_RUN_6_9 + LINJE_VETO: band 6-9, with "
+                                "rec_veto 0.98 and linje_veto ≥ V",
                             [None, 0.98, 0.99, 0.995, 0.999, 0.9999],
-                            lambda v: {"avvis_run_6_10": 9,
-                                       "rec_veto": 0.98, "linje_veto": v},
-                            args.kostnad)
-            _sweep_en_param(ds, "UTEN_TEKST_CONF — bokser uten OCR-tekst "
-                                "krever conf ≥ V (prod: 0.40; treffer "
-                                "grafikk/kart-deteksjoner tekstreglene "
-                                "aldri ser)",
+                            lambda v: {"reject_run_6_10": 9,
+                                       "rec_veto": 0.98, "line_veto": v},
+                            args.cost)
+            _sweep_one_param(ds, "UTEN_TEKST_CONF: boxes without OCR text "
+                                "require conf ≥ V (prod: 0.40; hits the "
+                                "graphics/map detections the text rules never "
+                                "see)",
                             [None, 0.45, 0.50, 0.60, 0.70, 0.80],
-                            lambda v: {"uten_tekst_conf": v},
-                            args.kostnad)
+                            lambda v: {"without_text_conf": v},
+                            args.cost)
 
-        # ── Vindu-trekk: paddle-bokser sydd over desimaler/kolonnegap ──
-        n_vindu = sum(1 for x in ds.pred if x.get("maks_luke") is not None)
-        if not n_vindu:
-            print("\n(ingen vindu-trekk i resultat-CSV-en — paddle-vindu-"
-                  "sweepen hoppes over. Kjør run.py på nytt for å få dem.)")
+        # ── Window features: paddle boxes stitched over decimals/column gaps ──
+        n_window = sum(1 for x in ds.pred if x.get("maks_luke") is not None)
+        if not n_window:
+            print("\n(no window features in the result CSV, the paddle "
+                  "window sweep is skipped. Re-run run.py to get them.)")
         else:
             print(f"\n{'═' * 145}")
-            print("PADDLE-VINDU — 11-siffer-vinduet boksen ble bygget fra")
-            print(f"  {n_vindu} paddle/begge-bokser med vindu-trekk er i "
-                  f"spill; alt annet er urørt")
+            print("PADDLE WINDOW: the 11-digit window the box was built from")
+            print(f"  {n_window} paddle/begge boxes with window features are "
+                  f"in play; everything else is untouched")
             print(f"{'═' * 145}")
-            _sweep_en_param(ds, "MAKS_LUKE (GLOBALT, inkl. begge-tap — se "
-                                "per-kilde-rutenettet for beslutningen) — "
-                                "største fysiske luke i vinduet, i siffer-"
-                                "bredder. "
-                                "Koordinat-søm («6626630.58 549810.29») og "
-                                "skisse-mål gir store luker; et ekte fnr "
-                                "ligger kant i kant",
+            _sweep_one_param(ds, "MAKS_LUKE (GLOBAL, incl. begge loss, see the "
+                                "per-kilde grid for the decision), largest "
+                                "physical gap in the window, in digit widths. "
+                                "Coordinate stitching («6626630.58 549810.29») "
+                                "and sketch measurements give wide gaps; a real "
+                                "fnr sits edge to edge",
                             [1.5, 2, 3, 4, 6, 8, 12],
-                            lambda v: {"maks_luke": v}, args.kostnad)
-            _sweep_en_param(ds, "AVVIS_DESIMAL_LUKE — en luke i vinduet "
-                                "inneholder desimalskille (. eller ,)",
+                            lambda v: {"max_gap": v}, args.cost)
+            _sweep_one_param(ds, "AVVIS_DESIMAL_LUKE: a gap in the window "
+                                "contains a decimal separator (. or ,)",
                             [1],
-                            lambda v: {"avvis_desimal_luke": v}, args.kostnad)
-            _sweep_en_param(ds, "DESIMAL_LUKE + MAKS_LUKE kombinert",
+                            lambda v: {"reject_decimal_gap": v}, args.cost)
+            _sweep_one_param(ds, "DESIMAL_LUKE + MAKS_LUKE combined",
                             [None, 1.5, 2, 3, 4, 6],
-                            lambda v: {"avvis_desimal_luke": 1,
-                                       "maks_luke": v}, args.kostnad)
+                            lambda v: {"reject_decimal_gap": 1,
+                                       "max_gap": v}, args.cost)
 
-        _sweep_fordeling(ds)
-        _rapport_grenser(ds, ds_test, args.form_pst, args.kostnad)
+        _sweep_distribution(ds)
+        _report_bounds(ds, ds_test, args.form_pct, args.cost)
 
         elong_v = [None, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0, 2.5, 3.0]
-        hoyde_v = [None, 40, 50, 60, 80]
-        bredde_v = [None, 80, 100, 120, 150]
-        conf_v = [None, 0.5] if har_conf else [None]
+        height_v = [None, 40, 50, 60, 80]
+        width_v = [None, 80, 100, 120, 150]
+        conf_v = [None, 0.5] if has_conf else [None]
 
-        csv_rader = [] if args.ut_csv else None
-        grenser = dict(maks_tapt=args.maks_tapt,
-                       maks_tapt_pst=args.maks_tapt_pst,
-                       min_ov_tapt=args.min_ov_tapt)
-        felles = dict(kostnad=args.kostnad, sort_key=args.sort,
-                      csv_rader=csv_rader, maks_rader=args.maks_rader,
-                      bare_front=not args.alle_rader, **grenser)
+        csv_rows = [] if args.out_csv else None
+        bounds = dict(max_lost=args.max_lost,
+                       max_lost_pct=args.max_lost_pct,
+                       min_ov_lost=args.min_ov_lost)
+        common = dict(cost=args.cost, sort_key=args.sort,
+                      csv_rows=csv_rows, max_rows=args.max_rows,
+                      only_front=not args.all_rows, **bounds)
 
-        alle_rader = _sweep_kombinasjoner(ds, elong_v, hoyde_v, bredde_v,
-                                          conf_v, **felles)
+        all_rows = _sweep_combinations(ds, elong_v, height_v, width_v,
+                                          conf_v, **common)
 
-        # OCR-aksene måles globalt, som alt annet, men kan bare treffe
-        # yolo-bokser med tekst. Radene blir med i den samlede Pareto-fronten
-        # så en OCR-regel kan konkurrere direkte mot en geometrigrense.
-        ocr_rader = []
-        if n_trekk:
-            # avvis_desimal er med i BEGGE rutenettene med vilje. finn_fnr
-            # tillater «.» og «,» som luke mellom sifferbiter — det er riktig
-            # for et fnr OCR har delt opp, men på en koordinatlinje syr det
-            # sammen to nabotall til et 11-sifret løp med gyldig form.
-            # «370600.83 -56912.29» gir en fnr-kandidat på den måten. Da er
-            # desimalskillet det som skiller, ikke kandidaten.
-            ocr_rader = _sweep_kombinasjoner(
+        # OCR axes only hit yolo boxes with text, but their rows join the
+        # shared Pareto front so they compete against the geometry limits.
+        ocr_rows = []
+        if n_features:
+            # avvis_desimal is in BOTH grids on purpose: find_fnr accepts "."
+            # and "," as a gap between digit pieces, which is right for an fnr
+            # the OCR split up, but on a coordinate line it stitches two
+            # neighbouring numbers into a valid-looking 11-digit run
+            # («370600.83 -56912.29»). There the decimal is the discriminator,
+            # not the candidate.
+            ocr_rows = _sweep_combinations(
                 ds, [None, 2, 3, 5, 8, 11], [None, 6, 7, 9, 11],
                 [None, 1], [None, 0.80, 0.90, 0.95, 0.98],
-                felt=("min_siffer", "min_siffer_run", "avvis_desimal",
+                field=("min_digits", "min_digits_run", "reject_decimal",
                       "rec_veto"),
-                hoder=("s.min", "løp", "des", "rec≥"),
-                tittel="OCR-TREKK KOMBINERT: sifferkrav "
-                       "(treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-siffer ", **felles)
-            ocr_rader += _sweep_kombinasjoner(
+                headers=("s.min", "run", "des", "rec≥"),
+                title="OCR FEATURES COMBINED: digit requirements "
+                       "(hits only «yolo» with text)",
+                label_prefix="ocr-siffer ", **common)
+            ocr_rows += _sweep_combinations(
                 ds, [None, 6, 7, 9, 11], [None, 1], [None, 1],
                 [None, 0.80, 0.90, 0.95, 0.98],
-                felt=("min_siffer_run", "krev_fnr_kandidat", "avvis_desimal",
+                field=("min_digits_run", "require_fnr_candidate", "reject_decimal",
                       "rec_veto"),
-                hoder=("løp", "fnr", "des", "rec≥"),
-                tittel="OCR-TREKK KOMBINERT: fnr-kandidat "
-                       "(treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-fnr ", **felles)
-            # Sifferkravet med linjebevis-medisinen: cfritak og linje-veto
-            # var det som gjorde run-regelen prod-klar; min_siffer fikk
-            # tidoblet ov/tapt i nytt regime og har aldri fått samme porter.
-            ocr_rader += _sweep_kombinasjoner(
+                headers=("run", "fnr", "des", "rec≥"),
+                title="OCR FEATURES COMBINED: fnr candidate "
+                       "(hits only «yolo» with text)",
+                label_prefix="ocr-fnr ", **common)
+            # cfritak and line veto made the run rule prod-ready; min_siffer
+            # got a tenfold ov/lost in the new regime without the same gates.
+            ocr_rows += _sweep_combinations(
                 ds, [None, 4, 5, 6], [None, 0.95, 0.98], [None, 0.99],
                 [None, 0.5, 0.6],
-                felt=("min_siffer", "rec_veto", "linje_veto",
-                      "ocr_conf_fritak"),
-                hoder=("s.min", "rec≥", "linje≥", "cfrit"),
-                tittel="OCR-TREKK KOMBINERT: sifferkrav med linje-veto og "
-                       "conf-fritak (treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-smin ", **felles)
-            # Orgnr-reglene med linje-veto: mod11 er verdiløs hvis ett
-            # siffer er feillest — linjevetoet er den naturlige porten,
-            # og reglene lå rett under kostnadskravet med bare rec-veto.
-            ocr_rader += _sweep_kombinasjoner(
+                field=("min_digits", "rec_veto", "line_veto",
+                      "ocr_conf_exempt"),
+                headers=("s.min", "rec≥", "linje≥", "cfrit"),
+                title="OCR FEATURES COMBINED: digit requirement with line "
+                       "veto and conf exemption (hits only «yolo» with text)",
+                label_prefix="ocr-smin ", **common)
+            # Orgnr rules with line veto: mod11 is worthless if one digit is
+            # misread, so the line veto is the natural gate, with rec veto
+            # alone these rules landed just below the cost requirement.
+            ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 1], [None, 0.99, 0.999],
                 [None, 0.5],
-                felt=("avvis_00_run", "avvis_orgnr", "linje_veto",
-                      "ocr_conf_fritak"),
-                hoder=("00run", "orgnr", "linje≥", "cfrit"),
-                tittel="OCR-TREKK KOMBINERT: orgnummer-regler med linje-veto "
-                       "(treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-orglinje ", **felles)
-            # Linjebevis-reglene: fnr-kandidat og løpelengde 6-10, portet
-            # på lesekvaliteten til hele linjen. Fjerde akse er cfritak så
-            # høy YOLO-conf kan verne ekte fnr.
-            ocr_rader += _sweep_kombinasjoner(
+                field=("reject_00_run", "reject_orgnr", "line_veto",
+                      "ocr_conf_exempt"),
+                headers=("00run", "orgnr", "linje≥", "cfrit"),
+                title="OCR FEATURES COMBINED: orgnr rules with line veto "
+                       "(hits only «yolo» with text)",
+                label_prefix="ocr-orglinje ", **common)
+            # fnr candidate and run length 6-10, gated on the read quality of
+            # the whole line; cfritak lets a high YOLO conf protect a real fnr.
+            ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 9, 10], [None, 0.99, 0.995, 0.999, 0.9999],
                 [None, 0.5, 0.6],
-                felt=("krev_fnr_kandidat", "avvis_run_6_10", "linje_veto",
-                      "ocr_conf_fritak"),
-                hoder=("fnr", "r.maks", "linje≥", "cfrit"),
-                tittel="OCR-TREKK KOMBINERT: linjebevis — fnr-kandidat og "
-                       "løpelengde med linje-veto (linje-vetoet omfatter "
-                       "boksens tokens og er dermed strengere enn rec_veto; "
-                       "treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-linje ", **felles)
-            # Orgnummer-reglene: 00-paddede løp, orgnr-mod11 og
-            # selskapsform-ord, mot rec_veto. Konkurrerer i samme
-            # Pareto-front som resten.
-            ocr_rader += _sweep_kombinasjoner(
+                field=("require_fnr_candidate", "reject_run_6_10", "line_veto",
+                      "ocr_conf_exempt"),
+                headers=("fnr", "r.maks", "linje≥", "cfrit"),
+                title="OCR FEATURES COMBINED: line evidence, fnr candidate "
+                       "and run length with line veto (the line veto covers "
+                       "the box's own tokens and is therefore stricter than "
+                       "rec_veto; hits only «yolo» with text)",
+                label_prefix="ocr-linje ", **common)
+            ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 1], [None, 1, 2],
                 [None, 0.90, 0.95, 0.98],
-                felt=("avvis_00_run", "avvis_orgnr", "avvis_org_ord",
+                field=("reject_00_run", "reject_orgnr", "reject_org_ord",
                       "rec_veto"),
-                hoder=("00run", "orgnr", "orgord", "rec≥"),
-                tittel="OCR-TREKK KOMBINERT: orgnummer-regler "
-                       "(treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-org ", **felles)
-            # Desimalregelen med conf-fritak: manuell gjennomgang viste at
-            # tapene nesten alle har høy deteksjons-conf, mens koordinatene
-            # regelen skal fjerne ligger lavt. Fjerde akse er en dummy.
-            ocr_rader += _sweep_kombinasjoner(
+                headers=("00run", "orgnr", "orgord", "rec≥"),
+                title="OCR FEATURES COMBINED: orgnr rules "
+                       "(hits only «yolo» with text)",
+                label_prefix="ocr-org ", **common)
+            # Decimal rule with conf exemption: manual review showed the losses
+            # nearly all have a high detection conf, while the coordinates the
+            # rule targets sit low. The fourth axis is a dummy.
+            ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 0.90, 0.95, 0.98],
                 [None, 0.40, 0.45, 0.50, 0.60, 0.70], [None],
-                felt=("avvis_desimal", "rec_veto", "ocr_conf_fritak",
-                      "min_siffer"),
-                hoder=("des", "rec≥", "cfrit", "-"),
-                tittel="OCR-TREKK KOMBINERT: desimalregel med conf-fritak "
-                       "(treffer kun «yolo» med tekst)",
-                etikett_prefiks="ocr-cfrit ", **felles)
-            # Paddle-vinduet: bokser fra 11-vinduer sydd over desimal-
-            # skiller og kolonnegap. KUN kilde paddle: globalt rammer reglene
-            # også begge-treffene — ekte fnr skrives med datoformat
-            # («01.01.50 12345» gir desimal-luker etter siffer 2 og 4), OCR
-            # legger inn støyprikker, og skjemafelter splitter fnr fysisk.
-            # Målt globalt @luke3+desluke: 978 tapt / 114 ov.fj — død.
+                field=("reject_decimal", "rec_veto", "ocr_conf_exempt",
+                      "min_digits"),
+                headers=("des", "rec≥", "cfrit", "-"),
+                title="OCR FEATURES COMBINED: decimal rule with conf "
+                       "exemption (hits only «yolo» with text)",
+                label_prefix="ocr-cfrit ", **common)
+            # Paddle window: boxes from 11-windows stitched over decimal
+            # separators and column gaps. ONLY kilde paddle, globally the
+            # rules also hit the begge hits, because a real fnr is written in
+            # date form («01.01.50 12345» gives decimal gaps after digit 2 and
+            # 4), OCR adds noise dots, and form fields split fnr physically.
+            # Measured globally @luke3+desluke: 978 lost / 114 ov.rm, dead.
             if any(x.get("maks_luke") is not None for x in ds.pred):
-                ocr_rader += _sweep_kombinasjoner(
+                ocr_rows += _sweep_combinations(
                     ds, [None, 1], [None, 1.5, 2, 3, 4, 6, 8], [None], [None],
-                    felt=("avvis_desimal_luke", "maks_luke",
-                          "min_siffer", "rec_veto"),
-                    hoder=("desluke", "luke≥", "-", "-"),
-                    tittel="PADDLE-VINDU KOMBINERT: desimal-luke og fysisk "
-                           "lukebredde (KUN kilde paddle)",
-                    kun_kilde="paddle",
-                    etikett_prefiks="p-vindu ", **felles)
-            alle_rader += ocr_rader
+                    field=("reject_decimal_gap", "max_gap",
+                          "min_digits", "rec_veto"),
+                    headers=("desluke", "luke≥", "-", "-"),
+                    title="PADDLE WINDOW COMBINED: decimal gap and physical "
+                           "gap width (ONLY kilde paddle)",
+                    only_source="paddle",
+                    label_prefix="p-vindu ", **common)
+            all_rows += ocr_rows
 
-        STOY_FELT_G = ("min_kortside", "min_langside", "maks_elongation",
-                       "conf_terskel")
-        stoy_rader = _sweep_kombinasjoner(
+        NOISE_FIELD_G = ("min_short_side", "min_long_side", "max_elongation",
+                       "conf_threshold")
+        noise_rows = _sweep_combinations(
             ds, [None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
             [None, 6, 8, 10, 12, 15], conf_v,
-            felt=STOY_FELT_G, hoder=("k.min", "l.min", "e.maks", "conf≥"),
-            tittel="STØYFILTRE — for små eller for tynne til å være 5 sifre",
-            **felles)
+            field=NOISE_FIELD_G, headers=("k.min", "l.min", "e.maks", "conf≥"),
+            title="NOISE FILTERS: too small or too thin to be 5 digits",
+            **common)
 
-        STOY_FELT = ("min_kortside", "min_langside", "maks_elongation",
-                     "conf_terskel")
-        STOY_HODER = ("k.min", "l.min", "e.maks", "conf≥")
-        STOY_AKSER = ([None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
+        NOISE_FIELD = ("min_short_side", "min_long_side", "max_elongation",
+                     "conf_threshold")
+        NOISE_HEADERS = ("k.min", "l.min", "e.maks", "conf≥")
+        NOISE_AXES = ([None, 4, 5, 6, 7], [None, 15, 20, 25, 30],
                       [None, 6, 8, 10, 12, 15])
 
-        kilder = ds.kilder()
-        # Per kilde på støy-aksene: paddle-bokser er tette 5-siffer-bokser med
-        # smalt formområde, yolo-bokser er rå deteksjoner. Terskler som er
-        # gratis for én kilde kan koste for en annen.
-        stoy_per_kilde = {}
-        for kilde in kilder:
+        sources = ds.sources()
+        # Per kilde on the noise axes: paddle boxes are tight 5-digit boxes
+        # with a narrow shape range, yolo boxes are raw detections. A threshold
+        # that is free for one kilde can cost on another.
+        noise_per_source = {}
+        for source in sources:
             k_conf = ([None, 0.5]
-                      if any(x["conf"] is not None for x in ds.per_kilde[kilde])
+                      if any(x["conf"] is not None for x in ds.per_source[source])
                       else [None])
-            stoy_per_kilde[kilde] = _sweep_kombinasjoner(
-                ds, *STOY_AKSER, k_conf, felt=STOY_FELT, hoder=STOY_HODER,
-                tittel=f"STØYFILTRE PER KILDE: {kilde.upper()}",
-                kun_kilde=kilde, **felles)
-            alle_rader += stoy_per_kilde[kilde]
+            noise_per_source[source] = _sweep_combinations(
+                ds, *NOISE_AXES, k_conf, field=NOISE_FIELD, headers=NOISE_HEADERS,
+                title=f"NOISE FILTERS PER KILDE: {source.upper()}",
+                only_source=source, **common)
+            all_rows += noise_per_source[source]
 
-        kryss_rader = []
-        if len(kilder) > 1:
-            per_kilde_rader = {}
-            for kilde in kilder:
+        cross_rows = []
+        if len(sources) > 1:
+            per_source_rows = {}
+            for source in sources:
                 k_conf = ([None, 0.5]
-                          if any(x["conf"] is not None for x in ds.per_kilde[kilde])
+                          if any(x["conf"] is not None for x in ds.per_source[source])
                           else [None])
-                per_kilde_rader[kilde] = _sweep_kombinasjoner(
-                    ds, elong_v, hoyde_v, bredde_v, k_conf,
-                    tittel=f"PER KILDE: {kilde.upper()}", kun_kilde=kilde,
-                    **felles)
-                alle_rader += per_kilde_rader[kilde]
-            kryss_rader = _sweep_kryss_kilder(
-                ds, per_kilde_rader, args.kostnad, args.sort, **grenser)
-            kryss_rader += _sweep_kryss_kilder(
-                ds, stoy_per_kilde, args.kostnad, args.sort,
-                felt=STOY_FELT, **grenser)
+                per_source_rows[source] = _sweep_combinations(
+                    ds, elong_v, height_v, width_v, k_conf,
+                    title=f"PER KILDE: {source.upper()}", only_source=source,
+                    **common)
+                all_rows += per_source_rows[source]
+            cross_rows = _sweep_cross_sources(
+                ds, per_source_rows, args.cost, args.sort, **bounds)
+            cross_rows += _sweep_cross_sources(
+                ds, noise_per_source, args.cost, args.sort,
+                field=NOISE_FIELD, **bounds)
 
-        # ── Pareto-fronter: det eneste avsnittet som også går til terminalen
-        tee.til_terminal = True
-        front = _pareto_tabell(
-            alle_rader + stoy_rader + kryss_rader, args.kostnad, ds_test=ds_test,
-            tittel="PARETO-FRONT — alle konfigurasjoner (felles, per kilde "
-                   "og kryss-kilde)", **grenser)
-        _anbefaling(front, args.kostnad, ds_test=ds_test)
-        tee.til_terminal = False
+        # ── Pareto fronts: the only section that also goes to the terminal
+        tee.to_terminal = True
+        front = _pareto_table(
+            all_rows + noise_rows + cross_rows, args.cost, ds_test=ds_test,
+            title="PARETO FRONT: all configurations (shared, per kilde "
+                   "and cross-kilde)", **bounds)
+        _recommendation(front, args.cost, ds_test=ds_test)
+        tee.to_terminal = False
 
-        if args.ut_csv and csv_rader:
+        if args.out_csv and csv_rows:
             import csv as _csv
-            felt_navn = list(csv_rader[0])
-            for r in csv_rader:
+            field_name = list(csv_rows[0])
+            for r in csv_rows:
                 for k in r:
-                    if k not in felt_navn:
-                        felt_navn.append(k)
-            with open(args.ut_csv, "w", newline="", encoding="utf-8") as f:
-                w = _csv.DictWriter(f, fieldnames=felt_navn)
+                    if k not in field_name:
+                        field_name.append(k)
+            with open(args.out_csv, "w", newline="", encoding="utf-8") as f:
+                w = _csv.DictWriter(f, fieldnames=field_name)
                 w.writeheader()
-                w.writerows(csv_rader)
+                w.writerows(csv_rows)
     finally:
         sys.stdout = tee.terminal
-        fil.close()
+        file.close()
 
-    print(f"\n✓ Rapport skrevet til: {ut_fil} "
-          f"({os.path.getsize(ut_fil) // 1024} KB)")
-    if args.ut_csv:
-        print(f"✓ Sweep-rader skrevet til: {args.ut_csv}")
+    print(f"\n✓ Report written to: {out_file} "
+          f"({os.path.getsize(out_file) // 1024} KB)")
+    if args.out_csv:
+        print(f"✓ Sweep rows written to: {args.out_csv}")
 
 
 if __name__ == "__main__":

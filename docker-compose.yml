@@ -1,31 +1,31 @@
-# Prod og test kjører samme image — kun tag og port skiller dem.
+# Prod and test run the same image — only the tag and the port differ.
 #
-# Compose bygger aldri noe her. Bygging skjer i ./deploy.sh, som gir
-# imaget en uforanderlig tag. Da endrer ikke prod seg av at noen bygger
-# noe nytt, og rollback er å peke PROD_TAG tilbake på en gammel tag.
+# Compose never builds anything here. Building happens in ./deploy.sh, which
+# gives the image an immutable tag. Prod then does not change because someone
+# built something new, and rollback is pointing PROD_TAG at an older tag.
 #
-# Imagene finnes bare lokalt på serveren, så «docker image prune -a»
-# fjerner muligheten til å rulle tilbake.
+# The images exist only locally on the server, so «docker image prune -a»
+# removes the ability to roll back.
 #
-# Port 5071 er alltid prod. Test ligger bak en compose-profil, så et
-# bart "docker compose up -d" ikke starter en testcontainer som spiser
-# GPU-minne ved siden av prod.
+# Port 5071 is always prod. Test sits behind a compose profile, so a bare
+# "docker compose up -d" does not start a test container that eats GPU memory
+# alongside prod.
 
 name: smsl
 
-x-felles: &felles
+x-common: &common
   restart: unless-stopped
   environment:
     HTTP_PROXY: ${PROXY:-http://159.162.48.7:3128}
     HTTPS_PROXY: ${PROXY:-http://159.162.48.7:3128}
-    # Loggstier inne i containeren. Verten monterer inn under
-    # ${LOG_ROOT}, som deploy.sh henter fra SLADD_LOGS i server.env.
+    # Log paths inside the container. The host mounts in under ${LOG_ROOT},
+    # which deploy.sh takes from SLADD_LOGS in server.env.
     GUNICORN_LOG_DIR: /data/gunicorn_logs
     ML_LOG_DIR: /data/ml_logs
     LOG_BACKUP_DAYS: ${LOG_BACKUP_DAYS:-30}
-  # Access-, error- og applikasjonsloggen roterer og zippes selv, inn i
-  # de monterte mappene. Dette taket gjelder stray stdout/stderr, som
-  # ellers vokser uten grense i docker sin egen json-loggfil.
+  # The access, error and application logs rotate and zip themselves into the
+  # mounted directories. This cap is for stray stdout/stderr, which otherwise
+  # grows without limit in docker's own json log file.
   logging:
     driver: json-file
     options:
@@ -48,8 +48,8 @@ x-felles: &felles
 
 services:
   prod:
-    <<: *felles
-    image: ${IMAGE:-smart-sladding}:${PROD_TAG:-ikke-satt}
+    <<: *common
+    image: ${IMAGE:-smart-sladding}:${PROD_TAG:-not-set}
     container_name: smsl-prod
     pull_policy: never
     ports:
@@ -59,8 +59,8 @@ services:
       - ${LOG_ROOT:-/data/docker}/ml_logs:/data/ml_logs
 
   test:
-    <<: *felles
-    image: ${IMAGE:-smart-sladding}:${TEST_TAG:-ikke-satt}
+    <<: *common
+    image: ${IMAGE:-smart-sladding}:${TEST_TAG:-not-set}
     container_name: smsl-test
     pull_policy: never
     profiles: ["test"]

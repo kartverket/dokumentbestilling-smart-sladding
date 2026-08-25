@@ -1,40 +1,26 @@
-"""
-Lightweight utilities for fetching PDF files.
-Extracted from model_main.py to avoid importing heavy ML dependencies.
-"""
+"""PDF fetching, split out of model_main.py so the job avoids the ML imports."""
 import requests
 import logging
 
 
 def download_pdf(document_url: str) -> bytes:
-    """
-    Download a PDF file from a URL.
-
-    Parameters:
-    document_url (str): The URL of the PDF document.
-
-    Returns:
-    bytes: The content of the PDF file.
-    """
     try:
-        response = requests.get(document_url, timeout=300)  # 5 minute timeout
+        response = requests.get(document_url, timeout=300)
 
         if response.status_code != 200:
-            # Check if document is protected/restricted (skjermet)
             if response.status_code == 401:
                 try:
                     error_json = response.json()
                     if error_json.get('error') == 'Dokumentet er skjermet':
                         logging.info(f"Document is protected (skjermet), skipping.")
-                        raise ValueError("SKJERMET_DOCUMENT")  # Special marker for skipping
+                        raise ValueError("SKJERMET_DOCUMENT")
                 except (requests.exceptions.JSONDecodeError, KeyError):
-                    pass  # Not JSON or different error, continue with normal error handling
+                    pass
 
             logging.error(f"Failed to download PDF. HTTP Status Code: {response.status_code}")
             logging.error(f"Response headers: {dict(response.headers)}")
             raise ValueError(f"HTTP {response.status_code}: {response.text[:200]}")
 
-        # Validate it's actually a PDF
         content_type = response.headers.get('Content-Type', '')
         if 'pdf' not in content_type.lower() and not response.content.startswith(b'%PDF'):
             logging.error(f"Downloaded content is not a PDF! Content-Type: {content_type}")
@@ -52,18 +38,7 @@ def download_pdf(document_url: str) -> bytes:
 
 
 def get_pdf_bytes(document_url: str) -> bytes:
-    """
-    Retrieve PDF bytes from a local file path or a remote URL.
-
-    Parameters:
-        document_url (str): The URL or local path to the PDF document.
-
-    Returns:
-        bytes: The PDF file as bytes.
-
-    Raises:
-        ValueError: If the document URL is invalid or the download fails.
-    """
+    """Reads the PDF from a local path, or downloads it if the URL is http(s)."""
     try:
         if document_url.lower().startswith('http'):
             pdf_bytes = download_pdf(document_url)

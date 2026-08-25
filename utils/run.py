@@ -7,9 +7,9 @@ import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-# Demp irrelevante advarsler (PaddlePaddle ccache etc.)
+# Silence PaddlePaddle ccache warnings and C++ logging.
 warnings.filterwarnings("ignore", message=".*ccache.*")
-os.environ["GLOG_minloglevel"] = "2"    # demp PaddlePaddle C++ logging
+os.environ["GLOG_minloglevel"] = "2"
 
 import fitz
 
@@ -21,137 +21,134 @@ _APP = os.path.join(_UTILS, "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
-from file_selection import velg_filer
+from file_selection import select_files
 from model_main import run_model_on_pdf_bytes
-from csv_export import initialiser_csv, append_csv
-from evaluation import mal_overlapp, les_fasit, _dok_nr
-from visualization import tegn_og_lagre
-from redaction import sladd_alle
-from yolo_fnr import sett_vekter, aktive_vekter
-from yolo_cache import cache_mappe_for_vekter
+from csv_export import write_csv_header, append_csv
+from evaluation import evaluate_against_truth, read_truth_xywh, _doc_no
+from visualization import draw_and_save
+from redaction import sladd_files
+from yolo_fnr import set_weights, active_weights
+from yolo_cache import cache_dir_for_weights
 from load_pdf import PDF_DPI
 import traceback
-from save_result import lagre_resultat
+from save_result import write_result_files
 
 import time
 import csv as csv_modul
 
 from utils_config import (
-    MAPPE, ANTALL, FASIT_CSV, CSV_UT, OCR_LOGG_FIL,
-    PNG_MAPPE, SLADD_MAPPE, Y_ORIGIN, TERSKEL
+    DOC_DIR, DEFAULT_FILE_COUNT, TRUTH_CSV, CSV_OUT, OCR_LOG_FILE,
+    PNG_DIR, SLADD_DIR, Y_ORIGIN, HIT_THRESHOLD
 )
 
-SKALA = PDF_DPI / 72.0                     # PDF-punkt -> piksel
+SCALE = PDF_DPI / 72.0                     # PDF points -> pixels
 
 
-def _sider_fra_resultat(resultat, pdf_bytes):
-    if isinstance(resultat, dict):
-        return resultat.get("sider", [])
+def _pages_from_result(result, pdf_bytes):
+    if isinstance(result, dict):
+        return result.get("sider", [])
 
-    per_side = defaultdict(list)
-    for b in resultat:
-        per_side[b["page"]].append(b)
+    per_page = defaultdict(list)
+    for b in result:
+        per_page[b["page"]].append(b)
 
-    sider = []
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as dok:
-        for n in range(1, dok.page_count + 1):
-            rect = dok[n - 1].rect
-            bw = int(round(rect.width * SKALA))
-            bh = int(round(rect.height * SKALA))
-            bokser = []
-            for b in per_side.get(n, []):
-                boks = {
-                    "x0": b["x"] * SKALA,
-                    "y0": b["y"] * SKALA,
-                    "x1": (b["x"] + b["width"]) * SKALA,
-                    "y1": (b["y"] + b["height"]) * SKALA,
+    pages = []
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for n in range(1, doc.page_count + 1):
+            rect = doc[n - 1].rect
+            bw = int(round(rect.width * SCALE))
+            bh = int(round(rect.height * SCALE))
+            boxes = []
+            for b in per_page.get(n, []):
+                box = {
+                    "x0": b["x"] * SCALE,
+                    "y0": b["y"] * SCALE,
+                    "x1": (b["x"] + b["width"]) * SCALE,
+                    "y1": (b["y"] + b["height"]) * SCALE,
                     "kilde": b.get("kilde", "paddle"),
                 }
-                # Holdes atskilt: yolo_conf er deteksjonssikkerhet,
-                # paddle_rec_score er OCR-ens lesekvalitet. Se csv_export.
-                for felt in ("yolo_conf", "paddle_rec_score", "trekk"):
-                    if b.get(felt) is not None:
-                        boks[felt] = b[felt]
-                bokser.append(boks)
-            sider.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
-                          "bokser": bokser})
-    return sider
+                # Kept apart: yolo_conf is detection confidence,
+                # paddle_rec_score is OCR read quality. See csv_export.
+                for field in ("yolo_conf", "paddle_rec_score", "trekk"):
+                    if b.get(field) is not None:
+                        box[field] = b[field]
+                boxes.append(box)
+            pages.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
+                          "boxes": boxes})
+    return pages
 
 
-def _skriv_ocr_logg(ocr_linjer, sti):
-    n_sider = 0
-    with open(sti, "w", encoding="utf-8") as logg:
-        for (navn, si) in sorted(ocr_linjer):
-            linjer = ocr_linjer[(navn, si)]
-            logg.write(f"\n===== {navn} side {si} - {len(linjer)} tekstlinjer =====\n")
-            for li, (tekst, merker) in enumerate(linjer, start=1):
+def _write_ocr_log(ocr_lines, path):
+    n_pages = 0
+    with open(path, "w", encoding="utf-8") as log:
+        for (name, si) in sorted(ocr_lines):
+            lines = ocr_lines[(name, si)]
+            log.write(f"\n===== {name} page {si} - {len(lines)} text lines =====\n")
+            for li, (text, merker) in enumerate(lines, start=1):
                 if merker:
                     merk = ", ".join(
-                        f"{cifre} (mod11 {'OK' if ok else 'FEIL'})" for cifre, ok in merker)
-                    logg.write(f"  linje {li:>2}: {tekst!r}   <-- FNR-TREFF: {merk}\n")
+                        f"{digits} (mod11 {'OK' if ok else 'FAIL'})" for digits, ok in merker)
+                    log.write(f"  line {li:>2}: {text!r}   <-- FNR HIT: {merk}\n")
                 else:
-                    logg.write(f"  linje {li:>2}: {tekst!r}\n")
-            n_sider += 1
-    return n_sider
+                    log.write(f"  line {li:>2}: {text!r}\n")
+            n_pages += 1
+    return n_pages
 
 
-def _les_ferdige_fra_csv(csv_sti):
-    """Les allerede prosesserte filnavn fra en eksisterende CSV (for --fortsett)."""
-    ferdige = set()
-    if os.path.isfile(csv_sti) and os.path.getsize(csv_sti) > 0:
-        with open(csv_sti, newline="", encoding="utf-8") as f:
-            for rad in csv_modul.DictReader(f):
-                ferdige.add(rad["navn"])
-    return ferdige
+def _read_done_from_csv(csv_path):
+    """Read already-processed filenames from an existing CSV (for --proceed)."""
+    done = set()
+    if os.path.isfile(csv_path) and os.path.getsize(csv_path) > 0:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv_modul.DictReader(f):
+                done.add(row["navn"])
+    return done
 
 
-def _les_filer_fra_fil(sti):
-    """Les en liste med filnavn/IDer fra en tekstfil (én per linje)."""
-    with open(sti, encoding="utf-8") as f:
-        return [linje.strip() for linje in f if linje.strip()]
+def _read_files_from_file(path):
+    """Read filenames/IDs from a text file, one per line."""
+    with open(path, encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
 
 
-def _behandle_fra_cache(fil, ocr_cache, yolo_cache, elektronisk_tinglyst,
-                        kun_yolo, med_linjer, rettsstiftelsestyper=None,
-                        etterfilter=True):
-    """Behandle ett dokument i en arbeiderprosess — kun fra cache.
+def _process_from_cache(pdf_path, ocr_cache, yolo_cache, elektronisk_tinglyst,
+                        only_yolo, with_lines, rettsstiftelsestyper=None,
+                        postfilter=True):
+    """Handle one document in a worker process, from cache only.
 
-    Ved cache-treff er dokumentet ren CPU (JSON-lesing + matching), så det kan
-    gjøres i en prosess uten modeller. Returnerer ("ok", navn, sider, tid);
-    ved miss ("miss", navn, None, 0) — da kjører hovedprosessen, som har
-    modellene, dokumentet selv. Modellene lastes lazy og importene deres
-    likeså, så arbeiderne forblir lette.
+    A cache hit is pure CPU, so workers need no models. A miss returns
+    ("miss", ...) and the main process, which has the models, runs it.
     """
-    navn = os.path.basename(fil)
+    name = os.path.basename(pdf_path)
     start = time.perf_counter()
     try:
-        with open(fil, "rb") as f:
+        with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
-        resultat = run_model_on_pdf_bytes(
-            pdf_bytes, skriv_tid=False, med_linjer=med_linjer, navn=navn,
-            elektronisk_tinglyst=elektronisk_tinglyst, kun_yolo=kun_yolo,
-            cache_mappe=ocr_cache, yolo_cache_mappe=yolo_cache,
-            kun_cache=True, rettsstiftelsestyper=rettsstiftelsestyper,
-            etterfilter=etterfilter)
-        if resultat is None:
-            return ("miss", navn, None, 0.0)
-        sider = _sider_fra_resultat(resultat, pdf_bytes)
-        return ("ok", navn, sider, time.perf_counter() - start)
+        result = run_model_on_pdf_bytes(
+            pdf_bytes, write_time=False, with_lines=with_lines, name=name,
+            elektronisk_tinglyst=elektronisk_tinglyst, only_yolo=only_yolo,
+            cache_dir=ocr_cache, yolo_cache_dir=yolo_cache,
+            only_cache=True, rettsstiftelsestyper=rettsstiftelsestyper,
+            postfilter=postfilter)
+        if result is None:
+            return ("miss", name, None, 0.0)
+        pages = _pages_from_result(result, pdf_bytes)
+        return ("ok", name, pages, time.perf_counter() - start)
     except Exception:
-        return ("feil", navn, traceback.format_exc(), 0.0)
+        return ("feil", name, traceback.format_exc(), 0.0)
 
 
-def _tegn_fortlopende(navn, sider, mappe, png_mappe, fasit, y_origin, csv_bokser_dok, sladd_bokser_dok):
-    """Tegn PNG for ett dokument umiddelbart etter inferens."""
-    tegn_og_lagre(sladd_bokser_dok, fasit, mappe, png_mappe,
-                  y_origin=y_origin, skriv_logg=True, rydd=False, kilder=csv_bokser_dok)
+def _draw_continuous(name, pages, folder, png_dir, truth, y_origin, csv_boxes_doc, sladd_boxes_doc):
+    """Draw PNGs for one document right after inference."""
+    draw_and_save(sladd_boxes_doc, truth, folder, png_dir,
+                  y_origin=y_origin, write_log=True, clean=False, sources=csv_boxes_doc)
 
 
-class _Bildebudsjett:
-    """Trådsikker teller for --maks-feilbilder: maks N dokumenter tegnes."""
+class _ImageBudget:
+    """Thread-safe counter for --max-error-images: at most N documents drawn."""
 
-    def __init__(self, maks):
-        self._rest = maks                   # None = ubegrenset
+    def __init__(self, max_items):
+        self._rest = max_items                   # None = unlimited
         self._laas = threading.Lock()
 
     def ta(self):
@@ -164,541 +161,527 @@ class _Bildebudsjett:
             return False
 
 
-def _evaluer_og_tegn_feil(sladd_dok, csv_dok, fasit, mappe, png_mappe,
-                           terskel, y_origin, budsjett=None):
-    """Evaluer ett dokument mot fasit og tegn feilbilder hvis det finnes feil.
+def _evaluate_and_draw_error(sladd_doc, csv_doc, truth, folder, png_dir,
+                           threshold, y_origin, budget=None):
+    """Evaluate one document against truth and draw images for its errors.
 
-    Lagrer i undermapper: bom/ (manglende deteksjoner) og oversladd/ (over-sladding).
-    En side kan havne i begge mapper hvis den har begge typer feil.
+    Writes to subfolders bom/ (missed detections) and oversladd/; a page with
+    both kinds of error lands in both.
     """
-    # Rapporten kastes — vi er her for feilbildene. skriv= holder utskriften unna
-    # sys.stdout, som hovedtråden og de andre arbeidertrådene skriver til samtidig.
-    # diagnostikk=False: for ett dokument betyr «ingen fasit» bare at det er ulabelt.
-    dok_eval = mal_overlapp(sladd_dok, fasit, mappe, terskel=terskel,
-                            y_origin=y_origin, kilder=csv_dok,
-                            skriv=lambda *a, **k: None, diagnostikk=False)
-    if not dok_eval:
+    # write= keeps output off the shared sys.stdout; diagnostikk=False because
+    # for a single document "no truth" only means unlabelled.
+    doc_eval = evaluate_against_truth(sladd_doc, truth, folder, threshold=threshold,
+                            y_origin=y_origin, sources=csv_doc,
+                            write=lambda *a, **k: None, diagnostics=False)
+    if not doc_eval:
         return
 
-    har_bom = bool(dok_eval.get("bom_filer"))
-    har_over = bool(dok_eval.get("overflod_filer"))
-    if not har_bom and not har_over:
+    has_miss = bool(doc_eval.get("miss_files"))
+    has_over = bool(doc_eval.get("surplus_files"))
+    if not has_miss and not has_over:
         return
-    if budsjett is not None and not budsjett.ta():
+    if budget is not None and not budget.ta():
         return
 
-    bom_indekser = {
-        (_dok_nr(d["fil"]), d["side"], d["fasit_nr"] - 1)
-        for d in dok_eval.get("detaljer", [])
-        if d["resultat"] == "MANGLER"
+    miss_indices = {
+        (_doc_no(d["fil"]), d["side"], d["fasit_nr"] - 1)
+        for d in doc_eval.get("details", [])
+        if d["result"] == "MISSING"
     }
-    oversladd = dok_eval.get("oversladd_bokser", None)
+    oversladd = doc_eval.get("oversladd_boxes", None)
 
-    bom_sider = {(bf["fil"], bf["side"]) for bf in dok_eval.get("bom_filer", [])}
-    over_sider = {(of["fil"], of["side"]) for of in dok_eval.get("overflod_filer", [])}
+    miss_pages = {(bf["fil"], bf["side"]) for bf in doc_eval.get("miss_files", [])}
+    over_pages = {(of["fil"], of["side"]) for of in doc_eval.get("surplus_files", [])}
 
-    if bom_sider:
-        bom_mappe = os.path.join(png_mappe, "bom")
-        os.makedirs(bom_mappe, exist_ok=True)
-        sladd_b = {k: v for k, v in sladd_dok.items() if k in bom_sider}
-        csv_b = {k: v for k, v in csv_dok.items() if k in bom_sider}
-        # Filtrer fasit til kun bom-sider så _sider_aa_tegne ikke legger til
-        # sider uten feil (som ville blitt tomme PNG-er)
-        bom_nr_sider = {(_dok_nr(navn), si) for (navn, si) in bom_sider}
-        fasit_bom = {k: v for k, v in fasit.items() if k in bom_nr_sider} if fasit else None
-        tegn_og_lagre(sladd_b, fasit_bom, mappe, bom_mappe,
-                      y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_b,
-                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+    if miss_pages:
+        miss_dir = os.path.join(png_dir, "bom")
+        os.makedirs(miss_dir, exist_ok=True)
+        sladd_b = {k: v for k, v in sladd_doc.items() if k in miss_pages}
+        csv_b = {k: v for k, v in csv_doc.items() if k in miss_pages}
+        # Restrict truth to bom pages, else _sider_aa_tegne adds error-free
+        # pages and they render as empty PNGs.
+        miss_no_pages = {(_doc_no(name), si) for (name, si) in miss_pages}
+        truth_miss = {k: v for k, v in truth.items() if k in miss_no_pages} if truth else None
+        draw_and_save(sladd_b, truth_miss, folder, miss_dir,
+                      y_origin=y_origin, write_log=False, clean=False, sources=csv_b,
+                      oversladd_boxes=oversladd, miss_indices=miss_indices)
 
-    if over_sider:
-        over_mappe = os.path.join(png_mappe, "oversladd")
-        os.makedirs(over_mappe, exist_ok=True)
-        sladd_o = {k: v for k, v in sladd_dok.items() if k in over_sider}
-        csv_o = {k: v for k, v in csv_dok.items() if k in over_sider}
-        # Filtrer fasit til kun oversladd-sider
-        over_nr_sider = {(_dok_nr(navn), si) for (navn, si) in over_sider}
-        fasit_over = {k: v for k, v in fasit.items() if k in over_nr_sider} if fasit else None
-        tegn_og_lagre(sladd_o, fasit_over, mappe, over_mappe,
-                      y_origin=y_origin, skriv_logg=False, rydd=False, kilder=csv_o,
-                      oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+    if over_pages:
+        over_dir = os.path.join(png_dir, "oversladd")
+        os.makedirs(over_dir, exist_ok=True)
+        sladd_o = {k: v for k, v in sladd_doc.items() if k in over_pages}
+        csv_o = {k: v for k, v in csv_doc.items() if k in over_pages}
+        over_no_pages = {(_doc_no(name), si) for (name, si) in over_pages}
+        truth_over = {k: v for k, v in truth.items() if k in over_no_pages} if truth else None
+        draw_and_save(sladd_o, truth_over, folder, over_dir,
+                      y_origin=y_origin, write_log=False, clean=False, sources=csv_o,
+                      oversladd_boxes=oversladd, miss_indices=miss_indices)
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Kjor modellen lokalt som om filene var POST-er: "
-                    "bytes -> run_model_on_pdf_bytes. Flagg legger til CSV/PNG/fasit/sladding.")
-    p.add_argument("--mappe", default=MAPPE, help="mappe med PDF-er (spiller rollen som POST-body)")
-    p.add_argument("--velg", nargs="*", default=[], help="spesifikke filer (filnavn/delstreng)")
-    p.add_argument("--velg-fra-fil", default=None,
-                   help="les fil-IDer fra en tekstfil (én per linje), brukes som --velg")
-    p.add_argument("--antall", default=ANTALL, help="antall filer naar --velg er tom (tall, eller 'alle')")
-    p.add_argument("--csv", action="store_true", help="skriv alle funne bokser til CSV")
-    p.add_argument("--png", action="store_true", help="tegn funne + fasit-bokser til PNG")
-    p.add_argument("--fasit", action="store_true", help="maal recall mot fasit")
-    p.add_argument("--sladd", action="store_true", help="lag faktisk sladdede PDF-er")
-    p.add_argument("--ocr-logg", action="store_true", help="skriv OCR-teksten linje for linje til fil")
-    p.add_argument("--fasit-csv", default=FASIT_CSV, help="fasit-CSV")
-    p.add_argument("--csv-ut", default=CSV_UT, help="hvor boks-CSV-en skrives")
-    p.add_argument("--ocr-logg-fil", default=OCR_LOGG_FIL, help="hvor OCR-loggen skrives")
-    p.add_argument("--png-mappe", default=PNG_MAPPE, help="hvor PNG-ene lagres")
-    p.add_argument("--maks-feilbilder", type=int, default=None,
-                   dest="maks_feilbilder", metavar="N",
-                   help="tegn feilbilder for maks N dokumenter (0 = ingen "
-                        "bilder). Sammendraget og resultat-CSV-en påvirkes "
-                        "ikke — de beregnes fra boksene alene.")
-    p.add_argument("--sladd-mappe", default=SLADD_MAPPE, help="hvor sladdede PDF-er lagres")
-    p.add_argument("--terskel", type=float, default=TERSKEL, help="andel fasit-areal for TRUFFET")
-    p.add_argument("--y-origin", choices=["topp", "bunn"], default=Y_ORIGIN, help="CSV y-origo")
+        description="Run the model locally as if the files were POSTs: "
+                    "bytes -> run_model_on_pdf_bytes. Flags add CSV/PNG/truth/sladding.")
+    p.add_argument("--folder", default=DOC_DIR, help="folder of PDFs (plays the role of the POST body)")
+    p.add_argument("--select", nargs="*", default=[], help="specific files (filename/substring)")
+    p.add_argument("--select-from-file", default=None,
+                   help="read file IDs from a text file, one per line, used as --select")
+    p.add_argument("--count", default=DEFAULT_FILE_COUNT, help="number of files when --select is empty (a number, or 'alle')")
+    p.add_argument("--csv", action="store_true", help="write all found boxes to CSV")
+    p.add_argument("--png", action="store_true", help="draw found + truth boxes to PNG")
+    p.add_argument("--truth", action="store_true", help="measure recall against truth")
+    p.add_argument("--sladd", action="store_true", help="produce actually sladdede PDFs")
+    p.add_argument("--ocr-log", action="store_true", help="write the OCR text line by line to file")
+    p.add_argument("--truth-csv", default=TRUTH_CSV, help="truth CSV")
+    p.add_argument("--csv-out", default=CSV_OUT, help="where the box CSV is written")
+    p.add_argument("--ocr-log-file", default=OCR_LOG_FILE, help="where the OCR log is written")
+    p.add_argument("--png-dir", default=PNG_DIR, help="where the PNGs are stored")
+    p.add_argument("--max-error-images", type=int, default=None,
+                   dest="max_error_images", metavar="N",
+                   help="draw error images for at most N documents (0 = no "
+                        "images). The summary and result CSV are unaffected: "
+                        "they are computed from the boxes alone")
+    p.add_argument("--sladd-dir", default=SLADD_DIR, help="where sladdede PDFs are stored")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD, help="fraction of truth area required for a hit")
+    p.add_argument("--y-origin", choices=["top", "bottom"], default=Y_ORIGIN, help="CSV y origin")
     p.add_argument("--elektronisk-tinglyst", action="store_true",
-                   help="behandle som elektronisk tinglyst: uten YOLO, med bredde-filter")
-    p.add_argument("--kun-yolo", action="store_true",
-                   help="kjør kun YOLO uten Paddle OCR")
-    p.add_argument("--kun-feil", action="store_true",
-                   help="generer kun PNG for sider med bom eller over-sladding (krever fasit)")
-    p.add_argument("--tid", action="store_true", help="skriv timing (render/ocr/etterbehandling) per dokument")
-    p.add_argument("--beskrivelse", default=None, help="valgfritt suffiks i mappenavnet for resultatet")
-    p.add_argument("--yolo-vekter", default=None,
-                   help="path til YOLO-vektfil; default er $SLADD_PRODVEKTER fra server.env")
-    p.add_argument("--fortsett", action="store_true",
-                   help="fortsett fra der forrige kjøring stoppet (hopper over filer allerede i CSV)")
-    p.add_argument("--prosesser", type=int, default=None, metavar="N",
-                   help="antall arbeiderprosesser for cache-treff (default: "
-                        "min(8, CPU-kjerner); 1 = sekvensielt). Dokumenter uten "
-                        "cache-treff kjøres i hovedprosessen. Per-dokument-"
-                        "tabellen fra --tid skrives kun sekvensielt/ved miss.")
-    p.add_argument("--resultat-mappe", default=".",
-                   help="mappe der result-* undermappen opprettes (default: gjeldende mappe)")
-    p.add_argument("--overskriv", action="store_true",
-                   help="overskriv eksisterende CSV uten å spørre")
+                   help="treat as elektronisk tinglyst: no YOLO, with width filter")
+    p.add_argument("--only-yolo", action="store_true",
+                   help="run YOLO only, without Paddle OCR")
+    p.add_argument("--only-error", action="store_true",
+                   help="only generate PNGs for pages with bom or oversladding (needs truth)")
+    p.add_argument("--time", action="store_true", help="print timing (render/ocr/postprocessing) per document")
+    p.add_argument("--desc", default=None, help="optional suffix in the result folder name")
+    p.add_argument("--yolo-weights", default=None,
+                   help="path to the YOLO weights file; defaults to $SLADD_PRODWEIGHTS from server.env")
+    p.add_argument("--proceed", action="store_true",
+                   help="continue where the previous run stopped, skipping files already in the CSV")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="worker processes for cache hits (default: min(8, CPU "
+                        "cores); 1 = sequential). Documents without a cache hit "
+                        "run in the main process. The per-document table from "
+                        "--time is only written sequentially or on a miss")
+    p.add_argument("--result-dir", default=".",
+                   help="folder where the result-* subfolder is created")
+    p.add_argument("--overwrite", action="store_true",
+                   help="overwrite an existing CSV without asking")
     p.add_argument("--ocr-cache", default=None,
-                   help="mappe for per-dokument OCR-cache (tokens + orientering). "
-                        "Standard: $SLADD_CACHE/<uttrekk-navn>/ocr/ utledet fra --mappe. "
-                        "Sett til eksplisitt sti for å overstyre.")
+                   help="folder for the per-document OCR cache (tokens + orientation). "
+                        "Default: $SLADD_CACHE/<uttrekk name>/ocr/ derived from --folder")
     p.add_argument("--no-ocr-cache", action="store_true",
-                   help="deaktiver OCR-cache helt")
+                   help="disable the OCR cache entirely")
     p.add_argument("--yolo-cache", default=None,
-                   help="basemappe for per-dokument YOLO-cache (rå bokser per modell). "
-                        "Vektfilens hash legges til som undermappe, så hver modell får "
-                        "sin egen cache. Standard: $SLADD_CACHE/<uttrekk-navn>/yolo/ "
-                        "utledet fra --mappe. Sett til eksplisitt sti for å overstyre.")
+                   help="base folder for the per-document YOLO cache (raw boxes per "
+                        "model). The weights hash is appended as a subfolder, so each "
+                        "model gets its own cache. Default: $SLADD_CACHE/<uttrekk "
+                        "name>/yolo/ derived from --folder")
     p.add_argument("--no-yolo-cache", action="store_true",
-                   help="deaktiver YOLO-cache helt")
-    p.add_argument("--uten-etterfilter", action="store_true",
-                   dest="uten_etterfilter",
-                   help="Hopp over ALLE etterfiltrene (desimal, linjebevis, "
-                        "paddle-vindu, profiler, geometri) — rå deteksjon + "
-                        "mod11 + dedup. Basislinjemåling av regelverkets "
-                        "totalbidrag; YOLO_CONF og snill_sjekk gjelder "
-                        "fortsatt")
+                   help="disable the YOLO cache entirely")
+    p.add_argument("--without-postfilter", action="store_true",
+                   dest="without_postfilter",
+                   help="skip ALL postfilters (decimal, line evidence, paddle "
+                        "window, profiles, geometry). Raw detection + mod11 + "
+                        "dedup. Baseline measurement of what the rules "
+                        "contribute; YOLO_CONF and lenient_check still apply")
     p.add_argument("--metadata-csv", default=None, metavar="FIL",
-                   help="metadata-CSV med rettsstiftelsestyper per dokument "
-                        "(uttrekk_N.csv). Aktiverer regelprofiler per "
-                        "dokumenttype (KOORDFAM_KODER i config) slik prod "
-                        "gjør når skip-jobben sender kodene; uten = global "
-                        "oppførsel")
+                   help="metadata CSV with rettsstiftelse types per document "
+                        "(uttrekk_N.csv). Enables per-document-type rule "
+                        "profiles (KOORDFAM_CODES in config) the way prod does "
+                        "when the skip job sends the codes; without it, global "
+                        "behaviour")
     args = p.parse_args()
 
-    # ── Utled cache-stier ────────────────────────────────────────
+    # ── Derive cache paths ───────────────────────────────────────
     if args.no_ocr_cache:
         args.ocr_cache = None
     if args.no_yolo_cache:
         args.yolo_cache = None
-    # Auto-utled fra SLADD_CACHE + mappenavnet til uttrekket
     cache_base = os.environ.get("SLADD_CACHE")
     if cache_base:
-        uttrekk_navn = os.path.basename(os.path.normpath(args.mappe))
+        uttrekk_name = os.path.basename(os.path.normpath(args.folder))
         if args.ocr_cache is None and not args.no_ocr_cache:
-            args.ocr_cache = os.path.join(cache_base, uttrekk_navn, "ocr")
+            args.ocr_cache = os.path.join(cache_base, uttrekk_name, "ocr")
         if args.yolo_cache is None and not args.no_yolo_cache:
-            args.yolo_cache = os.path.join(cache_base, uttrekk_navn, "yolo")
+            args.yolo_cache = os.path.join(cache_base, uttrekk_name, "yolo")
 
-    # ── Tidlig validering av inputfiler ─────────────────────────
-    if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
-        print(f"FEIL: --velg-fra-fil ikke funnet: {args.velg_fra_fil}")
+    # ── Validate inputs early ────────────────────────────────────
+    if args.select_from_file and not os.path.isfile(args.select_from_file):
+        print(f"ERROR: --select-from-file not found: {args.select_from_file}")
         return
 
     if args.metadata_csv and not os.path.isfile(args.metadata_csv):
-        print(f"FEIL: --metadata-csv ikke funnet: {args.metadata_csv}")
+        print(f"ERROR: --metadata-csv not found: {args.metadata_csv}")
         return
 
-    if (args.fasit or args.kun_feil) and not os.path.isfile(args.fasit_csv):
-        print(f"FEIL: --fasit-csv ikke funnet: {args.fasit_csv}")
-        print(f"      Spesifiser riktig sti med --fasit-csv /sti/til/labels.csv")
+    if (args.truth or args.only_error) and not os.path.isfile(args.truth_csv):
+        print(f"ERROR: --truth-csv not found: {args.truth_csv}")
+        print(f"      Set the correct path with --truth-csv /path/to/labels.csv")
         return
 
-    if args.yolo_vekter and not os.path.isfile(args.yolo_vekter):
-        print(f"FEIL: --yolo-vekter ikke funnet: {args.yolo_vekter}")
+    if args.yolo_weights and not os.path.isfile(args.yolo_weights):
+        print(f"ERROR: --yolo-weights not found: {args.yolo_weights}")
         return
 
-    if not os.path.isdir(args.mappe):
-        print(f"FEIL: --mappe ikke funnet: {args.mappe}")
+    if not os.path.isdir(args.folder):
+        print(f"ERROR: --folder not found: {args.folder}")
         return
 
-    sett_vekter(args.yolo_vekter)
+    set_weights(args.yolo_weights)
 
-    # Én cache-mappe per modell: vektfilens hash blir undermappe, slik at en ny
-    # modell aldri leser en annen modells bokser.
+    # One cache folder per model: the weights hash becomes a subfolder, so a
+    # new model never reads another model's boxes.
     if args.elektronisk_tinglyst:
-        args.yolo_cache = None          # elektronisk tinglyst kjører uten YOLO
+        args.yolo_cache = None          # elektronisk tinglyst runs without YOLO
     if args.yolo_cache:
-        if os.path.isfile(aktive_vekter()):
-            args.yolo_cache = cache_mappe_for_vekter(args.yolo_cache, aktive_vekter())
+        if os.path.isfile(active_weights()):
+            args.yolo_cache = cache_dir_for_weights(args.yolo_cache, active_weights())
         else:
-            print(f"ADVARSEL: fant ikke vektfil {aktive_vekter()} - YOLO-cache deaktivert")
+            print(f"WARNING: weights file {active_weights()} not found - YOLO cache disabled")
             args.yolo_cache = None
 
-    # ── Opprett utdata-mapper automatisk ─────────────────────────
-    utdata_mapper = [m for m in [
-        os.path.dirname(args.csv_ut) if args.csv else None,
-        args.png_mappe if (args.png or args.kun_feil) else None,
-        args.sladd_mappe if args.sladd else None,
-        args.resultat_mappe if args.fasit else None,
+    # ── Output folders ───────────────────────────────────────────
+    output_mapper = [m for m in [
+        os.path.dirname(args.csv_out) if args.csv else None,
+        args.png_dir if (args.png or args.only_error) else None,
+        args.sladd_dir if args.sladd else None,
+        args.result_dir if args.truth else None,
     ] if m]
 
-    if not args.fortsett and not args.overskriv:
-        eksisterende = [m for m in utdata_mapper if os.path.isdir(m)]
-        if eksisterende:
-            print("FEIL: Utdata-mappe(r) finnes allerede:")
-            for m in eksisterende:
+    if not args.proceed and not args.overwrite:
+        existing = [m for m in output_mapper if os.path.isdir(m)]
+        if existing:
+            print("ERROR: output folder(s) already exist:")
+            for m in existing:
                 print(f"      {m}")
-            print("      Bruk --fortsett for å gjenoppta, eller --overskriv for å starte på nytt.")
+            print("      Use --proceed to resume, or --overwrite to start over.")
             return
 
-    for mappe in utdata_mapper:
-        os.makedirs(mappe, exist_ok=True)
+    for folder in output_mapper:
+        os.makedirs(folder, exist_ok=True)
 
-    # Bygg fillisten
-    velg = args.velg
-    fra_fil = False
-    if args.velg_fra_fil:
-        velg = _les_filer_fra_fil(args.velg_fra_fil)
-        fra_fil = True
-        print(f"Leste {len(velg)} IDer fra {args.velg_fra_fil}")
+    select = args.select
+    from_file = False
+    if args.select_from_file:
+        select = _read_files_from_file(args.select_from_file)
+        from_file = True
+        print(f"Read {len(select)} IDs from {args.select_from_file}")
 
-    filer = velg_filer(args.mappe, velg, args.antall, eksakt=fra_fil)
+    files = select_files(args.folder, select, args.count, exact=from_file)
 
-    if not filer:
-        print("Ingen filer aa behandle - sjekk --mappe / --velg / --antall.")
+    if not files:
+        print("No files to process - check --folder / --select / --count.")
         return
 
-    def _antall_cachet(mappe):
-        return sum(1 for f in filer
-                   if os.path.isfile(os.path.join(mappe,
+    def _count_cached(folder):
+        return sum(1 for f in files
+                   if os.path.isfile(os.path.join(folder,
                        os.path.splitext(os.path.basename(f))[0] + ".json")))
 
     if args.ocr_cache:
         os.makedirs(args.ocr_cache, exist_ok=True)
-        print(f"OCR-cache:  {args.ocr_cache} "
-              f"({_antall_cachet(args.ocr_cache)}/{len(filer)} dokumenter cachet)")
+        print(f"OCR cache:  {args.ocr_cache} "
+              f"({_count_cached(args.ocr_cache)}/{len(files)} documents cached)")
 
     if args.yolo_cache:
         os.makedirs(args.yolo_cache, exist_ok=True)
-        print(f"YOLO-cache: {args.yolo_cache} "
-              f"({_antall_cachet(args.yolo_cache)}/{len(filer)} dokumenter cachet)")
+        print(f"YOLO cache: {args.yolo_cache} "
+              f"({_count_cached(args.yolo_cache)}/{len(files)} documents cached)")
 
-    # Resume: hopp over allerede prosesserte filer
+    # Resume: skip files already in the CSV.
     hoppet_over = 0
-    if args.fortsett and args.csv and os.path.isfile(args.csv_ut):
-        ferdige = _les_ferdige_fra_csv(args.csv_ut)
-        opprinnelig = len(filer)
-        filer = [f for f in filer if os.path.basename(f) not in ferdige]
-        hoppet_over = opprinnelig - len(filer)
+    if args.proceed and args.csv and os.path.isfile(args.csv_out):
+        done = _read_done_from_csv(args.csv_out)
+        original = len(files)
+        files = [f for f in files if os.path.basename(f) not in done]
+        hoppet_over = original - len(files)
         if hoppet_over:
-            print(f"--fortsett: hopper over {hoppet_over} allerede prosesserte, {len(filer)} gjenstår")
-    elif args.csv and not args.fortsett:
-        if os.path.isfile(args.csv_ut) and os.path.getsize(args.csv_ut) > 0 and not args.overskriv:
-            n_eksisterende = len(_les_ferdige_fra_csv(args.csv_ut))
-            if n_eksisterende:
-                print(f"FEIL: {args.csv_ut} inneholder allerede {n_eksisterende} dokumenter.")
-                print(f"      Bruk --fortsett for å fortsette, eller --overskriv for å starte på nytt.")
+            print(f"--proceed: skipping {hoppet_over} already processed, {len(files)} remaining")
+    elif args.csv and not args.proceed:
+        if os.path.isfile(args.csv_out) and os.path.getsize(args.csv_out) > 0 and not args.overwrite:
+            n_existing = len(_read_done_from_csv(args.csv_out))
+            if n_existing:
+                print(f"ERROR: {args.csv_out} already contains {n_existing} documents.")
+                print(f"      Use --proceed to resume, or --overwrite to start over.")
                 return
-        initialiser_csv(args.csv_ut)
-        print(f"Starter kontinuerlig skriving til {args.csv_ut}")
+        write_csv_header(args.csv_out)
+        print(f"Writing continuously to {args.csv_out}")
 
-    total_tid = 0
-    totalt_antall = len(filer)
+    total_time = 0
+    total_count = len(files)
 
-    vil_ha_artefakt = args.csv or args.png or args.fasit or args.sladd or args.kun_feil
+    will_ha_artifact = args.csv or args.png or args.truth or args.sladd or args.only_error
 
-    # Forhåndslast fasit
-    fasit = None
-    if args.png or args.kun_feil or args.fasit:
-        fasit = les_fasit(args.fasit_csv) if os.path.isfile(args.fasit_csv) else None
-    if args.png or args.kun_feil:
-        os.makedirs(args.png_mappe, exist_ok=True)
+    truth = None
+    if args.png or args.only_error or args.truth:
+        truth = read_truth_xywh(args.truth_csv) if os.path.isfile(args.truth_csv) else None
+    if args.png or args.only_error:
+        os.makedirs(args.png_dir, exist_ok=True)
 
-    sladd_bokser, yolo_bokser, csv_bokser, feilet = {}, {}, {}, []
-    tider = {}
-    ocr_linjer = {}                          # (navn, side) -> liste av (tekst, merker)
-    advart_om_linjer = False
+    sladd_boxes, yolo_boxes, csv_boxes, failed = {}, {}, {}, []
+    timings = {}
+    ocr_lines = {}                          # (name, page) -> list of (text, marks)
+    warned_om_linjer = False
 
-    # Bakgrunnstråder for PNG-generering (CPU) mens GPU jobber videre
-    png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.kun_feil) else None
+    # PNG rendering (CPU) in background threads while the GPU moves on.
+    png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.only_error) else None
     png_futures = []
     feil_executor = (ThreadPoolExecutor(max_workers=2)
-                     if args.kun_feil and args.maks_feilbilder != 0 else None)
-    bildebudsjett = _Bildebudsjett(args.maks_feilbilder)
-    feil_futures = []
+                     if args.only_error and args.max_error_images != 0 else None)
+    image_budget = _ImageBudget(args.max_error_images)
+    error_futures = []
 
-    # ── Antall arbeiderprosesser for cache-treff ─────────────────
-    prosesser = args.prosesser
-    if prosesser is None:
-        prosesser = min(8, os.cpu_count() or 1)
-    if prosesser > 1 and not args.ocr_cache and not args.yolo_cache:
-        print("Uten cache må alle dokumenter gjennom modellene — kjører sekvensielt.")
-        prosesser = 1
+    # ── Worker processes for cache hits ──────────────────────────
+    processes = args.processes
+    if processes is None:
+        processes = min(8, os.cpu_count() or 1)
+    if processes > 1 and not args.ocr_cache and not args.yolo_cache:
+        print("Without a cache every document must go through the models - running sequentially.")
+        processes = 1
 
-    start_vegg = time.perf_counter()
+    start_wall = time.perf_counter()
 
-    def ta_imot(i, navn, sider, tid_brukt):
-        """Alt som skjer med et ferdig dokument: logg, CSV, PNG, eval."""
-        nonlocal total_tid, advart_om_linjer
-        total_tid += tid_brukt
-        tider[navn] = tid_brukt
+    def ta_against(i, name, pages, time_used):
+        """Everything that happens to a finished document: log, CSV, PNG, eval."""
+        nonlocal total_time, warned_om_linjer
+        total_time += time_used
+        timings[name] = time_used
 
-        if args.ocr_logg:
-            if not advart_om_linjer and sider and "linjer" not in sider[0]:
-                print("  !! --ocr-logg: modellen returnerer flatt format uten 'linjer' - loggen blir tom.")
-                advart_om_linjer = True
-            for side in sider:
-                ocr_linjer[(navn, side["side"])] = side.get("linjer", [])
+        if args.ocr_log:
+            if not warned_om_linjer and pages and "linjer" not in pages[0]:
+                print("  !! --ocr-log: model returns flat format without 'linjer' - the log stays empty.")
+                warned_om_linjer = True
+            for page in pages:
+                ocr_lines[(name, page["side"])] = page.get("linjer", [])
 
-        n = sum(len(s["bokser"]) for s in sider)
-        vegg = time.perf_counter() - start_vegg
-        gjenstaar = vegg / i * (totalt_antall - i)
+        n = sum(len(s["boxes"]) for s in pages)
+        wall = time.perf_counter() - start_wall
+        remains = wall / i * (total_count - i)
 
-        if not vil_ha_artefakt:
-            print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
+        if not will_ha_artifact:
+            print(f"  {n} box(es), {len(pages)} page(s), {time_used:.2f}s (est. remaining: {remains:.0f}s)")
             return
 
-        sladd_dok = {}
-        csv_dok = {}
-        for side in sider:
-            bokser     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]]
-            med_kilde  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"),
+        sladd_doc = {}
+        csv_doc = {}
+        for page in pages:
+            boxes     = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in page["boxes"]]
+            with_source  = [(b["x0"], b["y0"], b["x1"], b["y1"], b.get("kilde", "paddle"),
                            b.get("yolo_conf"), b.get("paddle_rec_score"), b.get("trekk"))
-                          for b in side["bokser"]]
-            yolo_bare  = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in side["bokser"]
+                          for b in page["boxes"]]
+            yolo_only  = [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in page["boxes"]
                           if b.get("kilde") in ("yolo", "begge")]
-            sladd_bokser[(navn, side["side"])] = (
-                side["bilde_bredde"], side["bilde_hoyde"], bokser)
-            sladd_dok[(navn, side["side"])] = (
-                side["bilde_bredde"], side["bilde_hoyde"], bokser)
-            csv_bokser[(navn, side["side"])] = (
-                side["bilde_bredde"], side["bilde_hoyde"], med_kilde)
-            csv_dok[(navn, side["side"])] = (
-                side["bilde_bredde"], side["bilde_hoyde"], med_kilde)
-            if yolo_bare:
-                yolo_bokser[(navn, side["side"])] = (
-                    side["bilde_bredde"], side["bilde_hoyde"], yolo_bare)
+            sladd_boxes[(name, page["side"])] = (
+                page["bilde_bredde"], page["bilde_hoyde"], boxes)
+            sladd_doc[(name, page["side"])] = (
+                page["bilde_bredde"], page["bilde_hoyde"], boxes)
+            csv_boxes[(name, page["side"])] = (
+                page["bilde_bredde"], page["bilde_hoyde"], with_source)
+            csv_doc[(name, page["side"])] = (
+                page["bilde_bredde"], page["bilde_hoyde"], with_source)
+            if yolo_only:
+                yolo_boxes[(name, page["side"])] = (
+                    page["bilde_bredde"], page["bilde_hoyde"], yolo_only)
 
-        # Fortløpende CSV
         if args.csv:
-            append_csv(csv_dok, args.csv_ut)
+            append_csv(csv_doc, args.csv_out)
 
-        # Fortløpende PNG i bakgrunnen (ikke ved --kun-feil, de trenger eval)
+        # --only-error PNGs wait for the eval instead.
         if png_executor:
             fut = png_executor.submit(
-                _tegn_fortlopende, navn, sider, args.mappe, args.png_mappe,
-                fasit, args.y_origin, csv_dok, sladd_dok)
+                _draw_continuous, name, pages, args.folder, args.png_dir,
+                truth, args.y_origin, csv_doc, sladd_doc)
             png_futures.append(fut)
 
-        # Fortløpende eval + feilbilder i bakgrunnen
-        if feil_executor and fasit:
+        if feil_executor and truth:
             fut = feil_executor.submit(
-                _evaluer_og_tegn_feil, sladd_dok, csv_dok,
-                fasit, args.mappe, args.png_mappe, args.terskel, args.y_origin,
-                bildebudsjett)
-            feil_futures.append(fut)
+                _evaluate_and_draw_error, sladd_doc, csv_doc,
+                truth, args.folder, args.png_dir, args.threshold, args.y_origin,
+                image_budget)
+            error_futures.append(fut)
 
-        print(f"  {n} boks(er), {len(sider)} side(r) — {tid_brukt:.2f}s (est. gjenstår: {gjenstaar:.0f}s)")
+        print(f"  {n} box(es), {len(pages)} page(s), {time_used:.2f}s (est. remaining: {remains:.0f}s)")
 
-    # ── Rettsstiftelsestyper per dokument (regelprofiler som i prod) ──
-    rs_per_dok = {}
+    # ── Rettsstiftelse types per document (rule profiles, as in prod) ──
+    rs_per_doc = {}
     if args.metadata_csv:
-        from rettsstiftelse_stat import les_metadata
-        meta, _besk = les_metadata(args.metadata_csv)
-        rs_per_dok = {dok: koder for dok, (koder, _el) in meta.items()}
-        print(f"Metadata: rettsstiftelsestyper for {len(rs_per_dok)} "
-              f"dokumenter — regelprofiler (KOORDFAM_KODER) aktive som i prod")
+        from rettsstiftelse_stat import read_metadata
+        meta, _desc = read_metadata(args.metadata_csv)
+        rs_per_doc = {doc: codes for doc, (codes, _el) in meta.items()}
+        print(f"Metadata: rettsstiftelse types for {len(rs_per_doc)} "
+              f"documents, rule profiles (KOORDFAM_CODES) active as in prod")
 
-    def rs_for(navn):
-        return rs_per_dok.get(_dok_nr(navn)) if rs_per_dok else None
+    def rs_for(name):
+        return rs_per_doc.get(_doc_no(name)) if rs_per_doc else None
 
-    def kjør_i_hovedprosess(pdf_bytes, navn):
-        """Full kjøring med modeller ved behov. Returnerer sider, None ved feil."""
+    def run_in_main_process(pdf_bytes, name):
+        """Full run with the models. Returns pages, or None on error."""
         try:
-            resultat = run_model_on_pdf_bytes(pdf_bytes, skriv_tid=args.tid, med_linjer=args.ocr_logg, navn=navn,
+            result = run_model_on_pdf_bytes(pdf_bytes, write_time=args.time, with_lines=args.ocr_log, name=name,
                                               elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                              kun_yolo=args.kun_yolo,
-                                              cache_mappe=args.ocr_cache,
-                                              yolo_cache_mappe=args.yolo_cache,
-                                              rettsstiftelsestyper=rs_for(navn),
-                                              etterfilter=not args.uten_etterfilter)
+                                              only_yolo=args.only_yolo,
+                                              cache_dir=args.ocr_cache,
+                                              yolo_cache_dir=args.yolo_cache,
+                                              rettsstiftelsestyper=rs_for(name),
+                                              postfilter=not args.without_postfilter)
         except Exception as e:
-            feilet.append((navn, repr(e)))
+            failed.append((name, repr(e)))
             traceback.print_exc()
             return None
-        return _sider_fra_resultat(resultat, pdf_bytes)
+        return _pages_from_result(result, pdf_bytes)
 
-    if prosesser > 1:
-        # ── Parallell cache-lesing ───────────────────────────────
-        # Ved cache-treff er dokumentet ren CPU (JSON + matching) og gjøres i
-        # arbeiderprosessene; miss faller tilbake til hovedprosessen, som har
-        # modellene. Resultatene konsumeres i innsendingsrekkefølge, så CSV og
-        # utskrift blir som ved sekvensiell kjøring.
-        print(f"Parallell cache-lesing: {prosesser} prosesser")
-        with ProcessPoolExecutor(max_workers=prosesser) as pool:
-            futures = [pool.submit(_behandle_fra_cache, fil,
+    if processes > 1:
+        # ── Parallel cache reads ─────────────────────────────────
+        # Results are consumed in submission order, so CSV and output match a
+        # sequential run.
+        print(f"Parallel cache reads: {processes} processes")
+        with ProcessPoolExecutor(max_workers=processes) as pool:
+            futures = [pool.submit(_process_from_cache, pdf_path,
                                    args.ocr_cache, args.yolo_cache,
-                                   args.elektronisk_tinglyst, args.kun_yolo,
-                                   args.ocr_logg,
-                                   rs_for(os.path.basename(fil)),
-                                   not args.uten_etterfilter)
-                       for fil in filer]
-            for i, (fil, fut) in enumerate(zip(filer, futures), start=1):
-                status, navn, nyttelast, tid_brukt = fut.result()
-                print(f"\n[{i}/{totalt_antall}] → {navn}")
+                                   args.elektronisk_tinglyst, args.only_yolo,
+                                   args.ocr_log,
+                                   rs_for(os.path.basename(pdf_path)),
+                                   not args.without_postfilter)
+                       for pdf_path in files]
+            for i, (pdf_path, fut) in enumerate(zip(files, futures), start=1):
+                status, name, payload, time_used = fut.result()
+                print(f"\n[{i}/{total_count}] → {name}")
                 if status == "feil":
-                    feilet.append((navn, nyttelast))
-                    print(nyttelast)
+                    failed.append((name, payload))
+                    print(payload)
                     continue
                 if status == "miss":
                     start = time.perf_counter()
                     try:
-                        with open(fil, "rb") as f:
+                        with open(pdf_path, "rb") as f:
                             pdf_bytes = f.read()
                     except OSError as e:
-                        feilet.append((navn, repr(e)))
+                        failed.append((name, repr(e)))
                         traceback.print_exc()
                         continue
-                    sider = kjør_i_hovedprosess(pdf_bytes, navn)
-                    if sider is None:
+                    pages = run_in_main_process(pdf_bytes, name)
+                    if pages is None:
                         continue
-                    tid_brukt = time.perf_counter() - start
+                    time_used = time.perf_counter() - start
                 else:
-                    sider = nyttelast
-                ta_imot(i, navn, sider, tid_brukt)
+                    pages = payload
+                ta_against(i, name, pages, time_used)
     else:
-        # ── Sekvensiell kjøring ──────────────────────────────────
-        # Pre-les neste fil mens GPU jobber
-        neste_bytes = None
-        if filer:
-            with open(filer[0], "rb") as f:
-                neste_bytes = f.read()
+        # ── Sequential run ───────────────────────────────────────
+        # Pre-read the next file while the GPU works.
+        next_bytes = None
+        if files:
+            with open(files[0], "rb") as f:
+                next_bytes = f.read()
 
-        for i, fil in enumerate(filer, start=1):
+        for i, pdf_path in enumerate(files, start=1):
             start = time.perf_counter()
 
-            navn = os.path.basename(fil)
-            print(f"\n[{i}/{totalt_antall}] → {navn}")
+            name = os.path.basename(pdf_path)
+            print(f"\n[{i}/{total_count}] → {name}")
 
-            pdf_bytes = neste_bytes
+            pdf_bytes = next_bytes
 
-            # Pre-les neste fil i parallell med inferens
-            if i < totalt_antall:
-                # Les neste fil nå (rask I/O, ferdig før GPU er done)
-                with open(filer[i], "rb") as f:
-                    neste_bytes = f.read()
+            if i < total_count:
+                with open(files[i], "rb") as f:
+                    next_bytes = f.read()
 
-            sider = kjør_i_hovedprosess(pdf_bytes, navn)
-            if sider is None:
+            pages = run_in_main_process(pdf_bytes, name)
+            if pages is None:
                 continue
 
-            ta_imot(i, navn, sider, time.perf_counter() - start)
+            ta_against(i, name, pages, time.perf_counter() - start)
 
-    vegg_tid = time.perf_counter() - start_vegg
-    print(f"\nFerdig! {totalt_antall} dokumenter på {vegg_tid:.1f}s ({vegg_tid/max(totalt_antall,1):.2f}s/dok)")
+    wall_time = time.perf_counter() - start_wall
+    print(f"\nDone! {total_count} documents in {wall_time:.1f}s ({wall_time/max(total_count,1):.2f}s/doc)")
 
-    if feilet:
-        print(f"Feilet ({len(feilet)}):", feilet[:5])
+    if failed:
+        print(f"Failed ({len(failed)}):", failed[:5])
 
-    if args.ocr_logg:
-        n = _skriv_ocr_logg(ocr_linjer, args.ocr_logg_fil)
-        print(f"Skrev OCR-linjer for {n} side(r) til {args.ocr_logg_fil}")
+    if args.ocr_log:
+        n = _write_ocr_log(ocr_lines, args.ocr_log_file)
+        print(f"Wrote OCR lines for {n} page(s) to {args.ocr_log_file}")
 
-    if not vil_ha_artefakt and not args.kun_feil:
+    if not will_ha_artifact and not args.only_error:
         return
 
-    # Kjør evaluering (for sammendrag + lagre_resultat)
-    eval_resultat = None
-    if args.fasit or args.kun_feil:
+    eval_result = None
+    if args.truth or args.only_error:
         buf = io.StringIO()
-        eval_resultat = mal_overlapp(sladd_bokser, fasit, args.mappe, terskel=args.terskel,
-                                     y_origin=args.y_origin, kilder=csv_bokser,
-                                     skriv=lambda *a, **k: print(*a, **k, file=buf))
-        logg = buf.getvalue()
-        print(logg, end="")  # vis fortsatt i terminalen
-        if args.fasit:
-            tid_linjer = "".join(f"  {n}: {t:.2f}s\n" for n, t in sorted(tider.items()))
+        eval_result = evaluate_against_truth(sladd_boxes, truth, args.folder, threshold=args.threshold,
+                                     y_origin=args.y_origin, sources=csv_boxes,
+                                     write=lambda *a, **k: print(*a, **k, file=buf))
+        log = buf.getvalue()
+        print(log, end="")
+        if args.truth:
+            time_lines = "".join(f"  {n}: {t:.2f}s\n" for n, t in sorted(timings.items()))
             header = (
-                f"Mappe:     {os.path.abspath(args.mappe)}\n"
-                f"Fasit-CSV: {os.path.abspath(args.fasit_csv)}\n"
-                f"Total tid: {total_tid:.2f}s\n"
-                f"Tid per dokument:\n{tid_linjer}\n"
+                f"Folder:     {os.path.abspath(args.folder)}\n"
+                f"Truth CSV:  {os.path.abspath(args.truth_csv)}\n"
+                f"Total time: {total_time:.2f}s\n"
+                f"Time per document:\n{time_lines}\n"
             )
-            lagre_resultat(eval_resultat, mappe=args.resultat_mappe, beskrivelse=args.beskrivelse, logg=header + logg)
+            write_result_files(eval_result, folder=args.result_dir,
+                               description=args.desc, log=header + log)
 
-    # Vent på bakgrunnsbildene FØRST NÅ — sammendraget over er beregnet fra
-    # boksene alene og skal ikke stå og vente på PNG-rendering.
+    # Wait for the background images only now: the summary above is computed
+    # from the boxes alone and must not block on PNG rendering.
     if png_futures:
-        print(f"\nVenter på {len(png_futures)} PNG-jobber i bakgrunnen...")
+        print(f"\nWaiting for {len(png_futures)} background PNG jobs...")
         for fut in png_futures:
             try:
                 fut.result()
             except Exception as e:
-                print(f"  PNG-feil: {e!r}")
+                print(f"  PNG error: {e!r}")
         png_executor.shutdown(wait=False)
 
-    if feil_futures:
-        print(f"\nVenter på {len(feil_futures)} feilbilde-jobber i bakgrunnen...")
-        for fut in feil_futures:
+    if error_futures:
+        print(f"\nWaiting for {len(error_futures)} background error-image jobs...")
+        for fut in error_futures:
             try:
                 fut.result()
             except Exception as e:
-                print(f"  Feilbilde-feil: {e!r}")
+                print(f"  Error-image error: {e!r}")
         feil_executor.shutdown(wait=False)
 
-    # --kun-feil uten feil_executor (fallback, bør ikke skje). Med
-    # --maks-feilbilder 0 er executor bevisst droppet — da skal fallbacken
-    # heller ikke tegne noe.
-    if args.kun_feil and eval_resultat and not feil_futures \
-            and args.maks_feilbilder != 0:
-        bom_indekser = {
-            (_dok_nr(d["fil"]), d["side"], d["fasit_nr"] - 1)
-            for d in eval_resultat.get("detaljer", [])
-            if d["resultat"] == "MANGLER"
+    # Fallback for --only-error without the executor. With --max-error-images 0
+    # the executor is dropped on purpose, so the fallback must not draw either.
+    if args.only_error and eval_result and not error_futures \
+            and args.max_error_images != 0:
+        miss_indices = {
+            (_doc_no(d["fil"]), d["side"], d["fasit_nr"] - 1)
+            for d in eval_result.get("details", [])
+            if d["result"] == "MISSING"
         }
-        oversladd = eval_resultat.get("oversladd_bokser", None)
-        bom_sider = {(bf["fil"], bf["side"]) for bf in eval_resultat.get("bom_filer", [])}
-        over_sider = {(of["fil"], of["side"]) for of in eval_resultat.get("overflod_filer", [])}
-        alle_feil_sider = bom_sider | over_sider
-        print(f"\n--kun-feil: tegner {len(alle_feil_sider)} side(r) med feil (bom/ og oversladd/)")
+        oversladd = eval_result.get("oversladd_boxes", None)
+        miss_pages = {(bf["fil"], bf["side"]) for bf in eval_result.get("miss_files", [])}
+        over_pages = {(of["fil"], of["side"]) for of in eval_result.get("surplus_files", [])}
+        every_error_pages = miss_pages | over_pages
+        print(f"\n--only-error: drawing {len(every_error_pages)} page(s) with errors (bom/ and oversladd/)")
 
-        if bom_sider:
-            bom_mappe = os.path.join(args.png_mappe, "bom")
-            os.makedirs(bom_mappe, exist_ok=True)
-            sladd_b = {k: v for k, v in sladd_bokser.items() if k in bom_sider}
-            csv_b = {k: v for k, v in csv_bokser.items() if k in bom_sider}
-            bom_nr_sider = {(_dok_nr(navn), si) for (navn, si) in bom_sider}
-            fasit_bom = {k: v for k, v in fasit.items() if k in bom_nr_sider} if fasit else None
-            tegn_og_lagre(sladd_b, fasit_bom, args.mappe, bom_mappe,
-                          y_origin=args.y_origin, kilder=csv_b,
-                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+        if miss_pages:
+            miss_dir = os.path.join(args.png_dir, "bom")
+            os.makedirs(miss_dir, exist_ok=True)
+            sladd_b = {k: v for k, v in sladd_boxes.items() if k in miss_pages}
+            csv_b = {k: v for k, v in csv_boxes.items() if k in miss_pages}
+            miss_no_pages = {(_doc_no(name), si) for (name, si) in miss_pages}
+            truth_miss = {k: v for k, v in truth.items() if k in miss_no_pages} if truth else None
+            draw_and_save(sladd_b, truth_miss, args.folder, miss_dir,
+                          y_origin=args.y_origin, sources=csv_b,
+                          oversladd_boxes=oversladd, miss_indices=miss_indices)
 
-        if over_sider:
-            over_mappe = os.path.join(args.png_mappe, "oversladd")
-            os.makedirs(over_mappe, exist_ok=True)
-            sladd_o = {k: v for k, v in sladd_bokser.items() if k in over_sider}
-            csv_o = {k: v for k, v in csv_bokser.items() if k in over_sider}
-            over_nr_sider = {(_dok_nr(navn), si) for (navn, si) in over_sider}
-            fasit_over = {k: v for k, v in fasit.items() if k in over_nr_sider} if fasit else None
-            tegn_og_lagre(sladd_o, fasit_over, args.mappe, over_mappe,
-                          y_origin=args.y_origin, kilder=csv_o,
-                          oversladd_bokser=oversladd, bom_indekser=bom_indekser)
+        if over_pages:
+            over_dir = os.path.join(args.png_dir, "oversladd")
+            os.makedirs(over_dir, exist_ok=True)
+            sladd_o = {k: v for k, v in sladd_boxes.items() if k in over_pages}
+            csv_o = {k: v for k, v in csv_boxes.items() if k in over_pages}
+            over_no_pages = {(_doc_no(name), si) for (name, si) in over_pages}
+            truth_over = {k: v for k, v in truth.items() if k in over_no_pages} if truth else None
+            draw_and_save(sladd_o, truth_over, args.folder, over_dir,
+                          y_origin=args.y_origin, sources=csv_o,
+                          oversladd_boxes=oversladd, miss_indices=miss_indices)
 
     if args.sladd:
-        sladd_alle(sladd_bokser, args.mappe, args.sladd_mappe)
+        sladd_files(sladd_boxes, args.folder, args.sladd_dir)
 
 
 if __name__ == "__main__":

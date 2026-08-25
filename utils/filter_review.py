@@ -1,28 +1,18 @@
 """
-Visuell gjennomgang av bokser som fjernes av en filterkonfigurasjon.
+Visual review of the boxes a filter configuration removes.
 
-Bruker samme fasit-sentriske måling som filter_sweep: en fjernet prediksjon som
-dekker en fasit-boks er bare et reelt tap hvis ingen annen prediksjon dekker
-samme boks. Sidene sorteres og mappelegges etter det skillet.
+Scored ground-truth-centrically like filter_sweep: removing a prediction only
+costs recall if no other prediction still covers the same ground-truth box.
+Pages are sorted and foldered by that distinction.
 
-Farger:
-  MAGENTA  fasit-boks som mistet ALL dekning        ← reelt recall-tap
-  RØD      fjernet prediksjon som var eneste dekker av en tapt boks
-  ORANSJE  fjernet prediksjon som dekket fasit, men boksen er fortsatt dekket
-           (redundant — gratis gevinst)
-  GRØNN    fjernet oversladding (BOM)               ← gevinst
-  GRÅ      beholdt boks (kontekst)
-  BLÅ      fasit-boks som fortsatt er dekket
+Colors: magenta = ground-truth box that lost all coverage, red = the removed
+prediction that was its only cover, orange = removed but redundant cover,
+green = removed oversladding, grey = kept, blue = still-covered ground truth.
 
-Mapper under --ut-mappe:
-  tapt/                sider der minst én fasit-boks mistet all dekning
-  redundant_fjernet/   sider der dekkende bokser ble fjernet uten tap
-  oversladd_fjernet/   sider der oversladdinger ble fjernet
-
-Kjør:
+Run:
     python utils/filter_review.py \\
-        --fasit-csv labels.csv --res-csv resultat.csv --mappe /sti/til/pdfer \\
-        --per-kilde "paddle:e=1.8,h=80,b=150" "yolo:e=1.5,h=40,b=150,c=0.5"
+        --truth-csv labels.csv --res-csv resultat.csv --folder /path/to/pdfs \\
+        --per-source "paddle:e=1.8,h=80,b=150" "yolo:e=1.5,h=40,b=150,c=0.5"
 """
 
 import argparse
@@ -37,422 +27,411 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
-from filter_felles import (KRITERIER, KRITERIUM_FELT, KRITERIUM_LAV_ER_BRA,
-                           PDF_DPI, SKALA, STD_KRITERIUM, STD_SLURV_FAKTOR,
-                           STD_TERSKEL,
-                           bygg_datasett, dok_nr, evaluer, filter_grunner,
-                           match_metrikker, overlapp,
-                           lag_filter, lag_filter_per_kilde, les_fasit, les_kjorte_dok,
-                           les_fasit_rader, les_prediksjoner, parse_per_kilde,
-                           skriv_oppsummering, OCR_PARAMETRE)
+from filter_common import (CRITERIA, CRITERION_FIELDS, CRITERION_LOW_IS_GOOD,
+                           PDF_DPI, SCALE, STD_CRITERION, STD_SLOPPINESS_FACTOR,
+                           STD_THRESHOLD,
+                           build_dataset, doc_no, measure_filter, rejection_reasons,
+                           match_metrics, overlap,
+                           make_filter, make_filter_per_source, read_truth_boxes, read_processed_docs,
+                           read_truth_rows, read_predictions, parse_per_source,
+                           write_summary, OCR_PARAMS, GEOMETRY_PARAMETERS)
 
-# ── Farger ────────────────────────────────────────────────────
-TAPT_FASIT         = (230, 0, 200, 255)     # magenta = fasit-boks uten dekning
-KRITISK_FJERNET    = (220, 30, 30, 230)     # rød     = eneste dekker, fjernet
-REDUNDANT_FJERNET  = (235, 150, 20, 230)    # oransje = dekkende, men erstattet
-OVERSLADD_FJERNET  = (30, 180, 30, 220)     # grønn   = oversladding fjernet
-BOM                = (255, 90, 0, 235)      # oransje = treffer ingen fasit-boks
-BEHOLDT            = (160, 160, 160, 100)   # grå     = beholdt
-FASIT              = (30, 80, 220, 140)     # blå     = fasit, fortsatt dekket
+# ── Colors ────────────────────────────────────────────────────
+LOST_TRUTH         = (230, 0, 200, 255)     # magenta
+CRITICAL_REMOVED    = (220, 30, 30, 230)     # red
+REDUNDANT_REMOVED  = (235, 150, 20, 230)    # orange
+OVERSLADD_REMOVED  = (30, 180, 30, 220)     # green
+MISS                = (255, 90, 0, 235)      # orange
+KEPT            = (160, 160, 160, 100)   # grey
+TRUTH              = (30, 80, 220, 140)     # blue
 
-_FONT_LITEN = None
-
-
-def _font_liten():
-    global _FONT_LITEN
-    if _FONT_LITEN is None:
-        _FONT_LITEN = ImageFont.load_default(size=16)
-    return _FONT_LITEN
+_FONT_SMALL = None
 
 
-def _tegn_tekst(tegner, r, tekst, farge, over=True):
+def _font_small():
+    global _FONT_SMALL
+    if _FONT_SMALL is None:
+        _FONT_SMALL = ImageFont.load_default(size=16)
+    return _FONT_SMALL
+
+
+def _draw_text(drawer, r, text, color, over=True):
     y = max(r[1] - 24, 2) if over else r[3] + 4
-    tegner.text((r[0] + 2, y), tekst, fill=farge, font=_font_liten())
+    drawer.text((r[0] + 2, y), text, fill=color, font=_font_small())
 
 
-# ── Etiketter ─────────────────────────────────────────────────
+# ── Labels ─────────────────────────────────────────────────
 
-def _etikett(kwargs):
-    deler = []
-    for nøkkel, mal in (("min_elongation", "e≥{:g}"), ("maks_elongation", "e≤{:g}"),
-                        ("maks_hoyde", "h≤{:g}"), ("min_hoyde", "h≥{:g}"),
-                        ("maks_bredde", "b≤{:g}"), ("min_bredde", "b≥{:g}"),
-                        ("min_kortside", "kort≥{:g}"), ("maks_kortside", "kort≤{:g}"),
-                        ("min_langside", "lang≥{:g}"), ("maks_langside", "lang≤{:g}"),
-                        ("maks_areal", "a≤{:g}"), ("min_areal_px", "apx≥{:g}"),
-                        ("conf_terskel", "c≥{:g}→behold"),
-                        ("min_siffer", "siffer≥{:g}"),
-                        ("maks_bokstaver", "bokst≤{:g}"),
-                        ("min_siffer_run", "løp≥{:g}"),
-                        ("krev_fnr_kandidat", "fnr-kandidat"),
-                        ("avvis_desimal", "ikke-desimal"),
-                        ("rec_veto", "rec≥{:g}→gjelder"),
-                        ("ocr_conf_fritak", "c≥{:g}→OCR-fritak"),
-                        ("avvis_00_run", "ikke-00-løp"),
-                        ("avvis_orgnr", "ikke-orgnr"),
-                        ("avvis_org_ord", "ikke-org-ord({:g})"),
-                        ("linje_veto", "linjerec≥{:g}→gjelder"),
-                        ("avvis_run_6_10", "ikke-run-6-10"),
-                        ("uten_tekst_conf", "utenTekst-c≥{:g}"),
-                        ("maks_luke", "luke<{:g}"),
-                        ("avvis_desimal_luke", "ikke-desimal-luke")):
-        if kwargs.get(nøkkel) is not None:
-            deler.append(mal.format(kwargs[nøkkel]))
-    return ", ".join(deler) if deler else "ingen filter"
-
-
-def _etikett_per_kilde(per_kilde):
-    return " + ".join(f"{k}({_etikett(kw)})" for k, kw in sorted(per_kilde.items()))
+def _label(kwargs):
+    parts = []
+    for spec_key, mal in (("min_elongation", "e≥{:g}"), ("max_elongation", "e≤{:g}"),
+                        ("max_height", "h≤{:g}"), ("min_height", "h≥{:g}"),
+                        ("max_width", "b≤{:g}"), ("min_width", "b≥{:g}"),
+                        ("min_short_side", "short≥{:g}"), ("max_short_side", "short≤{:g}"),
+                        ("min_long_side", "long≥{:g}"), ("max_long_side", "long≤{:g}"),
+                        ("max_area", "a≤{:g}"), ("min_area_px", "apx≥{:g}"),
+                        ("conf_threshold", "c≥{:g}→keep"),
+                        ("min_digits", "digits≥{:g}"),
+                        ("max_letters", "letters≤{:g}"),
+                        ("min_digits_run", "run≥{:g}"),
+                        ("require_fnr_candidate", "fnr-candidate"),
+                        ("reject_decimal", "no-decimal"),
+                        ("rec_veto", "rec≥{:g}→applies"),
+                        ("ocr_conf_exempt", "c≥{:g}→OCR-exempt"),
+                        ("reject_00_run", "no-00-run"),
+                        ("reject_orgnr", "no-orgnr"),
+                        ("reject_org_ord", "no-org-word({:g})"),
+                        ("line_veto", "linerec≥{:g}→applies"),
+                        ("reject_run_6_10", "no-run-6-10"),
+                        ("without_text_conf", "noText-c≥{:g}"),
+                        ("max_gap", "gap<{:g}"),
+                        ("reject_decimal_gap", "no-decimal-gap")):
+        if kwargs.get(spec_key) is not None:
+            parts.append(mal.format(kwargs[spec_key]))
+    return ", ".join(parts) if parts else "no filter"
 
 
-def _mappenavn(kwargs):
-    deler = []
-    for nøkkel, kort in (("min_elongation", "e"), ("maks_elongation", "eM"),
-                         ("maks_hoyde", "h"), ("min_hoyde", "hm"),
-                         ("maks_bredde", "b"), ("min_bredde", "bm"),
-                         ("min_kortside", "km"), ("maks_kortside", "kM"),
-                         ("min_langside", "lm"), ("maks_langside", "lM"),
-                         ("maks_areal", "a"), ("min_areal_px", "apx"),
-                         ("conf_terskel", "c"),
-                         ("min_siffer", "smin"), ("maks_bokstaver", "bmaks"),
-                         ("min_siffer_run", "rmin"),
-                         ("krev_fnr_kandidat", "fnr"),
-                         ("avvis_desimal", "des"), ("rec_veto", "rveto"),
-                         ("ocr_conf_fritak", "cfritak"),
-                         ("avvis_00_run", "r00"), ("avvis_orgnr", "orgnr"),
-                         ("avvis_org_ord", "orgord"),
-                         ("linje_veto", "lveto"), ("avvis_run_6_10", "run610"),
-                         ("uten_tekst_conf", "utconf"),
-                         ("maks_luke", "luke"),
-                         ("avvis_desimal_luke", "desluke")):
-        if kwargs.get(nøkkel) is not None:
-            deler.append(f"{kort}{kwargs[nøkkel]:g}")
-    return "_".join(deler) if deler else "ingen_filter"
+def _label_per_source(per_source):
+    return " + ".join(f"{k}({_label(kw)})" for k, kw in sorted(per_source.items()))
 
 
-def _mappenavn_per_kilde(per_kilde):
-    return "__".join(f"{k}_{_mappenavn(kw)}" for k, kw in sorted(per_kilde.items()))
+def _dir_name(kwargs):
+    parts = []
+    for spec_key, short in (("min_elongation", "e"), ("max_elongation", "eM"),
+                         ("max_height", "h"), ("min_height", "hm"),
+                         ("max_width", "b"), ("min_width", "bm"),
+                         ("min_short_side", "km"), ("max_short_side", "kM"),
+                         ("min_long_side", "lm"), ("max_long_side", "lM"),
+                         ("max_area", "a"), ("min_area_px", "apx"),
+                         ("conf_threshold", "c"),
+                         ("min_digits", "smin"), ("max_letters", "bmaks"),
+                         ("min_digits_run", "rmin"),
+                         ("require_fnr_candidate", "fnr"),
+                         ("reject_decimal", "des"), ("rec_veto", "rveto"),
+                         ("ocr_conf_exempt", "cfritak"),
+                         ("reject_00_run", "r00"), ("reject_orgnr", "orgnr"),
+                         ("reject_org_ord", "orgord"),
+                         ("line_veto", "lveto"), ("reject_run_6_10", "run610"),
+                         ("without_text_conf", "utconf"),
+                         ("max_gap", "luke"),
+                         ("reject_decimal_gap", "desluke")):
+        if kwargs.get(spec_key) is not None:
+            parts.append(f"{short}{kwargs[spec_key]:g}")
+    return "_".join(parts) if parts else "ingen_filter"
+
+
+def _dir_name_per_source(per_source):
+    return "__".join(f"{k}_{_dir_name(kw)}" for k, kw in sorted(per_source.items()))
 
 
 # ── Rendering ─────────────────────────────────────────────────
 
-def _render_side(dok, si):
-    pix = dok[si - 1].get_pixmap(dpi=PDF_DPI)
-    modus = "RGBA" if pix.n == 4 else "RGB"
-    return Image.frombytes(modus, (pix.w, pix.h), pix.samples).convert("RGB")
+def _render_page(doc, si):
+    pix = doc[si - 1].get_pixmap(dpi=PDF_DPI)
+    mode = "RGBA" if pix.n == 4 else "RGB"
+    return Image.frombytes(mode, (pix.w, pix.h), pix.samples).convert("RGB")
 
 
-def generer_bilder(ds, mappe, ut_mappe, filter_kwargs=None, per_kilde=None,
-                   kun_tapt=False, velg=None, maks_sider=None,
-                   utsnitt_margin=60.0):
-    """Tegner fjernede bokser på original-PDF-ene, gruppert etter alvorlighet."""
-    if per_kilde:
-        etikett = _etikett_per_kilde(per_kilde)
-        fjernes = lag_filter_per_kilde(per_kilde)
-        grunner_for = lambda p: (filter_grunner(p, **per_kilde[p["kilde"].lower()])
-                                 if p["kilde"].lower() in per_kilde else [])
+def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
+                   only_lost=False, select=None, max_pages=None,
+                   crop_margin=60.0):
+    """Draws the removed boxes on the original PDFs, grouped by severity."""
+    if per_source:
+        label = _label_per_source(per_source)
+        removed = make_filter_per_source(per_source)
+        reasons_for = lambda p: (rejection_reasons(p, **per_source[p["kilde"].lower()])
+                                 if p["kilde"].lower() in per_source else [])
     else:
         kw = filter_kwargs or {}
-        etikett = _etikett(kw)
-        fjernes = lag_filter(**kw)
-        grunner_for = lambda p: filter_grunner(p, **kw)
+        label = _label(kw)
+        removed = make_filter(**kw)
+        reasons_for = lambda p: rejection_reasons(p, **kw)
 
-    m = evaluer(ds, fjernes, samle_tapte=True)
-    tapte = set(m.tapte_bokser or ())
+    m = measure_filter(ds, removed, collect_lost=True)
+    lost_ids = set(m.lost_boxes or ())
 
-    print(f"\nFilter: {etikett}")
-    print(f"  Fasit-bokser tapt (mistet all dekning): {m.tapt}"
-          f"   ({m.tapt_pst:.2f}% av {ds.dekket_foer} dekkede)")
-    print(f"  Oversladdinger fjernet:                 {m.ov_fj}"
-          f"   ({m.ov_pst:.1f}% av {ds.n_bom})")
-    print(f"  Dekkende bokser fjernet uten tap:       {m.red_fj}   (gratis)")
-    print(f"  Fjernet totalt:                         {m.n_fj}"
-          f"   ({m.areal_fj:,.0f} pt²)".replace(",", " "))
-    print(f"  Recall etter:  {m.recall_etter:.2f}%"
-          f"   Presisjon etter: {m.pres_etter:.1f}%")
+    print(f"\nFilter: {label}")
+    print(f"  Ground-truth boxes lost (all coverage gone): {m.lost}"
+          f"   ({m.lost_pct:.2f}% of {ds.covered_before} covered)")
+    print(f"  Oversladdinger removed:                      {m.ov_rm}"
+          f"   ({m.ov_pct:.1f}% of {ds.n_miss})")
+    print(f"  Covering boxes removed without loss:         {m.red_rm}   (free)")
+    print(f"  Removed in total:                            {m.n_rm}"
+          f"   ({m.area_rm:,.0f} pt²)".replace(",", " "))
+    print(f"  Recall after:  {m.recall_after:.2f}%"
+          f"   Precision after: {m.prec_after:.1f}%")
 
-    if not m.n_fj:
-        print("  Ingen bokser fjernet — ingenting å tegne.")
+    if not m.n_rm:
+        print("  No boxes removed, nothing to draw.")
         return
 
-    # Merk hver prediksjon med kategori
     for p in ds.pred:
-        p["_grunner"] = grunner_for(p) if fjernes(p) else []
+        p["_grunner"] = reasons_for(p) if removed(p) else []
         if not p["_grunner"]:
             p["_kat"] = None
-        elif not p["dekker"]:
+        elif not p["covers"]:
             p["_kat"] = "oversladd"
-        elif any(j in tapte for j in p["dekker"]):
-            p["_kat"] = "kritisk"
+        elif any(j in lost_ids for j in p["covers"]):
+            p["_kat"] = "critical"
         else:
             p["_kat"] = "redundant"
 
-    # ── Manifest over hver tapt fasit-boks, for manuell gjennomgang ──
-    fjernet_for = defaultdict(list)
+    # ── Manifest of every lost ground-truth box, for manual review ──
+    removed_for = defaultdict(list)
     for p in ds.pred:
-        if p["_kat"] in ("kritisk",):
-            for j in p["dekker"]:
-                if j in tapte:
-                    fjernet_for[j].append(p)
+        if p["_kat"] in ("critical",):
+            for j in p["covers"]:
+                if j in lost_ids:
+                    removed_for[j].append(p)
 
-    navn_per_dok = {}
+    name_per_doc = {}
     for p in ds.pred:
-        navn_per_dok.setdefault(p["dok_nr"], p["navn"])
+        name_per_doc.setdefault(p["doc_no"], p["navn"])
 
     manifest = []
-    for j in sorted(tapte):
-        fb = ds.fasit_bokser[j]
-        fx0, fy0, fx1, fy1 = fb["boks"]
-        for p in fjernet_for.get(j, [{}]):
+    for j in sorted(lost_ids):
+        fb = ds.truth_boxes[j]
+        fx0, fy0, fx1, fy1 = fb["box"]
+        for p in removed_for.get(j, [{}]):
             fa = fb["norm_areal"]
-            dekning = (overlapp(p["norm"], fb["norm"]) / fa * 100
+            coverage = (overlap(p["norm"], fb["norm"]) / fa * 100
                        if p and fa > 0 else "")
             manifest.append({
-                "dekning_pst": round(dekning, 1) if dekning != "" else "",
-                "fil": navn_per_dok.get(fb["dok_nr"], f"{fb['dok_nr']}"),
+                "coverage_pct": round(coverage, 1) if coverage != "" else "",
+                "fil": name_per_doc.get(fb["doc_no"], f"{fb['doc_no']}"),
                 "side": fb["side"],
                 "label_id": fb.get("label_id", ""),
                 "fasit_x0": round(fx0, 1), "fasit_y0": round(fy0, 1),
                 "fasit_bredde_pt": round(fx1 - fx0, 1),
                 "fasit_hoyde_pt": round(fy1 - fy0, 1),
-                "dekkere_foer": ds.dekning_foer[j],
+                "dekkere_foer": ds.coverage_before[j],
                 "kilde": p.get("kilde", ""),
                 "conf": p.get("conf") if p.get("conf") is not None else "",
                 "pred_bredde_pt": round(p["w"], 1) if p else "",
                 "pred_hoyde_pt": round(p["h"], 1) if p else "",
                 "elongation": round(p["elongation"], 2) if p else "",
-                "kortside_pt": round(p["kortside"], 1) if p else "",
-                "langside_pt": round(p["langside"], 1) if p else "",
-                "grunn": "; ".join(p.get("_grunner", ())),
+                "kortside_pt": round(p["short_side"], 1) if p else "",
+                "langside_pt": round(p["long_side"], 1) if p else "",
+                "reason": "; ".join(p.get("_grunner", ())),
                 "_j": j,
                 "vurdering": "",
             })
-    # Grupper like årsaker sammen — gjør gjennomgangen raskere
-    manifest.sort(key=lambda r: (r["grunn"], r["fil"], r["side"]))
-    utsnitt_navn = {}
-    for nr, rad in enumerate(manifest, 1):
-        rad["nr"] = nr
-        base = os.path.splitext(os.path.basename(rad["fil"]))[0]
-        rad["utsnitt"] = f"{nr:04d}_{base}_side{rad['side']}.png"
-        utsnitt_navn.setdefault(rad["_j"], []).append(rad["utsnitt"])
+    # Group identical causes together, so the review goes faster
+    manifest.sort(key=lambda r: (r["reason"], r["fil"], r["side"]))
+    crop_name = {}
+    for nr, row in enumerate(manifest, 1):
+        row["nr"] = nr
+        base = os.path.splitext(os.path.basename(row["fil"]))[0]
+        row["utsnitt"] = f"{nr:04d}_{base}_side{row['side']}.png"
+        crop_name.setdefault(row["_j"], []).append(row["utsnitt"])
 
     if manifest:
-        os.makedirs(ut_mappe, exist_ok=True)
-        manifest_sti = os.path.join(ut_mappe, "tapt.csv")
-        felt = ["nr", "fil", "side", "label_id", "grunn", "dekning_pst",
+        os.makedirs(out_dir, exist_ok=True)
+        manifest_path = os.path.join(out_dir, "lost.csv")
+        field = ["nr", "fil", "side", "label_id", "reason", "coverage_pct",
                 "kilde", "conf",
                 "elongation", "kortside_pt", "langside_pt",
                 "pred_bredde_pt", "pred_hoyde_pt", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "dekkere_foer", "fasit_x0", "fasit_y0",
                 "utsnitt", "vurdering"]
-        with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=felt, extrasaction="ignore")
+        with open(manifest_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=field, extrasaction="ignore")
             w.writeheader()
             w.writerows(manifest)
-        print(f"  Manifest over tapte bokser: {manifest_sti}")
-        print(f"    {len(manifest)} rader for {len(tapte)} tapte bokser"
-              + ("  (en boks kan ha flere fjernede dekkere)"
-                 if len(manifest) != len(tapte) else ""))
-        per_grunn = defaultdict(int)
-        for rad in manifest:
-            per_grunn[rad["grunn"]] += 1
-        print("  Tap gruppert etter regel som utløste fjerningen:")
-        for grunn, n in sorted(per_grunn.items(), key=lambda kv: -kv[1]):
-            print(f"    {n:>5}  {grunn}")
+        print(f"  Manifest of lost boxes: {manifest_path}")
+        print(f"    {len(manifest)} rows for {len(lost_ids)} lost boxes"
+              + ("  (a box can have several removed covers)"
+                 if len(manifest) != len(lost_ids) else ""))
+        per_reason = defaultdict(int)
+        for row in manifest:
+            per_reason[row["reason"]] += 1
+        print("  Loss grouped by the rule that triggered the removal:")
+        for reason, n in sorted(per_reason.items(), key=lambda kv: -kv[1]):
+            print(f"    {n:>5}  {reason}")
 
-    # Alvorlighet per side: (antall tapte fasit-bokser, antall kritiske bokser)
-    tapt_per_side = defaultdict(int)
-    for j in tapte:
-        fb = ds.fasit_bokser[j]
-        tapt_per_side[(fb["dok_nr"], fb["side"])] += 1
+    lost_per_page = defaultdict(int)
+    for j in lost_ids:
+        fb = ds.truth_boxes[j]
+        lost_per_page[(fb["doc_no"], fb["side"])] += 1
 
-    sider = defaultdict(lambda: {"kritisk": 0, "redundant": 0, "oversladd": 0})
-    navn_for_dok = {}
+    pages = defaultdict(lambda: {"critical": 0, "redundant": 0, "oversladd": 0})
+    name_for_doc = {}
     for p in ds.pred:
-        navn_for_dok.setdefault(p["dok_nr"], p["navn"])
+        name_for_doc.setdefault(p["doc_no"], p["navn"])
         if p["_kat"]:
-            sider[(p["navn"], p["side"])][p["_kat"]] += 1
+            pages[(p["navn"], p["side"])][p["_kat"]] += 1
 
-    # Sider der en fasit-boks gikk tapt, men ingen prediksjon på siden ble
-    # merket kritisk, kan ikke forekomme — tapet skyldes alltid en fjerning.
-    aktuelle = []
-    for (navn, si), tell in sider.items():
-        n_tapt = tapt_per_side.get((dok_nr(navn), si), 0)
-        if kun_tapt and not n_tapt:
+    # A lost ground-truth box always has a critical removal on its own page.
+    relevant = []
+    for (name, si), tally in pages.items():
+        n_lost = lost_per_page.get((doc_no(name), si), 0)
+        if only_lost and not n_lost:
             continue
-        aktuelle.append((n_tapt, tell["kritisk"], tell["oversladd"], navn, si))
+        relevant.append((n_lost, tally["critical"], tally["oversladd"], name, si))
 
-    if velg:
-        velg_sett = {os.path.basename(v) for v in velg}
-        aktuelle = [a for a in aktuelle if os.path.basename(a[3]) in velg_sett]
+    if select:
+        select_apply = {os.path.basename(v) for v in select}
+        relevant = [a for a in relevant if os.path.basename(a[3]) in select_apply]
 
-    if not aktuelle:
-        print("  Ingen sider å tegne.")
+    if not relevant:
+        print("  No pages to draw.")
         return
 
-    aktuelle.sort(key=lambda a: (-a[0], -a[1], -a[2], a[3], a[4]))  # verst først
-    if maks_sider:
-        aktuelle = aktuelle[:maks_sider]
+    relevant.sort(key=lambda a: (-a[0], -a[1], -a[2], a[3], a[4]))  # worst first
+    if max_pages:
+        relevant = relevant[:max_pages]
 
-    mapper = {k: os.path.join(ut_mappe, k) for k in
-              ("tapt", "redundant_fjernet", "oversladd_fjernet")}
-    for sti in mapper.values():
-        os.makedirs(sti, exist_ok=True)
+    mapper = {k: os.path.join(out_dir, k) for k in
+              ("lost", "redundant_fjernet", "oversladd_fjernet")}
+    for path in mapper.values():
+        os.makedirs(path, exist_ok=True)
 
-    # Prediksjoner gruppert per side, for rask oppslag
-    per_side = defaultdict(list)
+    per_page = defaultdict(list)
     for p in ds.pred:
-        per_side[(p["navn"], p["side"])].append(p)
-    fasit_indekser_per_side = defaultdict(list)
-    for j, fb in enumerate(ds.fasit_bokser):
-        fasit_indekser_per_side[(fb["dok_nr"], fb["side"])].append(j)
-    fasit_per_side = fasit_indekser_per_side
+        per_page[(p["navn"], p["side"])].append(p)
+    truth_indices_per_page = defaultdict(list)
+    for j, fb in enumerate(ds.truth_boxes):
+        truth_indices_per_page[(fb["doc_no"], fb["side"])].append(j)
+    truth_per_page = truth_indices_per_page
 
-    # Tegn i samme rekkefølge som rangeringen (verst først), så tapt-sidene
-    # ligger klare tidlig i kjøringen — ikke alfabetisk etter filnavn.
-    # Sidene grupperes fortsatt per fil, så hver PDF åpnes bare én gang.
-    rang = {(navn, si): i for i, (_, _, _, navn, si) in enumerate(aktuelle)}
-    per_fil = defaultdict(list)
-    for (_, _, _, navn, si) in aktuelle:
-        per_fil[navn].append(si)
+    # Draw worst first so the lost pages are ready early, but group by file so
+    # each PDF is still opened only once.
+    rang = {(name, si): i for i, (_, _, _, name, si) in enumerate(relevant)}
+    per_file = defaultdict(list)
+    for (_, _, _, name, si) in relevant:
+        per_file[name].append(si)
 
-    telling = defaultdict(int)
-    n_tegnet = 0
-    for navn in sorted(per_fil,
-                       key=lambda n: min(rang[(n, s)] for s in per_fil[n])):
-        sti = os.path.join(mappe, navn)
-        if not os.path.isfile(sti):
-            print(f"  ⚠ Finner ikke {sti}, hopper over")
+    tally = defaultdict(int)
+    n_drawn = 0
+    for name in sorted(per_file,
+                       key=lambda n: min(rang[(n, s)] for s in per_file[n])):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            print(f"  ⚠ Cannot find {path}, skipping")
             continue
         try:
-            dok = fitz.open(sti)
+            doc = fitz.open(path)
         except Exception as e:
-            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            print(f"  ⚠ Could not open {name}: {e!r}")
             continue
 
-        for si in sorted(per_fil[navn], key=lambda s: rang[(navn, s)]):
-            if not 1 <= si <= len(dok):
+        for si in sorted(per_file[name], key=lambda s: rang[(name, s)]):
+            if not 1 <= si <= len(doc):
                 continue
-            side_pred = per_side[(navn, si)]
-            if not side_pred:
+            page_pred = per_page[(name, si)]
+            if not page_pred:
                 continue
 
-            bilde = _render_side(dok, si)
-            base = bilde.convert("RGBA")
+            image = _render_page(doc, si)
+            base = image.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
-            sx = bilde.width / side_pred[0]["bw"]
-            sy = bilde.height / side_pred[0]["bh"]
+            drawer = ImageDraw.Draw(overlay)
+            sx = image.width / page_pred[0]["bw"]
+            sy = image.height / page_pred[0]["bh"]
 
-            # 1) Fasit — magenta og tykk hvis den mistet all dekning
-            for j in fasit_per_side.get((dok_nr(navn), si), ()):
-                fx0, fy0, fx1, fy1 = ds.fasit_bokser[j]["boks"]
-                r = [fx0 * SKALA * sx, fy0 * SKALA * sy,
-                     fx1 * SKALA * sx, fy1 * SKALA * sy]
-                if j in tapte:
-                    # Utvid litt, ellers skjules fasit-boksen av prediksjonen
-                    ytre = [r[0] - 6, r[1] - 6, r[2] + 6, r[3] + 6]
-                    tegner.rectangle(ytre, outline=TAPT_FASIT, width=5)
-                    tegner.text((ytre[0] + 2, max(ytre[1] - 44, 2)),
-                                "TAPT FASIT", fill=TAPT_FASIT,
-                                font=_font_liten())
+            for j in truth_per_page.get((doc_no(name), si), ()):
+                fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
+                r = [fx0 * SCALE * sx, fy0 * SCALE * sy,
+                     fx1 * SCALE * sx, fy1 * SCALE * sy]
+                if j in lost_ids:
+                    # Inflate a little, else the prediction hides it
+                    outer = [r[0] - 6, r[1] - 6, r[2] + 6, r[3] + 6]
+                    drawer.rectangle(outer, outline=LOST_TRUTH, width=5)
+                    drawer.text((outer[0] + 2, max(outer[1] - 44, 2)),
+                                "LOST TRUTH", fill=LOST_TRUTH,
+                                font=_font_small())
                 else:
-                    tegner.rectangle(r, outline=FASIT, width=2)
+                    drawer.rectangle(r, outline=TRUTH, width=2)
 
-            # 2) Beholdte bokser
-            for p in side_pred:
+            for p in page_pred:
                 if p["_kat"] is None:
                     px = p["px"]
-                    tegner.rectangle([px[0] * sx, px[1] * sy,
+                    drawer.rectangle([px[0] * sx, px[1] * sy,
                                       px[2] * sx, px[3] * sy],
-                                     outline=BEHOLDT, width=1)
+                                     outline=KEPT, width=1)
 
-            # 3) Fjernede bokser
-            farger = {"kritisk": KRITISK_FJERNET,
-                      "redundant": REDUNDANT_FJERNET,
-                      "oversladd": OVERSLADD_FJERNET}
-            har = set()
-            for p in side_pred:
+            colors = {"critical": CRITICAL_REMOVED,
+                      "redundant": REDUNDANT_REMOVED,
+                      "oversladd": OVERSLADD_REMOVED}
+            has = set()
+            for p in page_pred:
                 if p["_kat"] is None:
                     continue
                 px = p["px"]
                 r = [px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy]
-                farge = farger[p["_kat"]]
-                har.add(p["_kat"])
-                tegner.rectangle(r, outline=farge, width=4)
-                merke = p["_kat"].upper()
+                color = colors[p["_kat"]]
+                has.add(p["_kat"])
+                drawer.rectangle(r, outline=color, width=4)
+                mark = p["_kat"].upper()
                 if p["klasse"] == "SLURV":
-                    merke += "/SLURV"
-                _tegn_tekst(tegner, r, f"{merke} [{p['kilde']}]", farge, over=True)
-                _tegn_tekst(tegner, r, "; ".join(p["_grunner"]), farge, over=False)
+                    mark += "/SLURV"
+                _draw_text(drawer, r, f"{mark} [{p['kilde']}]", color, over=True)
+                _draw_text(drawer, r, "; ".join(p["_grunner"]), color, over=False)
                 if p["conf"] is not None:
-                    tegner.text((r[0] + 2, max(r[1] + 2, 2)),
-                                f"conf={p['conf']:.2f}", fill=farge,
-                                font=_font_liten())
+                    drawer.text((r[0] + 2, max(r[1] + 2, 2)),
+                                f"conf={p['conf']:.2f}", fill=color,
+                                font=_font_small())
 
-            bilde = Image.alpha_composite(base, overlay).convert("RGB")
+            image = Image.alpha_composite(base, overlay).convert("RGB")
 
-            # Utsnitt rundt hver tapt fasit-boks på denne siden
-            if utsnitt_margin:
-                mrg = utsnitt_margin * SKALA
-                for j in fasit_indekser_per_side.get((dok_nr(navn), si), ()):
-                    if j not in tapte:
+            if crop_margin:
+                margin = crop_margin * SCALE
+                for j in truth_indices_per_page.get((doc_no(name), si), ()):
+                    if j not in lost_ids:
                         continue
-                    fx0, fy0, fx1, fy1 = ds.fasit_bokser[j]["boks"]
-                    boks = (max(0, int(fx0 * SKALA * sx - mrg)),
-                            max(0, int(fy0 * SKALA * sy - mrg)),
-                            min(bilde.width, int(fx1 * SKALA * sx + mrg)),
-                            min(bilde.height, int(fy1 * SKALA * sy + mrg)))
-                    if boks[2] <= boks[0] or boks[3] <= boks[1]:
+                    fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
+                    box = (max(0, int(fx0 * SCALE * sx - margin)),
+                            max(0, int(fy0 * SCALE * sy - margin)),
+                            min(image.width, int(fx1 * SCALE * sx + margin)),
+                            min(image.height, int(fy1 * SCALE * sy + margin)))
+                    if box[2] <= box[0] or box[3] <= box[1]:
                         continue
-                    ut = os.path.join(mapper["tapt"], "utsnitt")
+                    ut = os.path.join(mapper["lost"], "utsnitt")
                     os.makedirs(ut, exist_ok=True)
-                    for filnavn_u in utsnitt_navn.get(j, ()):
-                        bilde.crop(boks).save(os.path.join(ut, filnavn_u))
-                        telling["utsnitt"] += 1
+                    for filename_u in crop_name.get(j, ()):
+                        image.crop(box).save(os.path.join(ut, filename_u))
+                        tally["utsnitt"] += 1
 
-            filnavn = f"{os.path.splitext(navn)[0]}_side{si}.png"
-            if "kritisk" in har:
-                bilde.save(os.path.join(mapper["tapt"], filnavn))
-                telling["tapt"] += 1
-            if "redundant" in har:
-                bilde.save(os.path.join(mapper["redundant_fjernet"], filnavn))
-                telling["redundant_fjernet"] += 1
-            if "oversladd" in har:
-                bilde.save(os.path.join(mapper["oversladd_fjernet"], filnavn))
-                telling["oversladd_fjernet"] += 1
-            n_tegnet += 1
+            filename = f"{os.path.splitext(name)[0]}_side{si}.png"
+            if "critical" in has:
+                image.save(os.path.join(mapper["lost"], filename))
+                tally["lost"] += 1
+            if "redundant" in has:
+                image.save(os.path.join(mapper["redundant_fjernet"], filename))
+                tally["redundant_fjernet"] += 1
+            if "oversladd" in has:
+                image.save(os.path.join(mapper["oversladd_fjernet"], filename))
+                tally["oversladd_fjernet"] += 1
+            n_drawn += 1
 
-        dok.close()
+        doc.close()
 
-    for navn, sti in mapper.items():
-        if os.path.isdir(sti) and not os.listdir(sti):
-            os.rmdir(sti)
+    for name, path in mapper.items():
+        if os.path.isdir(path) and not os.listdir(path):
+            os.rmdir(path)
 
-    print(f"  Tegnet {n_tegnet} sider til {ut_mappe}")
-    for navn in ("tapt", "redundant_fjernet", "oversladd_fjernet"):
-        if telling[navn]:
-            print(f"    {telling[navn]:>5} side(r) i {navn}/")
-    if telling["utsnitt"]:
-        print(f"    {telling['utsnitt']:>5} utsnitt i tapt/utsnitt/ "
-              f"— én per tapt boks, samme rekkefølge som tapt.csv")
+    print(f"  Drew {n_drawn} pages to {out_dir}")
+    for name in ("lost", "redundant_fjernet", "oversladd_fjernet"):
+        if tally[name]:
+            print(f"    {tally[name]:>5} page(s) in {name}/")
+    if tally["utsnitt"]:
+        print(f"    {tally['utsnitt']:>5} crops in lost/utsnitt/ "
+              f"— one per lost box, same order as lost.csv")
 
 
-# ── OCR-tekstlag for triage ───────────────────────────────────
-# «Hva leste Paddle her?» kan ikke besvares fra originalsiden alene. Med
-# --ocr-tekst falmes originalen og pipelinens CACHEDE tokens tegnes oppå i
-# sine posisjoner — nøyaktig det OCR-en faktisk så, med rec-score som farge.
-# Tokens ligger i det ROTERTE bildets pikselrom (siden pipelinen OCR-er den
-# roterte siden); prediksjoner og fasit ligger i sidens uroterte rom og
-# transformeres frem med inversen av orientering.boks_tilbake.
+# ── OCR text layer for triage ─────────────────────────────────
+# --ocr-text fades the original and draws the pipeline's CACHED tokens on top,
+# colored by rec score. Tokens live in the ROTATED image's pixel space (the
+# pipeline OCRs the rotated page), so predictions and ground truth are
+# transformed forward with the inverse of orientation.box_back.
 
-OCR_REC_HOY = (0, 115, 0)        # grønn = rec >= 0.98
-OCR_REC_MID = (25, 45, 170)      # blå   = 0.90 <= rec < 0.98
-OCR_REC_LAV = (200, 30, 30)      # rød   = rec < 0.90
-OCR_REC_UKJ = (130, 130, 130)    # grå   = uten rec-score
+OCR_REC_HIGH = (0, 115, 0)        # green
+OCR_REC_MID = (25, 45, 170)      # blue
+OCR_REC_LOW = (200, 30, 30)      # red
+OCR_REC_UNKNOWN = (130, 130, 130)    # grey
 
 _FONTER = {}
-_OCR_LES_CACHE = None
+_OCR_READ_CACHE = None
 
 
 def _font_str(px):
@@ -462,18 +441,18 @@ def _font_str(px):
     return _FONTER[px]
 
 
-def _rec_farge(rec):
+def _rec_color(rec):
     if rec is None:
-        return OCR_REC_UKJ
+        return OCR_REC_UNKNOWN
     if rec >= 0.98:
-        return OCR_REC_HOY
+        return OCR_REC_HIGH
     if rec >= 0.90:
         return OCR_REC_MID
-    return OCR_REC_LAV
+    return OCR_REC_LOW
 
 
-def _rekt_frem(r, k, w0, h0):
-    """Urotert pikselrekt → rotert rom (invers av orientering.boks_tilbake)."""
+def rotate_box(r, k, w0, h0):
+    """Unrotated pixel rect -> rotated space (inverse of orientation.box_back)."""
     if not k:
         return list(r)
     x0, y0, x1, y1 = r
@@ -488,751 +467,731 @@ def _rekt_frem(r, k, w0, h0):
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
-def _ocr_les_cache(ocr_mappe, navn):
-    """Les (rotasjoner, tokens_per_side) fra pipelinens OCR-cache."""
-    global _OCR_LES_CACHE
-    if _OCR_LES_CACHE is None:
+def _read_ocr_cache(ocr_dir, name):
+    """Read (rotations, tokens_per_page) from the pipeline's OCR cache."""
+    global _OCR_READ_CACHE
+    if _OCR_READ_CACHE is None:
         app = os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "app"))
         if app not in sys.path:
             sys.path.insert(0, app)
-        from ocr_cache import les_cache
-        _OCR_LES_CACHE = les_cache
-    return _OCR_LES_CACHE(ocr_mappe, navn)
+        from ocr_cache import read_cache
+        _OCR_READ_CACHE = read_cache
+    return _OCR_READ_CACHE(ocr_dir, name)
 
 
-def _tegn_tokens(tegner, tokens, srx, sry):
-    """Tegner hvert token i sin boks, skalert til boksen, farget etter rec."""
+def _draw_tokens(drawer, tokens, srx, sry):
+    """Draws each token inside its own box, scaled to it, colored by rec."""
     for t in tokens:
-        if not t.tekst.strip():
+        if not t.text.strip():
             continue
         r = [t.x0 * srx, t.y0 * sry, t.x1 * srx, t.y1 * sry]
-        farge = _rec_farge(t.rec_score)
-        tegner.rectangle(r, outline=farge + (70,), width=1)
+        color = _rec_color(t.rec_score)
+        drawer.rectangle(r, outline=color + (70,), width=1)
         str_h = (r[3] - r[1]) * 0.8
-        str_b = (r[2] - r[0]) / (max(len(t.tekst), 1) * 0.55)
-        tegner.text((r[0] + 1, r[1]), t.tekst, fill=farge + (255,),
+        str_b = (r[2] - r[0]) / (max(len(t.text), 1) * 0.55)
+        drawer.text((r[0] + 1, r[1]), t.text, fill=color + (255,),
                     font=_font_str(min(str_h, str_b)))
 
 
-def triage_bom(ds, mappe, ut_mappe, velg=None, maks_sider=None, kilde=None,
-               ocr_mappe=None, ocr_opacity=0.15):
-    """Tegner ALLE BOM-prediksjoner, uavhengig av filter.
+def triage_bom(ds, folder, out_dir, select=None, max_pages=None, source=None,
+               ocr_dir=None, ocr_opacity=0.15):
+    """Draws ALL BOM predictions, regardless of filter.
 
-    En BOM-boks treffer ingen fasit-boks, men fasit er menneskeskapt: den kan
-    like godt være et fødselsnummer saksbehandleren bommet på som en reell
-    oversladding. Det skillet kan ikke leses ut av geometrien — det må ses.
-
-    Sidene sorteres slik at 'begge'-bokser kommer først: der begge modellene
-    er enige om at det står et fødselsnummer, er sannsynligheten for at fasit
-    er feil størst.
+    A BOM box hits no ground truth, but the ground truth is human-made: it may
+    equally be an fnr the case handler missed, and geometry cannot tell. Pages
+    with 'begge' boxes come first. Where both models agree, the ground truth
+    is most likely the one at fault.
     """
-    bom = [p for p in ds.pred if p["klasse"] == "BOM"]
-    if kilde:
-        bom = [p for p in bom if p["kilde"].lower() == kilde.lower()]
-    print(f"\nTRIAGE av BOM-bokser (treffer ingen fasit-boks)"
-          + (f" — kun kilde «{kilde}»" if kilde else ""))
-    print(f"  Totalt: {len(bom)}")
-    per_kilde = defaultdict(int)
-    for p in bom:
-        per_kilde[p["kilde"]] += 1
-    for k in sorted(per_kilde):
-        print(f"    {k:>8}: {per_kilde[k]:>5}")
-    if not bom:
+    miss = [p for p in ds.pred if p["klasse"] == "BOM"]
+    if source:
+        miss = [p for p in miss if p["kilde"].lower() == source.lower()]
+    print(f"\nTRIAGE of BOM boxes (hitting no ground-truth box)"
+          + (f", only kilde «{source}»" if source else ""))
+    print(f"  Total: {len(miss)}")
+    per_source = defaultdict(int)
+    for p in miss:
+        per_source[p["kilde"]] += 1
+    for k in sorted(per_source):
+        print(f"    {k:>8}: {per_source[k]:>5}")
+    if not miss:
         return
 
-    prioritet = {"begge": 0, "yolo": 1, "paddle": 2}
-    sider = defaultdict(list)
-    for p in bom:
-        sider[(p["navn"], p["side"])].append(p)
+    priority = {"begge": 0, "yolo": 1, "paddle": 2}
+    pages = defaultdict(list)
+    for p in miss:
+        pages[(p["navn"], p["side"])].append(p)
 
-    if velg:
-        velg_sett = {os.path.basename(v) for v in velg}
-        sider = {k: v for k, v in sider.items()
-                 if os.path.basename(k[0]) in velg_sett}
+    if select:
+        select_apply = {os.path.basename(v) for v in select}
+        pages = {k: v for k, v in pages.items()
+                 if os.path.basename(k[0]) in select_apply}
 
-    rangert = sorted(
-        sider.items(),
-        key=lambda kv: (min(prioritet.get(p["kilde"], 9) for p in kv[1]),
+    ranked = sorted(
+        pages.items(),
+        key=lambda kv: (min(priority.get(p["kilde"], 9) for p in kv[1]),
                         -len(kv[1]), kv[0]))
-    if maks_sider:
-        rangert = rangert[:maks_sider]
+    if max_pages:
+        ranked = ranked[:max_pages]
 
-    per_side = defaultdict(list)
+    per_page = defaultdict(list)
     for p in ds.pred:
-        per_side[(p["navn"], p["side"])].append(p)
-    fasit_per_side = defaultdict(list)
-    for fb in ds.fasit_bokser:
-        fasit_per_side[(fb["dok_nr"], fb["side"])].append(fb)
+        per_page[(p["navn"], p["side"])].append(p)
+    truth_per_page = defaultdict(list)
+    for fb in ds.truth_boxes:
+        truth_per_page[(fb["doc_no"], fb["side"])].append(fb)
 
-    # Tegn i rangert rekkefølge (begge-sidene først), gruppert per fil så
-    # hver PDF fortsatt bare åpnes én gang.
-    rang = {nokkel: i for i, (nokkel, _) in enumerate(rangert)}
-    per_fil = defaultdict(list)
-    for (navn, si), _ in rangert:
-        per_fil[navn].append(si)
+    # Ranked order (begge pages first), but grouped per file to open each once.
+    rang = {sort_key: i for i, (sort_key, _) in enumerate(ranked)}
+    per_file = defaultdict(list)
+    for (name, si), _ in ranked:
+        per_file[name].append(si)
 
-    telling = defaultdict(int)
-    n_tegnet = 0
-    for navn in sorted(per_fil,
-                       key=lambda n: min(rang[(n, s)] for s in per_fil[n])):
-        sti = os.path.join(mappe, navn)
-        if not os.path.isfile(sti):
-            print(f"  ⚠ Finner ikke {sti}, hopper over")
+    tally = defaultdict(int)
+    n_drawn = 0
+    for name in sorted(per_file,
+                       key=lambda n: min(rang[(n, s)] for s in per_file[n])):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            print(f"  ⚠ Cannot find {path}, skipping")
             continue
         try:
-            dok = fitz.open(sti)
+            doc = fitz.open(path)
         except Exception as e:
-            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            print(f"  ⚠ Could not open {name}: {e!r}")
             continue
 
-        cache = _ocr_les_cache(ocr_mappe, navn) if ocr_mappe else None
-        if ocr_mappe and cache is None:
-            print(f"  ⚠ Ingen OCR-cache for {navn} — tegner uten tekstlag")
+        cache = _read_ocr_cache(ocr_dir, name) if ocr_dir else None
+        if ocr_dir and cache is None:
+            print(f"  ⚠ No OCR cache for {name}, drawing without text layer")
 
-        for si in sorted(per_fil[navn], key=lambda s: rang[(navn, s)]):
-            if not 1 <= si <= len(dok):
+        for si in sorted(per_file[name], key=lambda s: rang[(name, s)]):
+            if not 1 <= si <= len(doc):
                 continue
-            side_pred = per_side[(navn, si)]
-            bilde = _render_side(dok, si)
-            w0, h0 = bilde.width, bilde.height
+            page_pred = per_page[(name, si)]
+            image = _render_page(doc, si)
+            w0, h0 = image.width, image.height
             k, tokens = 0, []
             if cache:
-                rotasjoner, tokens_per_side = cache
-                if si <= len(rotasjoner):
-                    k = rotasjoner[si - 1] or 0
-                    tokens = tokens_per_side[si - 1]
+                rotations, tokens_per_page = cache
+                if si <= len(rotations):
+                    k = rotations[si - 1] or 0
+                    tokens = tokens_per_page[si - 1]
                 if k:
-                    # Samme rotasjon som pipelinen OCR-et med (np.rot90 = CCW)
-                    bilde = bilde.rotate(90 * k, expand=True)
-                bilde = Image.blend(
-                    Image.new("RGB", bilde.size, (255, 255, 255)),
-                    bilde, ocr_opacity)
-            base = bilde.convert("RGBA")
+                    # Same rotation the pipeline OCR'd with (np.rot90 = CCW)
+                    image = image.rotate(90 * k, expand=True)
+                image = Image.blend(
+                    Image.new("RGB", image.size, (255, 255, 255)),
+                    image, ocr_opacity)
+            base = image.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
-            sx = w0 / side_pred[0]["bw"]
-            sy = h0 / side_pred[0]["bh"]
+            drawer = ImageDraw.Draw(overlay)
+            sx = w0 / page_pred[0]["bw"]
+            sy = h0 / page_pred[0]["bh"]
             if cache and tokens:
-                bw, bh = side_pred[0]["bw"], side_pred[0]["bh"]
+                bw, bh = page_pred[0]["bw"], page_pred[0]["bh"]
                 rot_w, rot_h = (bh, bw) if k % 2 else (bw, bh)
-                _tegn_tokens(tegner, tokens,
+                _draw_tokens(drawer, tokens,
                              base.width / rot_w, base.height / rot_h)
 
-            for fb in fasit_per_side.get((dok_nr(navn), si), ()):
-                fx0, fy0, fx1, fy1 = fb["boks"]
-                r = _rekt_frem([fx0 * SKALA * sx, fy0 * SKALA * sy,
-                                fx1 * SKALA * sx, fy1 * SKALA * sy], k, w0, h0)
-                tegner.rectangle(r, outline=FASIT, width=2)
+            for fb in truth_per_page.get((doc_no(name), si), ()):
+                fx0, fy0, fx1, fy1 = fb["box"]
+                r = rotate_box([fx0 * SCALE * sx, fy0 * SCALE * sy,
+                                fx1 * SCALE * sx, fy1 * SCALE * sy], k, w0, h0)
+                drawer.rectangle(r, outline=TRUTH, width=2)
 
-            kilder_her = set()
-            for p in side_pred:
+            sources_here = set()
+            for p in page_pred:
                 px = p["px"]
-                r = _rekt_frem([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
+                r = rotate_box([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
                                k, w0, h0)
                 if p["klasse"] == "BOM":
-                    kilder_her.add(p["kilde"])
-                    tegner.rectangle(r, outline=BOM, width=4)
-                    merke = f"BOM [{p['kilde']}]"
+                    sources_here.add(p["kilde"])
+                    drawer.rectangle(r, outline=MISS, width=4)
+                    mark = f"BOM [{p['kilde']}]"
                     if p["conf"] is not None:
-                        merke += f" conf={p['conf']:.2f}"
-                    _tegn_tekst(tegner, r, merke, BOM, over=True)
-                    _tegn_tekst(tegner, r,
+                        mark += f" conf={p['conf']:.2f}"
+                    _draw_text(drawer, r, mark, MISS, over=True)
+                    _draw_text(drawer, r,
                                 f"{p['w']:.0f}x{p['h']:.0f}pt e={p['elongation']:.1f}",
-                                BOM, over=False)
+                                MISS, over=False)
                 else:
-                    tegner.rectangle(r, outline=BEHOLDT, width=1)
+                    drawer.rectangle(r, outline=KEPT, width=1)
 
-            bilde = Image.alpha_composite(base, overlay).convert("RGB")
-            filnavn = f"{os.path.splitext(navn)[0]}_side{si}.png"
-            for k in kilder_her:
-                undermappe = os.path.join(ut_mappe, "bom", k)
-                os.makedirs(undermappe, exist_ok=True)
-                bilde.save(os.path.join(undermappe, filnavn))
-                telling[k] += 1
-            n_tegnet += 1
+            image = Image.alpha_composite(base, overlay).convert("RGB")
+            filename = f"{os.path.splitext(name)[0]}_side{si}.png"
+            for k in sources_here:
+                subdir = os.path.join(out_dir, "bom", k)
+                os.makedirs(subdir, exist_ok=True)
+                image.save(os.path.join(subdir, filename))
+                tally[k] += 1
+            n_drawn += 1
 
-        dok.close()
+        doc.close()
 
-    print(f"  Tegnet {n_tegnet} sider til {os.path.join(ut_mappe, 'bom')}")
-    for k in sorted(telling):
-        print(f"    {telling[k]:>5} side(r) i bom/{k}/")
-    print("\n  Blå = fasit (saksbehandlerens sladding), oransje = BOM, grå = treff.")
-    print("  Spørsmålet per oransje boks: står det et fødselsnummer der?")
-    print("    ja  → saksbehandleren bommet, modellen har rett (ikke oversladding)")
-    print("    nei → reell oversladding")
-    if ocr_mappe:
-        print("  Tekstlag: Paddles cachede tokens oppå falmet original —")
-        print("    grønn = rec ≥ 0.98, blå = 0.90–0.98, rød = < 0.90, "
-              "grå = uten score.")
-
-
-BAND_FASIT = (30, 120, 255, 255)     # blå   = fasit (saksbehandlerens sladding)
-BAND_PRED  = (230, 30, 30, 255)      # rød   = prediksjonen i båndet
-BAND_ANNEN = (150, 150, 150, 140)    # grå   = andre bokser på siden
+    print(f"  Drew {n_drawn} pages to {os.path.join(out_dir, 'bom')}")
+    for k in sorted(tally):
+        print(f"    {tally[k]:>5} page(s) in bom/{k}/")
+    print("\n  Blue = ground truth (the case handler's sladding), "
+          "orange = BOM, grey = hit.")
+    print("  The question per orange box: is there an fnr there?")
+    print("    yes → the case handler missed it; the model is right")
+    print("    no  → real oversladding")
+    if ocr_dir:
+        print("  Text layer: Paddle's cached tokens over a faded original —")
+        print("    green = rec ≥ 0.98, blue = 0.90–0.98, red = < 0.90, "
+              "grey = no score.")
 
 
-def band_review(ds, mappe, ut_mappe, kriterium, lo, hi, maks=None,
-                utsnitt_margin=25.0, ut_csv=None):
-    """Tegner UTSNITT av hvert (prediksjon, fasit)-par der målet ligger i [lo, hi).
+BAND_TRUTH = (30, 120, 255, 255)     # blue  = ground truth
+BAND_PRED  = (230, 30, 30, 255)      # red   = the prediction in the band
+BAND_OTHER = (150, 150, 150, 140)    # grey  = other boxes on the page
 
-    Dette er gråsonen terskelen faktisk avgjør. Under lo forkastes paret uansett
-    valg, over hi godtas det uansett — det er kun båndet som skifter side når
-    terskelen flyttes fra lo til hi. Derfor er det bare disse som må ses.
 
-    Fasit er menneskeskapt og kan være feil: en fasit-boks kan være slurvete
-    tegnet, dekke to felt, eller sitte på noe som ikke er et fødselsnummer.
-    Utsnittet viser derfor selve dokumentinnholdet, ikke bare rammene, slik at
-    spørsmålet «er fasit riktig her?» kan besvares.
+def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
+                crop_margin=25.0, out_csv=None):
+    """Draws CROPS of every (prediction, ground truth) pair scoring in [lo, hi).
+
+    Only the band changes side when the threshold moves from lo to hi. The crops
+    show the document content, not just the frames, because the ground truth is
+    human-made and may itself be wrong.
     """
-    felt = KRITERIUM_FELT[kriterium]
-    lav_er_bra = kriterium in KRITERIUM_LAV_ER_BRA
+    field = CRITERION_FIELDS[criterion]
+    low_er_bra = criterion in CRITERION_LOW_IS_GOOD
 
-    fasit_per_side = defaultdict(list)
-    for j, fb in enumerate(ds.fasit_bokser):
-        fasit_per_side[(fb["dok_nr"], fb["side"])].append((j, fb))
-    pred_per_side = defaultdict(list)
+    truth_per_page = defaultdict(list)
+    for j, fb in enumerate(ds.truth_boxes):
+        truth_per_page[(fb["doc_no"], fb["side"])].append((j, fb))
+    pred_per_page = defaultdict(list)
     for p in ds.pred:
-        pred_per_side[(p["dok_nr"], p["side"])].append(p)
+        pred_per_page[(p["doc_no"], p["side"])].append(p)
 
-    # Alle par med overlapp, uansett verdi — så fordelingen kan rapporteres
-    par = []
-    for nøkkel, fasit_her in fasit_per_side.items():
-        for p in pred_per_side.get(nøkkel, ()):
-            for j, fb in fasit_her:
-                m = match_metrikker(p["norm"], fb["norm"], fb["horisontal"])
+    # All overlapping pairs, so the distribution can be reported too
+    pair = []
+    for spec_key, truth_here in truth_per_page.items():
+        for p in pred_per_page.get(spec_key, ()):
+            for j, fb in truth_here:
+                m = match_metrics(p["norm"], fb["norm"], fb["horizontal"])
                 if m is None:
                     continue
-                par.append((m[felt], m, p, j, fb))
+                pair.append((m[field], m, p, j, fb))
 
-    i_band = [t for t in par if lo <= t[0] < hi]
-    i_band.sort(key=lambda t: t[0], reverse=lav_er_bra)
+    i_band = [t for t in pair if lo <= t[0] < hi]
+    i_band.sort(key=lambda t: t[0], reverse=low_er_bra)
 
-    print(f"\nBÅNDGJENNOMGANG — kriterium «{kriterium}» ({felt}) i [{lo:.0%}, {hi:.0%})")
-    print(f"  Overlappende par totalt:      {len(par)}")
-    print(f"  Par i båndet:                 {len(i_band)}")
-    print(f"  Berørte fasit-bokser:         {len({t[3] for t in i_band})}")
-    print(f"  Berørte prediksjoner:         {len({id(t[2]) for t in i_band})}")
+    print(f"\nBAND REVIEW, criterion «{criterion}» ({field}) in [{lo:.0%}, {hi:.0%})")
+    print(f"  Overlapping pairs in total:   {len(pair)}")
+    print(f"  Pairs in the band:            {len(i_band)}")
+    print(f"  Ground-truth boxes affected:  {len({t[3] for t in i_band})}")
+    print(f"  Predictions affected:         {len({id(t[2]) for t in i_band})}")
     if not i_band:
-        print("  Ingen par i båndet — terskelvalget mellom disse to verdiene "
-              "endrer ingenting.")
+        print("  No pairs in the band. Any threshold between these two "
+              "values changes nothing.")
         return
 
-    # Hvor mange fasit-bokser SKIFTER side? Bare de som ikke har en annen
-    # prediksjon som klarer den høye terskelen uansett.
-    klarer_hi = defaultdict(bool)
-    for verdi, _m, _p, j, _fb in par:
-        if (verdi < hi) if lav_er_bra else (verdi >= hi):
-            klarer_hi[j] = True
-    vipper = {t[3] for t in i_band if not klarer_hi[t[3]]}
-    print(f"  Fasit-bokser som faktisk vipper: {len(vipper)}  "
-          f"(resten er dekket av en annen prediksjon uansett terskel)")
+    # Only boxes lacking another prediction that clears hi actually change side.
+    manages_hi = defaultdict(bool)
+    for value, _m, _p, j, _fb in pair:
+        if (value < hi) if low_er_bra else (value >= hi):
+            manages_hi[j] = True
+    vipper = {t[3] for t in i_band if not manages_hi[t[3]]}
+    print(f"  Ground-truth boxes that actually flip: {len(vipper)}  "
+          f"(the rest are covered by another prediction regardless)")
 
-    per_kilde = defaultdict(int)
+    per_source = defaultdict(int)
     for t in i_band:
-        per_kilde[t[2]["kilde"]] += 1
-    print("  Per kilde: " + ", ".join(f"{k}={v}" for k, v in sorted(per_kilde.items())))
+        per_source[t[2]["kilde"]] += 1
+    print("  Per kilde: " + ", ".join(f"{k}={v}" for k, v in sorted(per_source.items())))
 
-    valgte = i_band[:maks] if maks else i_band
-    if maks and len(i_band) > maks:
-        print(f"  ⚠ Tegner kun de {maks} første av {len(i_band)} "
-              f"(--maks-sider styrer dette)")
+    selected = i_band[:max_items] if max_items else i_band
+    if max_items and len(i_band) > max_items:
+        print(f"  ⚠ Drawing only the first {max_items} of {len(i_band)} "
+              f"(--max-pages controls this)")
 
-    mappenavn = os.path.join(
-        ut_mappe, f"band_{kriterium}_{lo:.2f}-{hi:.2f}".replace(".", ""))
-    os.makedirs(mappenavn, exist_ok=True)
+    dir_name = os.path.join(
+        out_dir, f"band_{criterion}_{lo:.2f}-{hi:.2f}".replace(".", ""))
+    os.makedirs(dir_name, exist_ok=True)
 
-    if ut_csv:
+    if out_csv:
         import csv as _csv
-        with open(ut_csv, "w", newline="", encoding="utf-8") as f:
+        with open(out_csv, "w", newline="", encoding="utf-8") as f:
             w = _csv.writer(f)
-            # Kolonnen heter "verdi", ikke felt-navnet: for areal-kriteriet er
-            # felt == "dek_f", og da ville overskriften stått to ganger.
+            # The column is named "value", not after the field: for the areal
+            # criterion field == "cov_area", which would appear twice.
             w.writerow(["utsnitt", "fil", "side", "fasit_idx", "vipper", "kilde",
-                        "conf", "verdi", "dek_f", "dek_kort", "dek_lang", "iou",
-                        "senter_kort", "pred_wpt", "pred_hpt"])
-            for n, (verdi, m, p, j, fb) in enumerate(valgte, 1):
+                        "conf", "value", "cov_area", "cov_short", "cov_long", "iou",
+                        "center_short", "pred_wpt", "pred_hpt"])
+            for n, (value, m, p, j, fb) in enumerate(selected, 1):
                 w.writerow([f"{n:04d}", p["navn"], p["side"], j,
                             "ja" if j in vipper else "nei", p["kilde"],
                             f"{p['conf']:.3f}" if p["conf"] is not None else "",
-                            f"{verdi:.4f}",
-                            *[f"{m[k]:.4f}" for k in ("dek_f", "dek_kort",
-                                                      "dek_lang", "iou",
-                                                      "senter_kort")],
+                            f"{value:.4f}",
+                            *[f"{m[k]:.4f}" for k in ("cov_area", "cov_short",
+                                                      "cov_long", "iou",
+                                                      "center_short")],
                             f"{p['w']:.1f}", f"{p['h']:.1f}"])
-        print(f"  Måltall skrevet til {ut_csv}")
+        print(f"  Metrics written to {out_csv}")
 
-    # ── Tegn utsnittene, gruppert per fil for å åpne hver PDF én gang ──
-    per_fil = defaultdict(list)
-    for n, t in enumerate(valgte, 1):
-        per_fil[t[2]["navn"]].append((n, t))
+    # ── Draw the crops, grouped per file to open each PDF once ──
+    per_file = defaultdict(list)
+    for n, t in enumerate(selected, 1):
+        per_file[t[2]["navn"]].append((n, t))
 
-    n_tegnet = 0
-    for navn in sorted(per_fil):
-        sti = os.path.join(mappe, navn)
-        if not os.path.isfile(sti):
-            print(f"  ⚠ Finner ikke {sti}, hopper over")
+    n_drawn = 0
+    for name in sorted(per_file):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            print(f"  ⚠ Cannot find {path}, skipping")
             continue
         try:
-            dok = fitz.open(sti)
+            doc = fitz.open(path)
         except Exception as e:
-            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
+            print(f"  ⚠ Could not open {name}: {e!r}")
             continue
-        # Render hver side maks én gang, selv med flere par på samme side
-        sider_cache = {}
-        for n, (verdi, m, p, j, fb) in sorted(per_fil[navn]):
+        pages_cache = {}
+        for n, (value, m, p, j, fb) in sorted(per_file[name]):
             si = p["side"]
-            if not 1 <= si <= len(dok):
+            if not 1 <= si <= len(doc):
                 continue
-            if si not in sider_cache:
-                sider_cache[si] = _render_side(dok, si)
-            bilde = sider_cache[si]
-            sx = bilde.width / p["bw"]
-            sy = bilde.height / p["bh"]
+            if si not in pages_cache:
+                pages_cache[si] = _render_page(doc, si)
+            image = pages_cache[si]
+            sx = image.width / p["bw"]
+            sy = image.height / p["bh"]
 
-            base = bilde.convert("RGBA")
+            base = image.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
+            drawer = ImageDraw.Draw(overlay)
 
-            # Andre bokser på siden, som kontekst
-            for annen in pred_per_side.get((p["dok_nr"], si), ()):
-                if annen is p:
+            for other in pred_per_page.get((p["doc_no"], si), ()):
+                if other is p:
                     continue
-                a = annen["px"]
-                tegner.rectangle([a[0] * sx, a[1] * sy, a[2] * sx, a[3] * sy],
-                                 outline=BAND_ANNEN, width=2)
-            for jj, andre_fb in fasit_per_side.get((p["dok_nr"], si), ()):
+                a = other["px"]
+                drawer.rectangle([a[0] * sx, a[1] * sy, a[2] * sx, a[3] * sy],
+                                 outline=BAND_OTHER, width=2)
+            for jj, other_fb in truth_per_page.get((p["doc_no"], si), ()):
                 if jj == j:
                     continue
-                b = andre_fb["boks"]
-                tegner.rectangle([b[0] * SKALA * sx, b[1] * SKALA * sy,
-                                  b[2] * SKALA * sx, b[3] * SKALA * sy],
-                                 outline=BAND_ANNEN, width=2)
+                b = other_fb["box"]
+                drawer.rectangle([b[0] * SCALE * sx, b[1] * SCALE * sy,
+                                  b[2] * SCALE * sx, b[3] * SCALE * sy],
+                                 outline=BAND_OTHER, width=2)
 
-            fx = [fb["boks"][0] * SKALA * sx, fb["boks"][1] * SKALA * sy,
-                  fb["boks"][2] * SKALA * sx, fb["boks"][3] * SKALA * sy]
+            fx = [fb["box"][0] * SCALE * sx, fb["box"][1] * SCALE * sy,
+                  fb["box"][2] * SCALE * sx, fb["box"][3] * SCALE * sy]
             px = [p["px"][0] * sx, p["px"][1] * sy,
                   p["px"][2] * sx, p["px"][3] * sy]
-            tegner.rectangle(fx, outline=BAND_FASIT, width=3)
-            tegner.rectangle(px, outline=BAND_PRED, width=3)
+            drawer.rectangle(fx, outline=BAND_TRUTH, width=3)
+            drawer.rectangle(px, outline=BAND_PRED, width=3)
 
             flat = Image.alpha_composite(base, overlay).convert("RGB")
 
-            # Utsnitt rundt unionen av de to boksene
-            marg = utsnitt_margin * SKALA
-            u = [min(fx[0], px[0]) - marg * sx, min(fx[1], px[1]) - marg * sy,
-                 max(fx[2], px[2]) + marg * sx, max(fx[3], px[3]) + marg * sy]
+            margin = crop_margin * SCALE
+            u = [min(fx[0], px[0]) - margin * sx, min(fx[1], px[1]) - margin * sy,
+                 max(fx[2], px[2]) + margin * sx, max(fx[3], px[3]) + margin * sy]
             u = [max(0, u[0]), max(0, u[1]),
                  min(flat.width, u[2]), min(flat.height, u[3])]
-            utsnitt = flat.crop([int(v) for v in u])
+            crop = flat.crop([int(v) for v in u])
 
-            # Måltall brennes inn under utsnittet, så bildet står alene
-            tekst = (f"{kriterium} {verdi:.3f}  |  dek_f={m['dek_f']:.2f} "
-                     f"kort={m['dek_kort']:.2f} lang={m['dek_lang']:.2f} "
-                     f"iou={m['iou']:.2f} senter={m['senter_kort']:.2f}")
-            tekst2 = (f"blaa=fasit roed=pred   {navn} s{si}  {p['kilde']}"
+            # Metrics are burned in below the crop, so it stands alone
+            text = (f"{criterion} {value:.3f}  |  dek_f={m['cov_area']:.2f} "
+                     f"kort={m['cov_short']:.2f} lang={m['cov_long']:.2f} "
+                     f"iou={m['iou']:.2f} senter={m['center_short']:.2f}")
+            text2 = (f"blue=truth red=pred   {name} s{si}  {p['kilde']}"
                       + (f" conf={p['conf']:.2f}" if p["conf"] is not None else "")
                       + f"  pred {p['w']:.0f}x{p['h']:.0f}pt"
-                      + f"  fasit {fb['boks'][2]-fb['boks'][0]:.0f}"
-                      + f"x{fb['boks'][3]-fb['boks'][1]:.0f}pt"
+                      + f"  fasit {fb['box'][2]-fb['box'][0]:.0f}"
+                      + f"x{fb['box'][3]-fb['box'][1]:.0f}pt"
                       + ("   VIPPER" if j in vipper else ""))
-            # Bred nok at bildeteksten ikke klippes
-            bunn = Image.new("RGB", (max(utsnitt.width, 780), utsnitt.height + 48),
+            # Wide enough that the caption is not clipped
+            bottom = Image.new("RGB", (max(crop.width, 780), crop.height + 48),
                              (255, 255, 255))
-            bunn.paste(utsnitt, (0, 0))
-            d = ImageDraw.Draw(bunn)
-            d.text((4, utsnitt.height + 4), tekst, fill=(0, 0, 0), font=_font_liten())
-            d.text((4, utsnitt.height + 26), tekst2, fill=(90, 90, 90),
-                   font=_font_liten())
+            bottom.paste(crop, (0, 0))
+            d = ImageDraw.Draw(bottom)
+            d.text((4, crop.height + 4), text, fill=(0, 0, 0), font=_font_small())
+            d.text((4, crop.height + 26), text2, fill=(90, 90, 90),
+                   font=_font_small())
 
-            vipp = "vipper_" if j in vipper else ""
-            filnavn = (f"{n:04d}_{verdi:.3f}_{vipp}"
-                       f"{os.path.splitext(navn)[0]}_s{si}_f{j}.png")
-            bunn.save(os.path.join(mappenavn, filnavn))
-            n_tegnet += 1
-        dok.close()
+            tilt = "vipper_" if j in vipper else ""
+            filename = (f"{n:04d}_{value:.3f}_{tilt}"
+                       f"{os.path.splitext(name)[0]}_s{si}_f{j}.png")
+            bottom.save(os.path.join(dir_name, filename))
+            n_drawn += 1
+        doc.close()
 
-    print(f"\n  Tegnet {n_tegnet} utsnitt til {mappenavn}/")
-    print(f"  Filnavnene starter med løpenummer og {felt}-verdien, så de "
-          f"sorterer stigende.")
-    print("  Blå = fasit, rød = prediksjonen i båndet, grå = andre bokser.")
-    print("  Spørsmål per utsnitt:")
-    print("    1. Er fasit-boksen riktig? (feiltegnet fasit skal ikke telle mot oss)")
-    print("    2. Peker prediksjonen på SAMME felt som fasit — eller nabolinjen?")
-    print("    3. Dekker prediksjonen nok av sifrene til å være en reell sladding?")
-    print("  Er svaret ja/ja/ja bør paret godtas — da er terskelen satt for høyt.")
+    print(f"\n  Drew {n_drawn} crops to {dir_name}/")
+    print(f"  File names start with a sequence number and the {field} value, "
+          f"so they sort ascending.")
+    print("  Blue = ground truth, red = the prediction in the band, "
+          "grey = other boxes.")
+    print("  Question per crop:")
+    print("    1. Is the ground-truth box correct? (a misdrawn one is not our fault)")
+    print("    2. Does the prediction point at the SAME field, or the next line?")
+    print("    3. Does it cover enough of the digits to be a real sladding?")
+    print("  Three yeses means the pair should be accepted. The threshold is too high.")
 
 
-def test_mot_fasit(fasit_csv, mappe, ut_mappe, filter_kwargs, maks_sider=None,
-                   utsnitt_margin=60.0, velg=None, ds=None):
-    """Anvender filteret DIREKTE på saksbehandlernes sladdinger.
+def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None,
+                   crop_margin=60.0, select=None, ds=None):
+    """Applies the filter DIRECTLY to the case handlers' sladdinger.
 
-    Hver fasit-boks er en sladding et menneske faktisk gjorde, altså per
-    definisjon riktig. Blir den forkastet av filteret, er det en form filteret
-    ikke godtar — og det gjelder uansett hva modellen predikerte, så alle
-    labels kan vurderes, ikke bare de dokumentene modellen kjørte på.
+    Every ground-truth box is correct by definition, so a rejection means the
+    filter refuses that shape, independent of what the model predicted, which
+    is why all labels can be judged, not just the processed documents.
     """
-    rader, ekskludert, kolonner = les_fasit_rader(fasit_csv)
-    n_eks = sum(ekskludert.values())
+    rows, excluded, columns = read_truth_rows(truth_csv)
+    n_example = sum(excluded.values())
 
-    print(f"FASIT-TEST — filteret anvendt direkte på sladdingene")
-    print(f"  Kolonner i labels-CSV: {', '.join(kolonner)}")
-    print(f"  Labels lest:      {len(rader)}  (riktige sladdinger)")
-    if ekskludert:
-        print(f"  Ekskludert:       {n_eks}  "
-              + ", ".join(f"{k}: {v}" for k, v in sorted(ekskludert.items())))
+    print(f"GROUND-TRUTH TEST: filter applied directly to the sladdinger")
+    print(f"  Columns in the labels CSV: {', '.join(columns)}")
+    print(f"  Labels read:      {len(rows)}  (correct sladdinger)")
+    if excluded:
+        print(f"  Excluded:         {n_example}  "
+              + ", ".join(f"{k}: {v}" for k, v in sorted(excluded.items())))
 
-    for felt in ("ml_status", "type"):
-        fordeling = defaultdict(int)
-        for r in rader:
-            fordeling[r[felt]] += 1
-        if len(fordeling) > 1 or felt == "ml_status":
-            print(f"  {felt}: "
+    for field in ("ml_status", "type"):
+        distribution = defaultdict(int)
+        for r in rows:
+            distribution[r[field]] += 1
+        if len(distribution) > 1 or field == "ml_status":
+            print(f"  {field}: "
                   + ", ".join(f"{k}={v}" for k, v in
-                              sorted(fordeling.items(), key=lambda kv: -kv[1])))
+                              sorted(distribution.items(), key=lambda kv: -kv[1])))
 
-    # Formfordelingen til ALLE riktige sladdinger — viser hvor mye margin
-    # terskelen har mot virkelige data, ikke bare mot modellens bokser.
-    def _pst(sortert, p):
-        if not sortert:
+    # Shape of ALL correct sladdinger: the margin a threshold has against real
+    # data, not just against the model's boxes.
+    def _pct(rows_sorted, p):
+        if not rows_sorted:
             return 0.0
-        i = (len(sortert) - 1) * p / 100.0
-        lav, hoy = int(i), min(int(i) + 1, len(sortert) - 1)
-        return sortert[lav] + (sortert[hoy] - sortert[lav]) * (i - lav)
+        i = (len(rows_sorted) - 1) * p / 100.0
+        low, high = int(i), min(int(i) + 1, len(rows_sorted) - 1)
+        return rows_sorted[low] + (rows_sorted[high] - rows_sorted[low]) * (i - low)
 
-    PST = (0.01, 0.1, 1, 50, 99, 99.9, 99.99)
+    PCT = (0.01, 0.1, 1, 50, 99, 99.9, 99.99)
     print("")
-    print("  Form på alle riktige sladdinger "
-          "(her ligger grensene dine, mål mot halene):")
-    hode = f"    {'mål':<14}" + "".join(f" {('p' + format(p, 'g')):>9}" for p in PST)
-    print(hode)
-    print(f"    {'-' * (len(hode) - 4)}")
-    for nokkel, navn, des in (("elongation", "elongation", 2),
-                              ("kortside", "kortside (pt)", 1),
-                              ("langside", "langside (pt)", 1),
-                              ("areal_px", "areal (px²)", 0)):
-        sortert = sorted(r[nokkel] for r in rader)
-        print(f"    {navn:<14}"
-              + "".join(f" {_pst(sortert, p):>9.{des}f}" for p in PST))
+    print("  Shape of all correct sladdinger "
+          "(your limits live here, measure against the tails):")
+    header = f"    {'metric':<14}" + "".join(f" {('p' + format(p, 'g')):>9}" for p in PCT)
+    print(header)
+    print(f"    {'-' * (len(header) - 4)}")
+    for sort_key, name, decimals in (("elongation", "elongation", 2),
+                              ("short_side", "short side (pt)", 1),
+                              ("long_side", "long side (pt)", 1),
+                              ("areal_px", "area (px²)", 0)):
+        rows_sorted = sorted(r[sort_key] for r in rows)
+        print(f"    {name:<14}"
+              + "".join(f" {_pct(rows_sorted, p):>9.{decimals}f}" for p in PCT))
 
-    etikett = _etikett(filter_kwargs)
-    print(f"\n  Filter: {etikett}")
-    print(f"  Merk: fasit-bokser har ingen conf, så conf-porten slår ikke inn "
-          f"— testen viser hva geometrien alene forkaster.")
+    label = _label(filter_kwargs)
+    print(f"\n  Filter: {label}")
+    print(f"  Note: ground-truth boxes have no conf, so the conf gate never "
+          f"fires. This shows what geometry alone rejects.")
 
-    forkastet = []
-    for r in rader:
-        grunner = filter_grunner(r, **filter_kwargs)
-        if grunner:
-            r["_grunner"] = grunner
-            forkastet.append(r)
+    discarded = []
+    for r in rows:
+        reasons = rejection_reasons(r, **filter_kwargs)
+        if reasons:
+            r["_grunner"] = reasons
+            discarded.append(r)
 
-    andel = len(forkastet) / len(rader) * 100 if rader else 0
-    print(f"\n  Sladdinger filteret ville forkastet: {len(forkastet)} "
-          f"({andel:.3f}% av {len(rader)})")
-    if not forkastet:
-        print("  Ingen — filteret forkaster ingen av saksbehandlernes sladdinger.")
+    share = len(discarded) / len(rows) * 100 if rows else 0
+    print(f"\n  Sladdinger the filter would reject: {len(discarded)} "
+          f"({share:.3f}% of {len(rows)})")
+    if not discarded:
+        print("  None. The filter rejects no sladding made by a case handler.")
         return
 
-    for felt, tittel in (("_grunn", "regel (en boks kan bryte flere)"),
+    for field, title in (("_grunn", "rule (a box can break several)"),
                          ("ml_status", "ml_status"), ("type", "type")):
-        fordeling, nevner = defaultdict(int), defaultdict(int)
-        for r in forkastet:
-            if felt == "_grunn":
+        distribution, denominator = defaultdict(int), defaultdict(int)
+        for r in discarded:
+            if field == "_grunn":
                 for g in r["_grunner"]:
-                    fordeling[re.sub(r"[\d.]+", "N", g, count=1)] += 1
+                    distribution[re.sub(r"[\d.]+", "N", g, count=1)] += 1
             else:
-                fordeling[r[felt]] += 1
-        if felt != "_grunn":
-            for r in rader:
-                nevner[r[felt]] += 1
-        if len(fordeling) > 1 or felt == "_grunn":
-            print(f"\n  Gruppert etter {tittel}:")
-            for k, v in sorted(fordeling.items(), key=lambda kv: -kv[1]):
-                tot = nevner.get(k)
-                andel = f"  av {tot} = {v / tot * 100:.3f}%" if tot else ""
-                print(f"    {v:>6}  {k}{andel}")
+                distribution[r[field]] += 1
+        if field != "_grunn":
+            for r in rows:
+                denominator[r[field]] += 1
+        if len(distribution) > 1 or field == "_grunn":
+            print(f"\n  Grouped by {title}:")
+            for k, v in sorted(distribution.items(), key=lambda kv: -kv[1]):
+                tot = denominator.get(k)
+                share = f"  of {tot} = {v / tot * 100:.3f}%" if tot else ""
+                print(f"    {v:>6}  {k}{share}")
 
-    # ── Krysstabell: forkastet form vs. faktisk mistet dekning ──
-    # En fasit-boks med ulovlig form betyr ingenting hvis modellens EGEN boks
-    # for samme felt har lovlig form og overlever filteret. Det er forskjellen
-    # mellom «mennesket tegnet stygt» og «vi mister sladdingen».
+    # An illegal ground-truth shape costs nothing if the model's OWN box for
+    # the same field has a legal shape and survives the filter.
     if ds is not None:
-        m = evaluer(ds, lag_filter(**filter_kwargs), samle_tapte=True)
-        tapte = set(m.tapte_bokser or ())
+        m = measure_filter(ds, make_filter(**filter_kwargs), collect_lost=True)
+        lost_ids = set(m.lost_boxes or ())
         i_scope = {}
-        for j, fb in enumerate(ds.fasit_bokser):
-            i_scope[(fb["dok_nr"], fb["side"],
-                     round(fb["boks"][0], 1), round(fb["boks"][1], 1))] = j
-        ute = form_og_tapt = form_men_dekket = 0
-        for r in forkastet:
-            j = i_scope.get((r["dok_nr"], r["side"],
-                             round(r["boks"][0], 1), round(r["boks"][1], 1)))
+        for j, fb in enumerate(ds.truth_boxes):
+            i_scope[(fb["doc_no"], fb["side"],
+                     round(fb["box"][0], 1), round(fb["box"][1], 1))] = j
+        outside = shape_and_lost = form_men_covered = 0
+        for r in discarded:
+            j = i_scope.get((r["doc_no"], r["side"],
+                             round(r["box"][0], 1), round(r["box"][1], 1)))
             if j is None:
                 r["_status"] = "utenfor_scope"
-                ute += 1
-            elif j in tapte:
+                outside += 1
+            elif j in lost_ids:
                 r["_status"] = "MISTET_DEKNING"
-                form_og_tapt += 1
+                shape_and_lost += 1
             else:
                 r["_status"] = "fortsatt_dekket"
-                form_men_dekket += 1
-        i_scope_forkastet = form_og_tapt + form_men_dekket
+                form_men_covered += 1
+        i_scope_discarded = shape_and_lost + form_men_covered
         print("")
-        print("  Kryssjekk mot modellens egne bokser "
-              f"({len(ds.fasit_bokser)} labels på kjørte dokumenter):")
-        print(f"    Ulovlig form OG mistet dekning:  {form_og_tapt:>5}"
-              "   ← reell risiko")
-        print(f"    Ulovlig form, men fortsatt dekket: {form_men_dekket:>3}"
-              "   ← artefakt: modellens boks har lovlig form")
-        if ute:
-            print(f"    Utenfor scope (dokument ikke kjørt):{ute:>5}"
-                  "   ← kan ikke vurderes")
-        if i_scope_forkastet:
-            print(f"    Andel artefakt av vurderbare: "
-                  f"{form_men_dekket / i_scope_forkastet * 100:.0f}%")
-        print(f"    Totalt mistet dekning under samme filter: {m.tapt}")
+        print("  Cross-check against the model's own boxes "
+              f"({len(ds.truth_boxes)} labels on processed documents):")
+        print(f"    Illegal shape AND lost coverage:  {shape_and_lost:>5}"
+              "   ← real risk")
+        print(f"    Illegal shape, still covered:     {form_men_covered:>5}"
+              "   ← artifact: the model's box has a legal shape")
+        if outside:
+            print(f"    Out of scope (document not run):  {outside:>5}"
+                  "   ← cannot be judged")
+        if i_scope_discarded:
+            print(f"    Artifact share of the judgeable: "
+                  f"{form_men_covered / i_scope_discarded * 100:.0f}%")
+        print(f"    Total coverage lost under the same filter: {m.lost}")
 
     # ── Manifest ──
-    os.makedirs(ut_mappe, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     rang = {"MISTET_DEKNING": 0, "": 1, "utenfor_scope": 2, "fortsatt_dekket": 3}
-    forkastet.sort(key=lambda r: (rang.get(r.get("_status", ""), 1),
+    discarded.sort(key=lambda r: (rang.get(r.get("_status", ""), 1),
                                   "; ".join(r["_grunner"]),
-                                  r["dok_nr"], r["side"]))
+                                  r["doc_no"], r["side"]))
     manifest = []
-    for nr, r in enumerate(forkastet, 1):
-        x0, y0, x1, y1 = r["boks"]
+    for nr, r in enumerate(discarded, 1):
+        x0, y0, x1, y1 = r["box"]
         manifest.append({
-            "nr": nr, "fil_revisjon_id": r["dok_nr"], "side": r["side"],
-            "grunn": "; ".join(r["_grunner"]),
+            "nr": nr, "fil_revisjon_id": r["doc_no"], "side": r["side"],
+            "reason": "; ".join(r["_grunner"]),
             "ml_status": r["ml_status"], "type": r["type"],
             "elongation": round(r["elongation"], 2),
-            "kortside_pt": round(r["kortside"], 1),
-            "langside_pt": round(r["langside"], 1),
+            "kortside_pt": round(r["short_side"], 1),
+            "langside_pt": round(r["long_side"], 1),
             "bredde_pt": round(r["w"], 1), "hoyde_pt": round(r["h"], 1),
             "areal_px": round(r["areal_px"]),
             "status": r.get("_status", ""),
             "x0": round(x0, 1), "y0": round(y0, 1),
-            "utsnitt": f"{nr:04d}_{r['dok_nr']}_side{r['side']}.png",
+            "utsnitt": f"{nr:04d}_{r['doc_no']}_side{r['side']}.png",
             "vurdering": "",
         })
         r["_utsnitt"] = manifest[-1]["utsnitt"]
-    manifest_sti = os.path.join(ut_mappe, "forkastede_sladdinger.csv")
-    with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
+    manifest_path = os.path.join(out_dir, "forkastede_sladdinger.csv")
+    with open(manifest_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(manifest[0]))
         w.writeheader()
         w.writerows(manifest)
-    print(f"\n  Manifest: {manifest_sti}")
+    print(f"\n  Manifest: {manifest_path}")
 
-    # ── Utsnitt ──
-    if not mappe:
+    # ── Crops ──
+    if not folder:
         return
-    if velg:
-        velg_sett = {os.path.basename(v) for v in velg}
-    per_dok = defaultdict(list)
-    for r in (forkastet[:maks_sider] if maks_sider else forkastet):
-        per_dok[r["dok_nr"]].append(r)
+    if select:
+        select_apply = {os.path.basename(v) for v in select}
+    per_doc = defaultdict(list)
+    for r in (discarded[:max_pages] if max_pages else discarded):
+        per_doc[r["doc_no"]].append(r)
 
-    # Finn PDF-en for hvert dokumentnummer
-    filer = {}
-    for navn in os.listdir(mappe):
-        if navn.lower().endswith(".pdf"):
-            n = dok_nr(navn)
+    files = {}
+    for name in os.listdir(folder):
+        if name.lower().endswith(".pdf"):
+            n = doc_no(name)
             if n is not None:
-                filer.setdefault(n, navn)
+                files.setdefault(n, name)
 
-    ut = os.path.join(ut_mappe, "utsnitt")
+    ut = os.path.join(out_dir, "utsnitt")
     os.makedirs(ut, exist_ok=True)
-    n_tegnet = mangler = 0
-    for nr in sorted(per_dok):
-        navn = filer.get(nr)
-        if navn is None or (velg and os.path.basename(navn) not in velg_sett):
-            mangler += len(per_dok[nr])
+    n_drawn = missing = 0
+    for nr in sorted(per_doc):
+        name = files.get(nr)
+        if name is None or (select and os.path.basename(name) not in select_apply):
+            missing += len(per_doc[nr])
             continue
         try:
-            dok = fitz.open(os.path.join(mappe, navn))
+            doc = fitz.open(os.path.join(folder, name))
         except Exception as e:
-            print(f"  ⚠ Kunne ikke åpne {navn}: {e!r}")
-            mangler += len(per_dok[nr])
+            print(f"  ⚠ Could not open {name}: {e!r}")
+            missing += len(per_doc[nr])
             continue
-        for r in per_dok[nr]:
+        for r in per_doc[nr]:
             si = r["side"]
-            if not 1 <= si <= len(dok):
-                mangler += 1
+            if not 1 <= si <= len(doc):
+                missing += 1
                 continue
-            bilde = _render_side(dok, si)
-            overlay = Image.new("RGBA", bilde.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
-            x0, y0, x1, y1 = r["boks"]
-            rr = [x0 * SKALA, y0 * SKALA, x1 * SKALA, y1 * SKALA]
-            tegner.rectangle(rr, outline=KRITISK_FJERNET, width=4)
-            _tegn_tekst(tegner, rr, "FORKASTET AV FILTER", KRITISK_FJERNET, True)
-            _tegn_tekst(tegner, rr, "; ".join(r["_grunner"]),
-                        KRITISK_FJERNET, False)
-            ferdig = Image.alpha_composite(bilde.convert("RGBA"),
+            image = _render_page(doc, si)
+            overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            drawer = ImageDraw.Draw(overlay)
+            x0, y0, x1, y1 = r["box"]
+            rr = [x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE]
+            drawer.rectangle(rr, outline=CRITICAL_REMOVED, width=4)
+            _draw_text(drawer, rr, "REJECTED BY FILTER", CRITICAL_REMOVED, True)
+            _draw_text(drawer, rr, "; ".join(r["_grunner"]),
+                        CRITICAL_REMOVED, False)
+            done = Image.alpha_composite(image.convert("RGBA"),
                                            overlay).convert("RGB")
-            mrg = utsnitt_margin * SKALA
-            boks = (max(0, int(rr[0] - mrg)), max(0, int(rr[1] - mrg)),
-                    min(ferdig.width, int(rr[2] + mrg)),
-                    min(ferdig.height, int(rr[3] + mrg)))
-            if boks[2] > boks[0] and boks[3] > boks[1]:
-                ferdig.crop(boks).save(os.path.join(ut, r["_utsnitt"]))
-                n_tegnet += 1
-        dok.close()
+            margin = crop_margin * SCALE
+            box = (max(0, int(rr[0] - margin)), max(0, int(rr[1] - margin)),
+                    min(done.width, int(rr[2] + margin)),
+                    min(done.height, int(rr[3] + margin)))
+            if box[2] > box[0] and box[3] > box[1]:
+                done.crop(box).save(os.path.join(ut, r["_utsnitt"]))
+                n_drawn += 1
+        doc.close()
 
-    print(f"  Tegnet {n_tegnet} utsnitt til {ut}")
-    if mangler:
-        print(f"  {mangler} uten utsnitt (PDF mangler i {mappe})")
+    print(f"  Drew {n_drawn} crops to {ut}")
+    if missing:
+        print(f"  {missing} without a crop (PDF missing in {folder})")
 
 
-SWEEP_KONFIGER = [
+SWEEP_CONFIGURE = [
     {"min_elongation": 1.5},
     {"min_elongation": 2.0},
-    {"maks_hoyde": 40},
-    {"maks_hoyde": 50},
-    {"maks_bredde": 100},
-    {"maks_bredde": 120},
-    {"min_elongation": 1.5, "maks_hoyde": 50, "maks_bredde": 100},
-    {"min_elongation": 1.5, "maks_hoyde": 50, "maks_bredde": 120},
-    {"min_elongation": 1.5, "maks_hoyde": 60, "maks_bredde": 120},
-    {"min_elongation": 2.0, "maks_hoyde": 50, "maks_bredde": 100},
+    {"max_height": 40},
+    {"max_height": 50},
+    {"max_width": 100},
+    {"max_width": 120},
+    {"min_elongation": 1.5, "max_height": 50, "max_width": 100},
+    {"min_elongation": 1.5, "max_height": 50, "max_width": 120},
+    {"min_elongation": 1.5, "max_height": 60, "max_width": 120},
+    {"min_elongation": 2.0, "max_height": 50, "max_width": 100},
 ]
 
 
 
-# ── Udekket-gjennomgang ───────────────────────────────────────
-# Motstykket til tapt-gjennomgangen: ikke «hva fjerner filteret», men «hva
-# fant modellen aldri, eller bokset for dårlig». Fasit splittes på
-# ml_generated: ML-aksepterte bokser er modellens egne godkjente forslag og
-# gjenfinnes nesten alltid av en re-kjøring (sirkulært) — reell
-# deteksjonsevne måles på de manuelt tegnede boksene. Manuelle sladdinger
-# kan selv være slurvete tegnet, så utsnittene viser både fasit-boksen og
-# modellens beste forslag: da kan gjennomgangen skille «modell-bom»,
-# «dårlig boksing» og «fasit-slurv» i vurdering-kolonnen.
+# ── Uncovered review ──────────────────────────────────────────
+# What the model never found, as opposed to what the filter removes. Ground
+# truth is split on ml_generated: ML-accepted boxes are the model's own
+# approved suggestions and a re-run nearly always refinds them (circular), so
+# real detection ability is measured on the manually drawn boxes.
 
-def _er_ml_generert(rad):
-    return (rad.get("ml_generated") or "").strip().lower() in ("true", "t", "1")
+def _is_ml_generated(row):
+    return (row.get("ml_generated") or "").strip().lower() in ("true", "t", "1")
 
 
-def _p10_p50_p90(verdier):
-    v = sorted(verdier)
+def _p10_p50_p90(values):
+    v = sorted(values)
     n = len(v)
     return v[int(0.10 * (n - 1))], v[int(0.50 * (n - 1))], v[int(0.90 * (n - 1))]
 
 
-def gjennomgang_udekket(fasit_csv, res_csv, mappe, ut_mappe,
-                        kriterium=STD_KRITERIUM, terskel=STD_TERSKEL,
-                        god_dekning=0.90, kjorte_dok=None, ogsaa_ml=False,
-                        maks_utsnitt=None, utsnitt_margin=60.0):
-    """Katalogiserer og tegner fasit-bokser uten (god nok) dekning."""
-    if kriterium in KRITERIUM_LAV_ER_BRA:
-        raise SystemExit(f"--udekket støtter ikke kriterium {kriterium!r} "
-                         f"(der er lav verdi bra — bruk areal/kortside/iou)")
-    felt = KRITERIUM_FELT[kriterium]
+def review_uncovered(truth_csv, res_csv, folder, out_dir,
+                        criterion=STD_CRITERION, threshold=STD_THRESHOLD,
+                        good_coverage=0.90, processed_doc=None, also_ml=False,
+                        max_crop=None, crop_margin=60.0):
+    """Catalogues and draws ground-truth boxes without (good enough) coverage."""
+    if criterion in CRITERION_LOW_IS_GOOD:
+        raise SystemExit(f"--uncovered does not support criterion {criterion!r} "
+                         f"(low is good there, use areal/kortside/iou)")
+    field = CRITERION_FIELDS[criterion]
 
-    fasit_rader, _forkastet, kolonner = les_fasit_rader(fasit_csv)
-    if "ml_generated" not in kolonner:
-        print("⚠ Fasit-CSV-en mangler ml_generated — alle bokser behandles "
-              "som manuelle. Ta kolonnen med i neste eksport.")
-    pred = les_prediksjoner(res_csv)
+    truth_rows, _discarded, columns = read_truth_rows(truth_csv)
+    if "ml_generated" not in columns:
+        print("⚠ The labels CSV has no ml_generated. Every box is treated as "
+              "manual. Include the column in the next export.")
+    pred = read_predictions(res_csv)
 
-    kjorte = (set(kjorte_dok) if kjorte_dok is not None
-              else {p["dok_nr"] for p in pred})
-    scope = {r["dok_nr"] for r in fasit_rader} & kjorte
+    processed = (set(processed_doc) if processed_doc is not None
+              else {p["doc_no"] for p in pred})
+    scope = {r["doc_no"] for r in truth_rows} & processed
 
-    side_str = {}
-    per_side_pred = defaultdict(list)
-    navn_per_dok = {}
+    page_str = {}
+    per_page_pred = defaultdict(list)
+    name_per_doc = {}
     for p in pred:
-        key = (p["dok_nr"], p["side"])
-        side_str.setdefault(key, (p["bw"] / SKALA, p["bh"] / SKALA))
-        per_side_pred[key].append(p)
-        navn_per_dok.setdefault(p["dok_nr"], p["navn"])
+        key = (p["doc_no"], p["side"])
+        page_str.setdefault(key, (p["bw"] / SCALE, p["bh"] / SCALE))
+        per_page_pred[key].append(p)
+        name_per_doc.setdefault(p["doc_no"], p["navn"])
 
-    grupper = {"udekket": [], "daarlig_dekket": [], "ok": []}
-    for r in fasit_rader:
-        if r["dok_nr"] not in scope:
+    groups = {"udekket": [], "daarlig_dekket": [], "ok": []}
+    for r in truth_rows:
+        if r["doc_no"] not in scope:
             continue
-        x0, y0, x1, y1 = r["boks"]
-        pw, ph = side_str.get((r["dok_nr"], r["side"]), (595.0, 842.0))
+        x0, y0, x1, y1 = r["box"]
+        pw, ph = page_str.get((r["doc_no"], r["side"]), (595.0, 842.0))
         fn = (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
-        horisontal = (x1 - x0) >= (y1 - y0)
-        beste_v, beste_p = 0.0, None
-        for p in per_side_pred.get((r["dok_nr"], r["side"]), ()):
-            m = match_metrikker(p["norm"], fn, horisontal)
-            if m is not None and m[felt] > beste_v:
-                beste_v, beste_p = m[felt], p
-        r["_dekning"] = beste_v
-        r["_beste_p"] = beste_p
-        r["_ml"] = _er_ml_generert(r["rad"])
-        gruppe = ("udekket" if beste_v < terskel
-                  else "daarlig_dekket" if beste_v < god_dekning else "ok")
-        grupper[gruppe].append(r)
+        horizontal = (x1 - x0) >= (y1 - y0)
+        best_v, best_p = 0.0, None
+        for p in per_page_pred.get((r["doc_no"], r["side"]), ()):
+            m = match_metrics(p["norm"], fn, horizontal)
+            if m is not None and m[field] > best_v:
+                best_v, best_p = m[field], p
+        r["_coverage"] = best_v
+        r["_beste_p"] = best_p
+        r["_ml"] = _is_ml_generated(r["row"])
+        group = ("udekket" if best_v < threshold
+                  else "daarlig_dekket" if best_v < good_coverage else "ok")
+        groups[group].append(r)
 
-    n_scope = sum(len(g) for g in grupper.values())
-    print(f"\nUdekket-gjennomgang  (kriterium «{kriterium}», terskel "
-          f"{terskel:g}, god dekning ≥ {god_dekning:g})")
-    print(f"  Scope: {len(scope)} dokumenter, {n_scope} fasit-bokser")
-    for ml, navn in ((False, "manuelt tegnet"), (True, "ML-akseptert ")):
-        tell = {k: sum(1 for r in g if r["_ml"] == ml)
-                for k, g in grupper.items()}
-        n = sum(tell.values())
+    n_scope = sum(len(g) for g in groups.values())
+    print(f"\nUncovered review  (criterion «{criterion}», threshold "
+          f"{threshold:g}, good coverage ≥ {good_coverage:g})")
+    print(f"  Scope: {len(scope)} documents, {n_scope} ground-truth boxes")
+    for ml, name in ((False, "manually drawn"), (True, "ML-accepted   ")):
+        tally = {k: sum(1 for r in g if r["_ml"] == ml)
+                for k, g in groups.items()}
+        n = sum(tally.values())
         if n:
-            print(f"  {navn} ({n:>5} bokser): "
-                  f"udekket {tell['udekket']:>4} ({100*tell['udekket']/n:4.1f}%)  "
-                  f"dårlig {tell['daarlig_dekket']:>4} "
-                  f"({100*tell['daarlig_dekket']/n:4.1f}%)  "
-                  f"god {tell['ok']:>5} ({100*tell['ok']/n:4.1f}%)")
+            print(f"  {name} ({n:>5} boxes): "
+                  f"uncovered {tally['udekket']:>4} ({100*tally['udekket']/n:4.1f}%)  "
+                  f"poor {tally['daarlig_dekket']:>4} "
+                  f"({100*tally['daarlig_dekket']/n:4.1f}%)  "
+                  f"good {tally['ok']:>5} ({100*tally['ok']/n:4.1f}%)")
 
-    utvalg = [r for r in grupper["udekket"] + grupper["daarlig_dekket"]
-              if ogsaa_ml or not r["_ml"]]
-    if not utvalg:
-        print("  Ingenting å tegne.")
+    sample = [r for r in groups["udekket"] + groups["daarlig_dekket"]
+              if also_ml or not r["_ml"]]
+    if not sample:
+        print("  Nothing to draw.")
         return
 
-    # ── Karakteristikk: hva har de udekkede boksene til felles? ──
-    staaende = sum(1 for r in utvalg if r["h"] > r["w"])
-    print(f"\n  Utvalg til gjennomgang: {len(utvalg)} bokser "
-          f"({'manuelle + ML' if ogsaa_ml else 'kun manuelt tegnede'})")
-    print(f"    stående (h > b):   {staaende} ({100*staaende/len(utvalg):.1f}%)")
-    for maal in ("kortside", "langside"):
-        p10, p50, p90 = _p10_p50_p90([r[maal] for r in utvalg])
-        print(f"    {maal:>8} (pt):    p10 {p10:5.1f}   p50 {p50:5.1f}   "
+    upright = sum(1 for r in sample if r["h"] > r["w"])
+    print(f"\n  Selected for review: {len(sample)} boxes "
+          f"({'manual + ML' if also_ml else 'manually drawn only'})")
+    print(f"    upright (h > w):   {upright} ({100*upright/len(sample):.1f}%)")
+    for target in ("short_side", "long_side"):
+        p10, p50, p90 = _p10_p50_p90([r[target] for r in sample])
+        print(f"    {target:>8} (pt):    p10 {p10:5.1f}   p50 {p50:5.1f}   "
               f"p90 {p90:5.1f}")
     per_type = defaultdict(int)
-    for r in utvalg:
+    for r in sample:
         per_type[r["type"]] += 1
     print("    per type:          "
           + "  ".join(f"{t}={n}" for t, n in
                       sorted(per_type.items(), key=lambda kv: -kv[1])))
-    per_dok = defaultdict(int)
-    for r in utvalg:
-        per_dok[r["dok_nr"]] += 1
-    n_en = sum(1 for n in per_dok.values() if n == 1)
-    print(f"    fordelt på {len(per_dok)} dokumenter "
-          f"({n_en} med bare én boks); verstinger:")
-    for dnr, n in sorted(per_dok.items(), key=lambda kv: -kv[1])[:15]:
-        print(f"      {n:>4}  {navn_per_dok.get(dnr, f'{dnr}.pdf')}")
+    per_doc = defaultdict(int)
+    for r in sample:
+        per_doc[r["doc_no"]] += 1
+    n_one = sum(1 for n in per_doc.values() if n == 1)
+    print(f"    spread over {len(per_doc)} documents "
+          f"({n_one} with a single box); worst offenders:")
+    for dnr, n in sorted(per_doc.items(), key=lambda kv: -kv[1])[:15]:
+        print(f"      {n:>4}  {name_per_doc.get(dnr, f'{dnr}.pdf')}")
 
     # ── Manifest ──
-    utvalg.sort(key=lambda r: (r["_dekning"] >= terskel, navn_per_dok.get(
-        r["dok_nr"], str(r["dok_nr"])), r["side"], r["boks"][1]))
-    if maks_utsnitt:
-        utvalg = utvalg[:maks_utsnitt]
+    sample.sort(key=lambda r: (r["_coverage"] >= threshold, name_per_doc.get(
+        r["doc_no"], str(r["doc_no"])), r["side"], r["box"][1]))
+    if max_crop:
+        sample = sample[:max_crop]
 
     manifest = []
-    for nr, r in enumerate(utvalg, 1):
+    for nr, r in enumerate(sample, 1):
         bp = r["_beste_p"]
-        fil = navn_per_dok.get(r["dok_nr"], f"{r['dok_nr']}.pdf")
-        base = os.path.splitext(os.path.basename(fil))[0]
+        file = name_per_doc.get(r["doc_no"], f"{r['doc_no']}.pdf")
+        base = os.path.splitext(os.path.basename(file))[0]
         manifest.append({
-            "nr": nr, "fil": fil, "side": r["side"],
-            "gruppe": ("udekket" if r["_dekning"] < terskel
+            "nr": nr, "fil": file, "side": r["side"],
+            "group": ("udekket" if r["_coverage"] < threshold
                        else "daarlig_dekket"),
-            "dekning_pst": round(100 * r["_dekning"], 1),
+            "coverage_pct": round(100 * r["_coverage"], 1),
             "ml_generated": int(r["_ml"]),
             "ml_status": r["ml_status"], "type": r["type"],
-            "staaende": int(r["h"] > r["w"]),
+            "upright": int(r["h"] > r["w"]),
             "fasit_bredde_pt": round(r["w"], 1),
             "fasit_hoyde_pt": round(r["h"], 1),
             "beste_kilde": bp["kilde"] if bp else "",
@@ -1240,430 +1199,422 @@ def gjennomgang_udekket(fasit_csv, res_csv, mappe, ut_mappe,
                            else ""),
             "beste_bredde_pt": round(bp["w"], 1) if bp else "",
             "beste_hoyde_pt": round(bp["h"], 1) if bp else "",
-            "fasit_x0": round(r["boks"][0], 1),
-            "fasit_y0": round(r["boks"][1], 1),
+            "fasit_x0": round(r["box"][0], 1),
+            "fasit_y0": round(r["box"][1], 1),
             "utsnitt": f"{nr:04d}_{base}_side{r['side']}.png",
             "vurdering": "",
             "_r": r,
         })
 
-    os.makedirs(ut_mappe, exist_ok=True)
-    manifest_sti = os.path.join(ut_mappe, "udekket.csv")
-    felt_csv = ["nr", "fil", "side", "gruppe", "dekning_pst", "ml_generated",
-                "ml_status", "type", "staaende", "fasit_bredde_pt",
+    os.makedirs(out_dir, exist_ok=True)
+    manifest_path = os.path.join(out_dir, "uncovered.csv")
+    field_csv = ["nr", "fil", "side", "group", "coverage_pct", "ml_generated",
+                "ml_status", "type", "upright", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "beste_kilde", "beste_conf",
                 "beste_bredde_pt", "beste_hoyde_pt", "fasit_x0", "fasit_y0",
                 "utsnitt", "vurdering"]
-    with open(manifest_sti, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=felt_csv, extrasaction="ignore")
+    with open(manifest_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=field_csv, extrasaction="ignore")
         w.writeheader()
         w.writerows(manifest)
-    print(f"\n  Manifest: {manifest_sti}  ({len(manifest)} rader)")
+    print(f"\n  Manifest: {manifest_path}  ({len(manifest)} rows)")
 
-    # ── Tegning ──
-    side_mappe = os.path.join(ut_mappe, "sider")
-    utsnitt_mappe = os.path.join(ut_mappe, "utsnitt")
-    os.makedirs(side_mappe, exist_ok=True)
-    os.makedirs(utsnitt_mappe, exist_ok=True)
+    page_dir = os.path.join(out_dir, "sider")
+    crop_dir = os.path.join(out_dir, "utsnitt")
+    os.makedirs(page_dir, exist_ok=True)
+    os.makedirs(crop_dir, exist_ok=True)
 
-    per_fil = defaultdict(lambda: defaultdict(list))
-    for rad in manifest:
-        per_fil[rad["fil"]][rad["side"]].append(rad)
+    per_file = defaultdict(lambda: defaultdict(list))
+    for row in manifest:
+        per_file[row["fil"]][row["side"]].append(row)
 
-    n_sider = n_utsnitt = 0
-    for fil in sorted(per_fil):
-        sti = os.path.join(mappe, fil)
-        if not os.path.isfile(sti):
-            print(f"  ⚠ Finner ikke {sti}, hopper over")
+    n_pages = n_crop = 0
+    for file in sorted(per_file):
+        path = os.path.join(folder, file)
+        if not os.path.isfile(path):
+            print(f"  ⚠ Cannot find {path}, skipping")
             continue
         try:
-            dok = fitz.open(sti)
+            doc = fitz.open(path)
         except Exception as e:
-            print(f"  ⚠ Kunne ikke åpne {fil}: {e!r}")
+            print(f"  ⚠ Could not open {file}: {e!r}")
             continue
-        for si, rader in sorted(per_fil[fil].items()):
-            if not 1 <= si <= len(dok):
+        for si, rows in sorted(per_file[file].items()):
+            if not 1 <= si <= len(doc):
                 continue
-            bilde = _render_side(dok, si)
-            rekt = dok[si - 1].rect
-            skx = bilde.width / rekt.width if rekt.width else SKALA
-            sky = bilde.height / rekt.height if rekt.height else SKALA
-            base = bilde.convert("RGBA")
+            image = _render_page(doc, si)
+            page_rect = doc[si - 1].rect
+            skx = image.width / page_rect.width if page_rect.width else SCALE
+            sky = image.height / page_rect.height if page_rect.height else SCALE
+            base = image.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
-            dnr = dok_nr(fil)
-            valgt = {id(rad["_r"]) for rad in rader}
+            drawer = ImageDraw.Draw(overlay)
+            dnr = doc_no(file)
+            chosen = {id(row["_r"]) for row in rows}
 
-            # Alle prediksjoner på siden, tynt grått
-            side_pred = per_side_pred.get((dnr, si), ())
-            for p2 in side_pred:
+            page_pred = per_page_pred.get((dnr, si), ())
+            for p2 in page_pred:
                 px = p2["px"]
-                sx2 = bilde.width / p2["bw"]
-                sy2 = bilde.height / p2["bh"]
-                tegner.rectangle([px[0] * sx2, px[1] * sy2,
+                sx2 = image.width / p2["bw"]
+                sy2 = image.height / p2["bh"]
+                drawer.rectangle([px[0] * sx2, px[1] * sy2,
                                   px[2] * sx2, px[3] * sy2],
-                                 outline=BEHOLDT, width=1)
+                                 outline=KEPT, width=1)
 
-            # Øvrige fasit-bokser på siden, tynt blått
-            for r2 in grupper["udekket"] + grupper["daarlig_dekket"] + grupper["ok"]:
-                if (r2["dok_nr"], r2["side"]) != (dnr, si) or id(r2) in valgt:
+            for r2 in groups["udekket"] + groups["daarlig_dekket"] + groups["ok"]:
+                if (r2["doc_no"], r2["side"]) != (dnr, si) or id(r2) in chosen:
                     continue
-                fx0, fy0, fx1, fy1 = r2["boks"]
-                tegner.rectangle([fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky],
-                                 outline=FASIT, width=2)
+                fx0, fy0, fx1, fy1 = r2["box"]
+                drawer.rectangle([fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky],
+                                 outline=TRUTH, width=2)
 
-            # De utvalgte: fasit magenta + beste forslag oransje
-            for rad in rader:
-                r2 = rad["_r"]
-                fx0, fy0, fx1, fy1 = r2["boks"]
+            # The selected ones: ground truth magenta, best suggestion orange
+            for row in rows:
+                r2 = row["_r"]
+                fx0, fy0, fx1, fy1 = r2["box"]
                 rr = [fx0 * skx - 6, fy0 * sky - 6,
                       fx1 * skx + 6, fy1 * sky + 6]
-                tegner.rectangle(rr, outline=TAPT_FASIT, width=5)
-                merke = (f"{rad['gruppe'].upper()} {rad['dekning_pst']:g}% "
-                         f"[{'ML' if r2['_ml'] else 'manuell'}]")
-                _tegn_tekst(tegner, rr, merke, TAPT_FASIT, over=True)
+                drawer.rectangle(rr, outline=LOST_TRUTH, width=5)
+                mark = (f"{row['group'].upper()} {row['coverage_pct']:g}% "
+                         f"[{'ML' if r2['_ml'] else 'manual'}]")
+                _draw_text(drawer, rr, mark, LOST_TRUTH, over=True)
                 bp = r2["_beste_p"]
                 if bp is not None:
                     px = bp["px"]
-                    sx2 = bilde.width / bp["bw"]
-                    sy2 = bilde.height / bp["bh"]
+                    sx2 = image.width / bp["bw"]
+                    sy2 = image.height / bp["bh"]
                     rp = [px[0] * sx2, px[1] * sy2, px[2] * sx2, px[3] * sy2]
-                    tegner.rectangle(rp, outline=BOM, width=3)
-                    tekst = f"BESTE FORSLAG [{bp['kilde']}]"
+                    drawer.rectangle(rp, outline=MISS, width=3)
+                    text = f"BEST SUGGESTION [{bp['kilde']}]"
                     if bp["conf"] is not None:
-                        tekst += f" conf={bp['conf']:.2f}"
-                    _tegn_tekst(tegner, rp, tekst, BOM, over=False)
+                        text += f" conf={bp['conf']:.2f}"
+                    _draw_text(drawer, rp, text, MISS, over=False)
 
-            ferdig = Image.alpha_composite(base, overlay).convert("RGB")
-            ferdig.save(os.path.join(
-                side_mappe, f"{os.path.splitext(fil)[0]}_side{si}.png"))
-            n_sider += 1
+            done = Image.alpha_composite(base, overlay).convert("RGB")
+            done.save(os.path.join(
+                page_dir, f"{os.path.splitext(file)[0]}_side{si}.png"))
+            n_pages += 1
 
-            mrg = utsnitt_margin * skx
-            for rad in rader:
-                fx0, fy0, fx1, fy1 = rad["_r"]["boks"]
-                boks = (max(0, int(fx0 * skx - mrg)),
-                        max(0, int(fy0 * sky - mrg)),
-                        min(ferdig.width, int(fx1 * skx + mrg)),
-                        min(ferdig.height, int(fy1 * sky + mrg)))
-                if boks[2] > boks[0] and boks[3] > boks[1]:
-                    ferdig.crop(boks).save(
-                        os.path.join(utsnitt_mappe, rad["utsnitt"]))
-                    n_utsnitt += 1
-        dok.close()
+            margin = crop_margin * skx
+            for row in rows:
+                fx0, fy0, fx1, fy1 = row["_r"]["box"]
+                box = (max(0, int(fx0 * skx - margin)),
+                        max(0, int(fy0 * sky - margin)),
+                        min(done.width, int(fx1 * skx + margin)),
+                        min(done.height, int(fy1 * sky + margin)))
+                if box[2] > box[0] and box[3] > box[1]:
+                    done.crop(box).save(
+                        os.path.join(crop_dir, row["utsnitt"]))
+                    n_crop += 1
+        doc.close()
 
-    print(f"  Tegnet {n_sider} sider til {side_mappe}")
-    print(f"  {n_utsnitt} utsnitt i {utsnitt_mappe} — samme rekkefølge som "
-          f"udekket.csv, klare for vurdering-kolonnen")
+    print(f"  Drew {n_pages} pages to {page_dir}")
+    print(f"  {n_crop} crops in {crop_dir}, same order as uncovered.csv, "
+          f"ready for the vurdering column")
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Visuell gjennomgang av bokser som fjernes av en "
-                    "filterkonfigurasjon, gruppert etter om fjerningen faktisk "
-                    "koster recall.")
-    p.add_argument("--fasit-csv", required=True, help="Labels-CSV (fasit)")
+        description="Visual review of the boxes a filter configuration "
+                    "removes, grouped by whether the removal actually costs "
+                    "recall.")
+    p.add_argument("--truth-csv", required=True, help="Labels CSV (ground truth)")
     p.add_argument("--res-csv", default=None,
-                   help="Resultat-CSV fra modellen (ikke nødvendig med --mot-fasit)")
-    p.add_argument("--mappe", default=None, help="Mappe med PDF-dokumentene")
-    p.add_argument("--ut-mappe", default="filter_review",
-                   help="Mappe for PNG-output (default: filter_review)")
-    p.add_argument("--kriterium", default=STD_KRITERIUM,
-                   choices=sorted(KRITERIER),
-                   help=f"Matcheregel for dekning (default: {STD_KRITERIUM})")
-    p.add_argument("--terskel", type=float, default=STD_TERSKEL,
-                   help=f"Overlapp-terskel for dekning (default: {STD_TERSKEL})")
-    p.add_argument("--slurv-faktor", type=float, default=STD_SLURV_FAKTOR,
-                   help=f"SLURV-grense (default: {STD_SLURV_FAKTOR})")
-    p.add_argument("--inkluder-ulabelte", action="store_true", default=True,
-                   help="(default på) Ta med kjørte dokumenter uten rader i "
-                        "fasit-CSV-en — labels-filen dekker hele uttrekket, "
-                        "så de er gjennomgått med null fnr og prediksjoner "
-                        "der er ekte oversladdinger")
-    p.add_argument("--ekskluder-ulabelte", dest="inkluder_ulabelte",
+                   help="Result CSV from the model (not needed with --against-truth)")
+    p.add_argument("--folder", default=None, help="Folder with the PDF documents")
+    p.add_argument("--out-dir", default="filter_review",
+                   help="Folder for PNG output (default: filter_review)")
+    p.add_argument("--criterion", default=STD_CRITERION,
+                   choices=sorted(CRITERIA),
+                   help=f"Match rule for coverage (default: {STD_CRITERION})")
+    p.add_argument("--threshold", type=float, default=STD_THRESHOLD,
+                   help=f"Overlap threshold for coverage (default: {STD_THRESHOLD})")
+    p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR,
+                   help=f"SLURV limit (default: {STD_SLOPPINESS_FACTOR})")
+    p.add_argument("--include-unlabelled", action="store_true", default=True,
+                   help="(default on) Include processed documents with no rows "
+                        "in the labels CSV. The labels file covers the whole "
+                        "uttrekk, so those were reviewed with zero fnr and any "
+                        "prediction there is a real oversladding")
+    p.add_argument("--exclude-unlabelled", dest="include_unlabelled",
                    action="store_false",
-                   help="Gammel oppførsel: hold dokumenter uten fasit-rader "
-                        "utenfor scope (for eldre labels-filer som ikke "
-                        "dekket hele uttrekket)")
+                   help="Old behaviour: keep documents without ground-truth "
+                        "rows out of scope (for older labels files that did "
+                        "not cover the whole uttrekk)")
 
-    p.add_argument("--kjorte-liste", default=None, metavar="FIL",
-                   help="Fil med dokumentene modellen har kjørt på (ett navn "
-                        "eller nummer per linje). Uten den antas dokumentene "
-                        "i resultat-CSV-en, og et dokument der modellen ikke "
-                        "fant noe regnes som ukjørt.")
-    filt = p.add_argument_group("Filterparametre (oppgi minst ett, "
-                                "eller bruk --per-kilde/--sweep)")
+    p.add_argument("--processed-list", default=None, metavar="FILE",
+                   help="File listing the documents the model ran on (one name "
+                        "or number per line). Without it the documents in the "
+                        "result CSV are assumed, and a document where the model "
+                        "found nothing counts as not run.")
+    filt = p.add_argument_group("Filter parameters (give at least one, "
+                                "or use --per-source/--sweep)")
     filt.add_argument("--elongation", type=float, default=None,
                       dest="min_elongation", help="MIN_ELONGATION")
-    filt.add_argument("--maks-hoyde", type=float, default=None,
-                      dest="maks_hoyde", help="Maks bokshøyde i punkt")
-    filt.add_argument("--maks-bredde", type=float, default=None,
-                      dest="maks_bredde", help="Maks boksbredde i punkt")
-    filt.add_argument("--maks-areal", type=float, default=None,
-                      dest="maks_areal", help="Maks boksareal i pt²")
-    filt.add_argument("--maks-elongation", type=float, default=None,
-                      dest="maks_elongation",
-                      help="Maks elongation — fjerner tynne, lange streker")
-    filt.add_argument("--min-hoyde", type=float, default=None, dest="min_hoyde",
-                      help="Min bokshøyde i punkt")
-    filt.add_argument("--min-bredde", type=float, default=None, dest="min_bredde",
-                      help="Min boksbredde i punkt")
-    filt.add_argument("--min-kortside", type=float, default=None,
-                      dest="min_kortside",
-                      help="Min korteste side i punkt (orienteringsuavhengig — "
-                           "rammer ikke stående bokser slik --min-bredde gjør)")
-    filt.add_argument("--maks-kortside", type=float, default=None,
-                      dest="maks_kortside", help="Maks korteste side i punkt")
-    filt.add_argument("--min-langside", type=float, default=None,
-                      dest="min_langside",
-                      help="Min lengste side i punkt — for kort til 5 sifre")
-    filt.add_argument("--maks-langside", type=float, default=None,
-                      dest="maks_langside", help="Maks lengste side i punkt")
-    filt.add_argument("--min-areal-px", type=float, default=None,
-                      dest="min_areal_px",
-                      help="Min boksareal i PIKSEL² (som MIN_BOKS_AREAL)")
-    filt.add_argument("--conf", type=float, default=None, dest="conf_terskel",
-                      help="conf ≥ denne verdien beholdes uansett geometri")
+    filt.add_argument("--max-height", type=float, default=None,
+                      dest="max_height", help="Max box height in points")
+    filt.add_argument("--max-width", type=float, default=None,
+                      dest="max_width", help="Max box width in points")
+    filt.add_argument("--max-area", type=float, default=None,
+                      dest="max_area", help="Max box area in pt²")
+    filt.add_argument("--max-elongation", type=float, default=None,
+                      dest="max_elongation",
+                      help="Max elongation, removes thin, long strokes")
+    filt.add_argument("--min-height", type=float, default=None, dest="min_height",
+                      help="Min box height in points")
+    filt.add_argument("--min-width", type=float, default=None, dest="min_width",
+                      help="Min box width in points")
+    filt.add_argument("--min-short-side", type=float, default=None,
+                      dest="min_short_side",
+                      help="Min short side in points (orientation independent, "
+                           "does not hit upright boxes the way --min-width does)")
+    filt.add_argument("--max-short-side", type=float, default=None,
+                      dest="max_short_side", help="Max short side in points")
+    filt.add_argument("--min-long-side", type=float, default=None,
+                      dest="min_long_side",
+                      help="Min long side in points. Too short for 5 digits")
+    filt.add_argument("--max-long-side", type=float, default=None,
+                      dest="max_long_side", help="Max long side in points")
+    filt.add_argument("--min-area-px", type=float, default=None,
+                      dest="min_area_px",
+                      help="Min box area in PIXELS² (like MIN_BOX_AREA)")
+    filt.add_argument("--conf-threshold", type=float, default=None, dest="conf_threshold",
+                      help="conf ≥ this value is kept regardless of geometry")
 
     ocr = p.add_argument_group(
-        "OCR-trekk (strengere snill_sjekk; treffer kun kilde «yolo» med "
-        "tekst i boksen — se _ocr_grunn i filter_felles.py)")
-    ocr.add_argument("--min-siffer", type=float, default=None,
-                     dest="min_siffer",
-                     help="Krev minst N siffer i boksen (prod i dag: 1)")
-    ocr.add_argument("--maks-bokstaver", type=float, default=None,
-                     dest="maks_bokstaver",
-                     help="Tillat høyst N bokstaver i boksen (prod i dag: 1)")
-    ocr.add_argument("--min-siffer-run", type=float, default=None,
-                     dest="min_siffer_run",
-                     help="Krev at lengste sifferløp over boksen er minst N")
-    ocr.add_argument("--krev-fnr-kandidat", action="store_const", const=1,
-                     default=None, dest="krev_fnr_kandidat",
-                     help="Krev et 11-sifret løp med gyldig fnr-form på linjen "
-                          "(uten mod11)")
-    ocr.add_argument("--avvis-desimal", action="store_const", const=1,
-                     default=None, dest="avvis_desimal",
-                     help="Forkast bokser med desimalskille i tallet")
+        "OCR features (stricter lenient_check; hits only kilde «yolo» with "
+        "text in the box. See _ocr_grunn in filter_common.py)")
+    ocr.add_argument("--min-digits", type=float, default=None,
+                     dest="min_digits",
+                     help="Require at least N digits in the box (prod today: 1)")
+    ocr.add_argument("--max-letters", type=float, default=None,
+                     dest="max_letters",
+                     help="Allow at most N letters in the box (prod today: 1)")
+    ocr.add_argument("--min-digits-run", type=float, default=None,
+                     dest="min_digits_run",
+                     help="Require the longest digit run over the box to be ≥ N")
+    ocr.add_argument("--require-fnr-candidate", action="store_const", const=1,
+                     default=None, dest="require_fnr_candidate",
+                     help="Require an 11-digit run with valid fnr shape on the "
+                          "line (without mod11)")
+    ocr.add_argument("--reject-decimal", action="store_const", const=1,
+                     default=None, dest="reject_decimal",
+                     help="Reject boxes with a decimal separator in the number")
     ocr.add_argument("--rec-veto", type=float, default=None, dest="rec_veto",
-                     help="Slå OCR-reglene over på først når rec_min ≥ V. "
-                          "Under V leste Paddle dårlig, og fraværet av et fnr "
-                          "er ikke bevis for noe.")
-    ocr.add_argument("--ocr-conf-fritak", type=float, default=None,
-                     dest="ocr_conf_fritak",
-                     help="OCR-reglene viker for bokser med deteksjons-conf "
-                          "≥ V — sikker YOLO-deteksjon overstyrer tekstbevis.")
-    ocr.add_argument("--avvis-00-run", action="store_const", const=1,
-                     default=None, dest="avvis_00_run",
-                     help="Forkast bokser der et 10-12-sifret løp starter "
-                          "med 00 — orgnr paddet til fnr-bredde; dag 00 er "
-                          "ugyldig i et fnr")
-    ocr.add_argument("--avvis-orgnr", action="store_const", const=1,
-                     default=None, dest="avvis_orgnr",
-                     help="Forkast bokser med gyldig orgnr-mod11 (9 siffer "
-                          "som starter på 8/9, evt. 00-paddet)")
-    ocr.add_argument("--avvis-org-ord", type=float, default=None,
-                     dest="avvis_org_ord", metavar="{1,2}",
-                     help="Forkast bokser med selskapsform-ord nær seg "
-                          "(AS, Borettslag, Org.nr, …). 1=alltid, 2=kun når "
-                          "boksen også mangler fnr-kandidat")
-    ocr.add_argument("--linje-veto", type=float, default=None,
-                     dest="linje_veto",
-                     help="Slå OCR-reglene på først når rec_min_linje ≥ V — "
-                          "fnr-kandidat og løpelengde avhenger av at HELE "
-                          "linjen er riktig lest, ikke bare boksen")
-    ocr.add_argument("--avvis-run-6-10", type=float, nargs="?", const=1,
-                     default=None, dest="avvis_run_6_10", metavar="MAKS",
-                     help="Forkast bokser over sifferløp på 6..MAKS (med "
-                          "luker); uten verdi = 6..10. Bruk 9: 10-løp er "
-                          "ofte fnr med ensifret dag/måned eller mistet tegn")
-    ocr.add_argument("--uten-tekst-conf", type=float, default=None,
-                     dest="uten_tekst_conf",
-                     help="Bokser UTEN tekst (har_tokens=0) krever conf ≥ V "
-                          "— strengere enn prods YOLO_CONF_UTEN_TEKST (0.40)")
+                     help="Turn the OCR rules on only when rec_min ≥ V. Below V "
+                          "Paddle read badly, and a missing fnr proves nothing.")
+    ocr.add_argument("--ocr-conf-exempt", type=float, default=None,
+                     dest="ocr_conf_exempt",
+                     help="The OCR rules yield for boxes with detection conf "
+                          "≥ V: a confident YOLO detection beats text evidence.")
+    ocr.add_argument("--reject-00-run", action="store_const", const=1,
+                     default=None, dest="reject_00_run",
+                     help="Reject boxes where a 10-12 digit run starts with 00 "
+                          "— orgnr padded to fnr width; day 00 is invalid in "
+                          "an fnr")
+    ocr.add_argument("--reject-orgnr", action="store_const", const=1,
+                     default=None, dest="reject_orgnr",
+                     help="Reject boxes with a valid orgnr mod11 (9 digits "
+                          "starting with 8/9, possibly 00-padded)")
+    ocr.add_argument("--reject-org-ord", type=float, default=None,
+                     dest="reject_org_ord", metavar="{1,2}",
+                     help="Reject boxes with a company-form word nearby "
+                          "(AS, Borettslag, Org.nr, …). 1=always, 2=only when "
+                          "the box also lacks an fnr candidate")
+    ocr.add_argument("--line-veto", type=float, default=None,
+                     dest="line_veto",
+                     help="Turn the OCR rules on only when rec_min_linje ≥ V, "
+                          "fnr candidate and run length depend on the WHOLE "
+                          "line being read correctly, not just the box")
+    ocr.add_argument("--reject-run-6-10", type=float, nargs="?", const=1,
+                     default=None, dest="reject_run_6_10", metavar="MAX",
+                     help="Reject boxes over digit runs of 6..MAX (with gaps); "
+                          "without a value = 6..10. Use 9: 10-runs are often "
+                          "fnr with a single-digit day/month or a lost char")
+    ocr.add_argument("--without-text-conf", type=float, default=None,
+                     dest="without_text_conf",
+                     help="Boxes WITHOUT text (har_tokens=0) require conf ≥ V "
+                          "— stricter than prod's YOLO_CONF_NO_TEXT (0.40)")
 
-    ocr.add_argument("--maks-luke", type=float, default=None,
-                     dest="maks_luke", metavar="BREDDER",
-                     help="Forkast paddle/begge-bokser der største fysiske "
-                          "luke i 11-siffer-vinduet er ≥ V sifferbredder — "
-                          "vinduer sydd på tvers av kolonnegap")
-    ocr.add_argument("--avvis-desimal-luke", action="store_const", const=1,
-                     default=None, dest="avvis_desimal_luke",
-                     help="Forkast paddle/begge-bokser der 11-vinduet er "
-                          "sydd over et desimalskille (. eller ,)")
-    p.add_argument("--per-kilde", nargs="+", metavar="SPEC",
-                   help='Uavhengige filtre per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
-    p.add_argument("--mot-fasit", action="store_true", dest="mot_fasit",
-                   help="Anvend filteret DIREKTE på saksbehandlernes sladdinger "
-                        "(alle labels, ikke bare dokumenter modellen kjørte på). "
-                        "Svarer på hvor mange riktige sladdinger filteret ville "
-                        "forkastet. Krever ikke --res-csv.")
-    p.add_argument("--bom", nargs="?", const="alle", default=None,
+    ocr.add_argument("--max-gap", type=float, default=None,
+                     dest="max_gap", metavar="WIDTHS",
+                     help="Reject paddle/begge boxes where the largest physical "
+                          "gap in the 11-digit window is ≥ V digit widths, "
+                          "windows stitched across a column gap")
+    ocr.add_argument("--reject-decimal-gap", action="store_const", const=1,
+                     default=None, dest="reject_decimal_gap",
+                     help="Reject paddle/begge boxes where the 11-window is "
+                          "stitched over a decimal separator (. or ,)")
+    p.add_argument("--per-source", nargs="+", metavar="SPEC",
+                   help='Independent filters per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
+    p.add_argument("--against-truth", action="store_true", dest="against_truth",
+                   help="Apply the filter DIRECTLY to the case handlers' "
+                        "sladdinger (all labels, not just documents the model "
+                        "ran on). Answers how many correct sladdinger the "
+                        "filter would reject. Does not need --res-csv.")
+    p.add_argument("--miss", nargs="?", const="all", default=None,
                    metavar="KILDE",
-                   help="Triage-modus: tegn ALLE BOM-bokser (treffer ingen "
-                        "fasit-boks) uavhengig av filter, 'begge'-kilden "
-                        "først. Med verdi (begge/paddle/yolo) tegnes kun den "
-                        "kilden. Svarer på om de er oversladding eller "
-                        "fødselsnumre saksbehandleren bommet på.")
-    p.add_argument("--ocr-tekst", action="store_true", dest="ocr_tekst",
-                   help="--bom: falm originalen og tegn Paddles cachede "
-                        "OCR-tokens oppå, farget etter rec-score (grønn "
-                        "≥0.98, blå ≥0.90, rød <0.90). Viser hva OCR "
-                        "faktisk leste der boksen ble satt.")
-    p.add_argument("--ocr-cache", default=None, metavar="STI",
+                   help="Triage mode: draw ALL BOM boxes (hitting no "
+                        "ground-truth box) regardless of filter, kilde 'begge' "
+                        "first. With a value (begge/paddle/yolo) only that "
+                        "kilde is drawn. Answers whether they are oversladding "
+                        "or fnr the case handler missed.")
+    p.add_argument("--ocr-text", action="store_true", dest="ocr_text",
+                   help="--miss: fade the original and draw Paddle's cached "
+                        "OCR tokens on top, colored by rec score (green ≥0.98, "
+                        "blue ≥0.90, red <0.90). Shows what the OCR actually "
+                        "read where the box was placed.")
+    p.add_argument("--ocr-cache", default=None, metavar="PATH",
                    dest="ocr_cache",
-                   help="OCR-cache-mappe for --ocr-tekst "
-                        "(default: $SLADD_CACHE/<mappenavn>/ocr)")
+                   help="OCR cache folder for --ocr-text "
+                        "(default: $SLADD_CACHE/<folder>/ocr)")
     p.add_argument("--ocr-opacity", type=float, default=0.15,
-                   dest="ocr_opacity", metavar="ANDEL",
-                   help="Opacity for originalen bak tekstlaget "
+                   dest="ocr_opacity", metavar="FRACTION",
+                   help="Opacity of the original behind the text layer "
                         "(default 0.15)")
-    p.add_argument("--udekket", action="store_true",
-                   help="Gjennomgangs-modus: katalogiser og tegn fasit-bokser "
-                        "modellen ikke dekker (godt nok). Splitter på "
-                        "ml_generated — reell deteksjonsevne måles på "
-                        "manuelt tegnede bokser. Trenger ingen filterflagg.")
-    p.add_argument("--god-dekning", type=float, default=0.90,
-                   dest="god_dekning", metavar="ANDEL",
-                   help="--udekket: dekning under dette regnes som «dårlig "
-                        "dekket» selv om terskelen er nådd (default 0.90)")
-    p.add_argument("--udekket-ogsaa-ml", action="store_true",
-                   dest="udekket_ogsaa_ml",
-                   help="--udekket: tegn også ML-aksepterte bokser (ellers "
-                        "kun manuelt tegnede — ML-boksene er sirkulære)")
-    p.add_argument("--maks-utsnitt", type=int, default=None,
-                   dest="maks_utsnitt", metavar="N",
-                   help="--udekket: maks antall bokser å tegne "
-                        "(dårligst dekning først)")
+    p.add_argument("--uncovered", action="store_true",
+                   help="Review mode: catalogue and draw ground-truth boxes the "
+                        "model does not cover (well enough). Splits on "
+                        "ml_generated, real detection ability is measured on "
+                        "manually drawn boxes. Needs no filter flag.")
+    p.add_argument("--good-coverage", type=float, default=0.90,
+                   dest="good_coverage", metavar="FRACTION",
+                   help="--uncovered: coverage below this counts as «poorly "
+                        "covered» even when the threshold is met (default 0.90)")
+    p.add_argument("--uncovered-also-ml", action="store_true",
+                   dest="uncovered_also_ml",
+                   help="--uncovered: draw ML-accepted boxes too (otherwise "
+                        "manually drawn only. The ML boxes are circular)")
+    p.add_argument("--max-crop", type=int, default=None,
+                   dest="max_crop", metavar="N",
+                   help="--uncovered: max number of boxes to draw "
+                        "(worst coverage first)")
     p.add_argument("--band", nargs=3, default=None,
-                   metavar=("KRITERIUM", "LO", "HI"),
-                   help="Tegn utsnitt av hvert (prediksjon, fasit)-par der "
-                        "målet ligger i [LO, HI) — gråsonen terskelvalget "
-                        "faktisk avgjør. F.eks. «--band areal 0.40 0.45». "
-                        f"Kriterier: {', '.join(sorted(KRITERIER))}")
-    p.add_argument("--band-csv", default=None, metavar="FIL",
-                   help="Skriv måltallene for båndet til CSV")
+                   metavar=("CRITERION", "LO", "HI"),
+                   help="Draw a crop of every (prediction, ground truth) pair "
+                        "scoring in [LO, HI). The grey zone the threshold "
+                        "actually decides. E.g. «--band areal 0.40 0.45». "
+                        f"Criteria: {', '.join(sorted(CRITERIA))}")
+    p.add_argument("--band-csv", default=None, metavar="FILE",
+                   help="Write the band metrics to CSV")
     p.add_argument("--sweep", action="store_true",
-                   help="Kjør et sett forhåndsdefinerte konfigurasjoner")
-    p.add_argument("--kun-tapt", "--kun-riktige", action="store_true",
-                   dest="kun_tapt",
-                   help="Tegn kun sider der en fasit-boks mistet all dekning")
-    p.add_argument("--utsnitt-margin", type=float, default=60.0, metavar="PT",
-                   help="Margin rundt utsnittene av tapte bokser, i punkt. "
-                        "0 slår av utsnitt (default: 60)")
-    p.add_argument("--maks-sider", type=int, default=None,
-                   help="Maks antall sider å tegne (verst først)")
-    p.add_argument("--velg", nargs="+", metavar="PDF",
-                   help="Begrens til disse PDF-filene")
+                   help="Run a set of predefined configurations")
+    p.add_argument("--only-lost", action="store_true",
+                   dest="only_lost",
+                   help="Only draw pages where a ground-truth box lost all coverage")
+    p.add_argument("--crop-margin", type=float, default=60.0, metavar="PT",
+                   help="Margin around the crops of lost boxes, in points. "
+                        "0 turns crops off (default: 60)")
+    p.add_argument("--max-pages", type=int, default=None,
+                   help="Max number of pages to draw (worst first)")
+    p.add_argument("--select", nargs="+", metavar="PDF",
+                   help="Restrict to these PDF files")
     args = p.parse_args()
 
-    kw_alle = {n: getattr(args, n) for n in
-               ("min_elongation", "maks_elongation", "maks_hoyde", "min_hoyde",
-                "maks_bredde", "min_bredde", "min_kortside", "maks_kortside",
-                "min_langside", "maks_langside", "maks_areal", "min_areal_px",
-                "conf_terskel") + OCR_PARAMETRE
+    kw_every = {n: getattr(args, n) for n in GEOMETRY_PARAMETERS + OCR_PARAMS
                if getattr(args, n) is not None}
 
-    if args.udekket:
-        if not args.res_csv or not args.mappe:
-            p.error("--udekket krever --res-csv og --mappe")
-        kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
-        gjennomgang_udekket(args.fasit_csv, args.res_csv, args.mappe,
-                            args.ut_mappe, kriterium=args.kriterium,
-                            terskel=args.terskel,
-                            god_dekning=args.god_dekning, kjorte_dok=kjorte,
-                            ogsaa_ml=args.udekket_ogsaa_ml,
-                            maks_utsnitt=args.maks_utsnitt,
-                            utsnitt_margin=args.utsnitt_margin)
-        print("\nFerdig!")
+    if args.uncovered:
+        if not args.res_csv or not args.folder:
+            p.error("--uncovered requires --res-csv and --folder")
+        processed = read_processed_docs(args.processed_list) if args.processed_list else None
+        review_uncovered(args.truth_csv, args.res_csv, args.folder,
+                            args.out_dir, criterion=args.criterion,
+                            threshold=args.threshold,
+                            good_coverage=args.good_coverage, processed_doc=processed,
+                            also_ml=args.uncovered_also_ml,
+                            max_crop=args.max_crop,
+                            crop_margin=args.crop_margin)
+        print("\nDone!")
         return
 
-    if args.mot_fasit:
-        if not kw_alle:
-            p.error("--mot-fasit krever minst ett filter "
-                    "(--elongation, --maks-elongation, --min-kortside, ...)")
-        ds_kryss = None
+    if args.against_truth:
+        if not kw_every:
+            p.error("--against-truth requires at least one filter "
+                    "(--elongation, --max-elongation, --min-short-side, ...)")
+        ds_cross = None
         if args.res_csv:
-            kjorte = (les_kjorte_dok(args.kjorte_liste)
-                      if args.kjorte_liste else None)
-            ds_kryss = bygg_datasett(
-                les_fasit(args.fasit_csv), les_prediksjoner(args.res_csv),
-                terskel=args.terskel, slurv_faktor=args.slurv_faktor,
-                inkluder_ulabelte=args.inkluder_ulabelte, kjorte_dok=kjorte,
-                kriterium=args.kriterium)
-        test_mot_fasit(args.fasit_csv, args.mappe, args.ut_mappe, kw_alle,
-                       maks_sider=args.maks_sider,
-                       utsnitt_margin=args.utsnitt_margin, velg=args.velg,
-                       ds=ds_kryss)
-        print("\nFerdig!")
+            processed = (read_processed_docs(args.processed_list)
+                      if args.processed_list else None)
+            ds_cross = build_dataset(
+                read_truth_boxes(args.truth_csv), read_predictions(args.res_csv),
+                threshold=args.threshold, oversize_factor=args.oversize_factor,
+                include_unlabelled=args.include_unlabelled, processed_doc=processed,
+                criterion=args.criterion)
+        test_against_fasit(args.truth_csv, args.folder, args.out_dir, kw_every,
+                       max_pages=args.max_pages,
+                       crop_margin=args.crop_margin, select=args.select,
+                       ds=ds_cross)
+        print("\nDone!")
         return
 
     if not args.res_csv:
-        p.error("--res-csv er påkrevd (unntatt med --mot-fasit)")
-    if not args.mappe:
-        p.error("--mappe er påkrevd")
+        p.error("--res-csv is required (except with --against-truth)")
+    if not args.folder:
+        p.error("--folder is required")
 
-    kjorte = les_kjorte_dok(args.kjorte_liste) if args.kjorte_liste else None
-    ds = bygg_datasett(les_fasit(args.fasit_csv),
-                       les_prediksjoner(args.res_csv),
-                       terskel=args.terskel, slurv_faktor=args.slurv_faktor,
-                       inkluder_ulabelte=args.inkluder_ulabelte,
-                       kjorte_dok=kjorte, kriterium=args.kriterium)
-    skriv_oppsummering(ds)
+    processed = read_processed_docs(args.processed_list) if args.processed_list else None
+    ds = build_dataset(read_truth_boxes(args.truth_csv),
+                       read_predictions(args.res_csv),
+                       threshold=args.threshold, oversize_factor=args.oversize_factor,
+                       include_unlabelled=args.include_unlabelled,
+                       processed_doc=processed, criterion=args.criterion)
+    write_summary(ds)
 
-    felles = dict(kun_tapt=args.kun_tapt, velg=args.velg,
-                  maks_sider=args.maks_sider,
-                  utsnitt_margin=args.utsnitt_margin)
+    common = dict(only_lost=args.only_lost, select=args.select,
+                  max_pages=args.max_pages,
+                  crop_margin=args.crop_margin)
 
     if args.band:
-        kriterium, lo, hi = args.band[0], float(args.band[1]), float(args.band[2])
-        if kriterium not in KRITERIER:
-            p.error(f"ukjent kriterium {kriterium!r} — "
-                    f"gyldige: {', '.join(sorted(KRITERIER))}")
+        criterion, lo, hi = args.band[0], float(args.band[1]), float(args.band[2])
+        if criterion not in CRITERIA:
+            p.error(f"unknown criterion {criterion!r}, "
+                    f"valid: {', '.join(sorted(CRITERIA))}")
         if not lo < hi:
-            p.error(f"LO må være mindre enn HI (fikk {lo} og {hi})")
-        band_review(ds, args.mappe, args.ut_mappe, kriterium, lo, hi,
-                    maks=args.maks_sider,
-                    utsnitt_margin=(args.utsnitt_margin
-                                    if args.utsnitt_margin != 60.0 else 25.0),
-                    ut_csv=args.band_csv)
-    elif args.bom:
-        ocr_mappe = None
-        if args.ocr_tekst:
-            ocr_mappe = args.ocr_cache
-            if not ocr_mappe:
+            p.error(f"LO must be smaller than HI (got {lo} and {hi})")
+        band_review(ds, args.folder, args.out_dir, criterion, lo, hi,
+                    max_items=args.max_pages,
+                    crop_margin=(args.crop_margin
+                                    if args.crop_margin != 60.0 else 25.0),
+                    out_csv=args.band_csv)
+    elif args.miss:
+        ocr_dir = None
+        if args.ocr_text:
+            ocr_dir = args.ocr_cache
+            if not ocr_dir:
                 base = os.environ.get("SLADD_CACHE")
                 if not base:
-                    p.error("--ocr-tekst: oppgi --ocr-cache, eller sett "
+                    p.error("--ocr-text: give --ocr-cache, or set "
                             "$SLADD_CACHE (source activate.sh)")
-                ocr_mappe = os.path.join(
-                    base, os.path.basename(os.path.normpath(args.mappe)),
+                ocr_dir = os.path.join(
+                    base, os.path.basename(os.path.normpath(args.folder)),
                     "ocr")
-            if not os.path.isdir(ocr_mappe):
-                p.error(f"--ocr-tekst: finner ikke cache-mappen {ocr_mappe}")
-        triage_bom(ds, args.mappe, args.ut_mappe, velg=args.velg,
-                   maks_sider=args.maks_sider,
-                   kilde=None if args.bom == "alle" else args.bom,
-                   ocr_mappe=ocr_mappe, ocr_opacity=args.ocr_opacity)
-    elif args.per_kilde:
-        per_kilde = parse_per_kilde(args.per_kilde)
-        ukjente = set(per_kilde) - {k.lower() for k in ds.kilder()}
-        if ukjente:
-            print(f"  ⚠ Ingen prediksjoner fra kilde(r): {', '.join(sorted(ukjente))}")
-        ut = os.path.join(args.ut_mappe, _mappenavn_per_kilde(per_kilde))
-        generer_bilder(ds, args.mappe, ut, per_kilde=per_kilde, **felles)
+            if not os.path.isdir(ocr_dir):
+                p.error(f"--ocr-text: cannot find the cache folder {ocr_dir}")
+        triage_bom(ds, args.folder, args.out_dir, select=args.select,
+                   max_pages=args.max_pages,
+                   source=None if args.miss == "all" else args.miss,
+                   ocr_dir=ocr_dir, ocr_opacity=args.ocr_opacity)
+    elif args.per_source:
+        per_source = parse_per_source(args.per_source)
+        unknown = set(per_source) - {k.lower() for k in ds.sources()}
+        if unknown:
+            print(f"  ⚠ No predictions from kilde(r): {', '.join(sorted(unknown))}")
+        ut = os.path.join(args.out_dir, _dir_name_per_source(per_source))
+        generate_images(ds, args.folder, ut, per_source=per_source, **common)
     elif args.sweep:
-        for kw in SWEEP_KONFIGER:
-            ut = os.path.join(args.ut_mappe, _mappenavn(kw))
-            generer_bilder(ds, args.mappe, ut, filter_kwargs=kw, **felles)
+        for kw in SWEEP_CONFIGURE:
+            ut = os.path.join(args.out_dir, _dir_name(kw))
+            generate_images(ds, args.folder, ut, filter_kwargs=kw, **common)
     else:
-        kw = kw_alle
+        kw = kw_every
         if not kw:
-            p.error("Oppgi minst ett filter (--elongation, --maks-hoyde, "
-                    "--maks-bredde, --maks-areal, --conf), --per-kilde, "
-                    "--bom eller --sweep")
-        generer_bilder(ds, args.mappe, args.ut_mappe, filter_kwargs=kw, **felles)
+            p.error("Give at least one filter (--elongation, --max-height, "
+                    "--max-width, --max-area, --conf-threshold), --per-source, "
+                    "--miss or --sweep")
+        generate_images(ds, args.folder, args.out_dir, filter_kwargs=kw, **common)
 
-    print("\nFerdig!")
+    print("\nDone!")
 
 
 if __name__ == "__main__":

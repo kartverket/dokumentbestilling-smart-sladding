@@ -1,38 +1,48 @@
-# Treningsserver: Oppsett og bruk
+# Training server: setup and use
 
-## Første gang: Sett opp miljøet
+## First time: set up the environment
 
 ```bash
 tmux new -s trening
 source /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/activate.sh
 ```
 
-Én linje aktiverer både venv og alle `SLADD_`-variabler.
+One line activates both the venv and every `SLADD_` variable. Put the `source`
+line in `~/.bashrc` so you do not have to repeat it.
 
-> **Tips:** Legg gjerne `source`-linjen i `~/.bashrc` så slipper du å gjenta den.
+## Variables
 
-## Tilgjengelige variabler
+Set by `server.env`, which `activate.sh` sources.
 
-| Variabel            | Verdi                                          | Beskrivelse                     |
-|--------------------|--------------------------------------------------|---------------------------------|
-| `SLADD_REPO`       | `.../dokumentbestilling-smart-sladding`         | Repo-rot                        |
-| `SLADD_UTTREKK`    | `/data2/smartsladding-uttrekk`                  | PDFer per uttrekk               |
-| `SLADD_LABELS`     | `.../smartsladding-uttrekk-labels`              | Labels-CSVer                    |
-| `SLADD_METADATA`   | `.../smartsladding-uttrekk-metadata`            | Metadata-CSVer                  |
-| `SLADD_RUNS`       | `/data2/runs`                                   | Rå treningskjøringer            |
-| `SLADD_VEKTER`     | `/data2/vekter`                                 | Publiserte modeller             |
-| `SLADD_VALIDERING` | `/data2/validering`                             | Valideringsresultater           |
-| `SLADD_LISTER`     | `/data2/validering/lister`                      | Fil-ID-lister                   |
-| `SLADD_PRODVEKTER` | `$SLADD_VEKTER/<modell>/<modell>.pt`            | Standardmodell (prod)           |
-| `SLADD_CACHE`      | `/data2/cache`                                  | Alt derivert, per uttrekk       |
-| `SLADD_RUN`        | `.../utils/run.py`                              | Validerings-script              |
-| `SLADD_TRAIN`      | `.../train`                                     | Trenings-mappe                  |
+| Variable | Value | What it is |
+|---|---|---|
+| `SLADD_REPO` | `.../dokumentbestilling-smart-sladding` | Repo root |
+| `SLADD_UTTREKK` | `/data2/smartsladding-uttrekk` | PDFs per uttrekk |
+| `SLADD_LABELS` | `.../smartsladding-uttrekk-labels` | Label CSVs (ground truth) |
+| `SLADD_METADATA` | `.../smartsladding-uttrekk-metadata` | Metadata CSVs |
+| `SLADD_RUNS` | `/data2/runs` | Raw training runs |
+| `SLADD_WEIGHTS` | `/data2/vekter` | Published models |
+| `SLADD_PRODWEIGHTS` | `/data2/models/yolo-yearly-10000-docs.pt` | Default model |
+| `SLADD_VALIDATION` | `/data2/validering` | Validation results |
+| `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists |
+| `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk |
+| `SLADD_RUN` | `.../utils/run.py` | Validation script |
+| `SLADD_PRECACHE` | `.../utils/precache.py` | Cache filler |
+| `SLADD_TRAIN` | `.../train` | Training directory |
+| `SLADD_LOGS` | `/data/docker` | Container log root on the host |
+| `SLADD_LOG_DAYS` | `30` | Days of log history per log file |
+| `SLADD_VENV` | `.../venv/bin/activate` | Venv |
+
+`SLADD_LOGS` and `SLADD_LOG_DAYS` belong to deploy, not to training:
+`deploy.sh` reads them and passes them to compose as `LOG_ROOT` and
+`LOG_BACKUP_DAYS`.
+
+An empty value after login means a stale shell, not a broken install. Run
+`source activate.sh` again in that pane.
 
 ---
 
-## Trening
-
-### Standard trening (fra scratch)
+## Training
 
 ```bash
 make -C $SLADD_TRAIN \
@@ -46,28 +56,15 @@ make -C $SLADD_TRAIN \
   NAME=uttrekk_4_jou_med_negative
 ```
 
-Kjøringen havner i `$SLADD_RUNS/<NAME>/`, og publiseres til slutt som en ferdig
-modell i `$SLADD_VEKTER/<NAME>/` med `<NAME>.pt` og `modell.json`. Det er den
-publiserte modellen validering og `deploy.sh` peker på — ikke `best.pt` inne i
-kjøringen.
+Add `MODEL=$SLADD_PRODWEIGHTS` to train on top of an existing model, and
+`PATIENCE=N` to change early stopping. The full flag list is in
+[train/README.md](../train/README.md).
 
-### Trening basert på en eksisterende modell
+The run lands in `$SLADD_RUNS/<NAME>/` and is published as a finished model in
+`$SLADD_WEIGHTS/<NAME>/` with `<NAME>.pt` and `modell.json`. Validation and
+`deploy.sh` point at the published model, never at `best.pt` inside the run.
 
-```bash
-make -C $SLADD_TRAIN \
-  PDFS=$SLADD_UTTREKK/uttrekk_4/ \
-  CSV=$SLADD_LABELS/uttrekk_4.csv \
-  DATASET=$SLADD_CACHE/uttrekk_4/dataset \
-  STRATEGY=doc_type \
-  METADATA=$SLADD_METADATA/uttrekk_4.csv \
-  DOC_TYPE=SR_JOU \
-  DEVICE=cuda \
-  NAME=uttrekk_4_jou_based_pat20 \
-  PATIENCE=20 \
-  MODEL=$SLADD_PRODVEKTER
-```
-
-### Publisere en kjøring som ble trent uten publisering
+To publish a run that was trained without publishing:
 
 ```bash
 make -C $SLADD_TRAIN publiser \
@@ -75,202 +72,124 @@ make -C $SLADD_TRAIN publiser \
   DATASET=$SLADD_CACHE/uttrekk_4/dataset
 ```
 
-`modell.json` blir bare så fullstendig som variablene du oppgir: kjør
-`publiser` med de samme `PDFS`/`CSV`/`STRATEGY`-verdiene som treningen brukte,
-ellers står de tomme i metadataen.
+`modell.json` is only as complete as the variables you pass. Run `publiser`
+with the same `PDFS`/`CSV`/`STRATEGY` values the training used, or they stay
+empty in the metadata.
 
 ---
 
-## Validering
+## Validation
 
-### Steg 1: Lag en dokumentliste
+### Step 1: build a document list
 
 ```bash
 ./lag_liste.sh uttrekk=5 docs=SR_JOU name=jou
-```
-
-Flere dokumenttyper og årsfilter:
-
-```bash
 ./lag_liste.sh uttrekk=5 docs=SR_JOU,FR_REG years=2020-2026 name=jou_reg
 ./lag_liste.sh uttrekk=5 years=2024,2025 name=nyere
-./lag_liste.sh uttrekk=4 docs=OB_MOB name=mob
 ```
 
-### Steg 2: Kjør validering
+At least one of `docs=` and `years=` is required. The list is written to
+`$SLADD_LISTS/uttrekk_<n>_<name>.txt`.
 
-Det finnes to wrapper-script:
+### Step 2: run the validation
 
-| Script | Hva det kjører | Bruksområde |
-|--------|---------------|-------------|
-| `valider_yolo.sh` | Kun YOLO (uten OCR) | Rask testing av YOLO-vekter |
-| `valider_full.sh` | OCR + YOLO + matching (produksjonslogikk) | Validere full pipeline |
-
-#### Kun YOLO (`valider_yolo.sh`)
+| Script | What it runs | Use for |
+|---|---|---|
+| `valider_yolo.sh` | YOLO only, no OCR | Quick test of YOLO weights |
+| `valider_full.sh` | OCR + YOLO + matching (production logic) | The full pipeline |
 
 ```bash
-# Valider prod-modellen på uttrekk 5, JOU-dokumenter
-./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
-
-# Valider en trent modell
-./valider_yolo.sh modell=$SLADD_VEKTER/uttrekk_4_jou_med_negative/uttrekk_4_jou_med_negative.pt uttrekk=5 liste=jou
-
-# Valider en annen modell på et annet uttrekk/doctype
-./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou_based_pat20/weights/best.pt uttrekk=4 liste=mob   # upublisert kjøring
-
-# Egendefinert navn på utmappen
-./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou navn=prod_test
+./valider_yolo.sh model=$SLADD_PRODWEIGHTS uttrekk=5 list=jou
+./valider_full.sh model=$SLADD_PRODWEIGHTS uttrekk=5 list=jou
 ```
 
-#### Full pipeline (`valider_full.sh`)
+`model=` and `uttrekk=` are required on both. Without `list=`, every document
+in the uttrekk is run. `name=` overrides the output directory name, which is
+otherwise derived from the model and the uttrekk. Results land in
+`$SLADD_VALIDATION/<name>/`.
 
-```bash
-# Valider full produksjonslogikk (OCR + YOLO) på uttrekk 5
-./valider_full.sh uttrekk=5 liste=jou
+Both scripts build every path from the uttrekk number and the list name, check
+that the files exist before starting, print a summary of what is about to run,
+and pass `--csv --truth --only-error` (CSV result, evaluation against ground
+truth, images for errors only).
 
-# Med egendefinert navn
-./valider_full.sh uttrekk=5 liste=jou navn=ocr-test
-```
-
-OCR-cachen (`$SLADD_CACHE`) brukes automatisk. Første kjøring prosesserer alle dokumenter; påfølgende kjøringer med samme uttrekk hopper over PaddleOCR.
-
-#### Felles egenskaper
-
-Begge script:
-- Bygger alle stier automatisk fra uttrekk-nr og liste-navn
-- Sjekker at alle filer/mapper finnes før det starter
-- Viser en oppsummering av hva som kjøres
-- Kjører `--csv --fasit --kun-feil` (CSV-resultat, evaluering mot fasit, feilbilder)
+`valider_full.sh` takes a few more parameters: `rules=no` skips every
+post-filter (raw detection, for measuring what the rules contribute),
+`metadata=yes` sends rettsstiftelse types from `$SLADD_METADATA/uttrekk_N.csv`
+so the rule profiles match prod, `images=N` caps how many error images are
+drawn, `processes=N` sets the worker count. `precache=no` skips filling the
+cache first.
 
 ---
 
-## OCR-cache
+## Cache
 
-PaddleOCR er den tyngste operasjonen per dokument. Resultatet er deterministisk for en gitt PDF, så det caches per dokument og gjenbrukes på tvers av kjøringer.
-
-### Cache-struktur (alt per uttrekk)
+PaddleOCR and YOLO are the heavy operations per document. Both are
+deterministic for a given input, so both are cached per document and reused
+across runs. The cache is **on by default** when `SLADD_CACHE` is set.
 
 ```
-/data2/cache/
-  uttrekk_4/
-    ocr/                  ← PaddleOCR-tokens + orientering
-      123456789.json
-      234567890.json
-    dataset/              ← Konverterte bilder + YOLO-labels (trening)
-      images_all/
-      labels_all/
-  uttrekk_5/
-    ocr/
-      345678901.json
-    dataset/
-      ...
+/data2/cache/uttrekk_5/
+  ocr/       ← PaddleOCR tokens + orientation
+  yolo/      ← raw boxes, one subdirectory per weights hash
+  dataset/   ← converted images + YOLO labels (training)
 ```
 
-Alt derivert for ett uttrekk samlet i én mappe. Slett alt cachet for ett uttrekk med:
+The paths are derived from `--folder`, so `$SLADD_UTTREKK/uttrekk_5/` gives
+`$SLADD_CACHE/uttrekk_5/`. The YOLO cache is per weights file: each model gets
+its own subdirectory, and a new model never reads another model's boxes. On a
+hit in both caches the PDF rendering is skipped too, so re-running the same
+model over the same uttrekk costs almost nothing.
+
+Override or disable:
 
 ```bash
-rm -rf $SLADD_CACHE/uttrekk_5
-```
-
-### Hvordan det aktiveres
-
-Cachen er **på som standard** når `SLADD_CACHE` er satt (via `server.env`). OCR-cache-stien utledes automatisk:
-
-```
---mappe $SLADD_UTTREKK/uttrekk_5/  →  cache: $SLADD_CACHE/uttrekk_5/ocr/
---mappe $SLADD_UTTREKK/uttrekk_4/  →  cache: $SLADD_CACHE/uttrekk_4/ocr/
-```
-
-Eksplisitt overstyring:
-
-```bash
-# Spesifiser cache-sti manuelt
 python -u $SLADD_RUN --ocr-cache /data2/cache/uttrekk_5/ocr ...
-
-# Deaktiver cache helt
-python -u $SLADD_RUN --no-ocr-cache ...
+python -u $SLADD_RUN --no-ocr-cache --no-yolo-cache ...
 ```
 
-### Flyt
-
-```
-Første kjøring (cache-miss):
-  render PDF → orientering → PaddleOCR → lagre til cache → YOLO → resultat
-
-Neste kjøring, samme uttrekk (cache-treff):
-  render PDF → last fra cache → YOLO → resultat
-```
-
-Ved `--kun-yolo`-kjøringer brukes ikke cachen (ingen OCR å cache).
-
-### Invalidering
-
-Hver cache-fil inneholder forutsetningene (OCR-modellversjon, DPI). Ved oppslag sjekkes disse automatisk. Hvis du bytter OCR-modell (f.eks. v6 → v7), vil alle oppslag misse og dokumentene prosesseres på nytt.
-
-For å tvinge full reprosessering av ett uttrekk:
+Every cache file records its own assumptions (OCR model version, DPI, weights),
+and they are checked on lookup. Change the OCR model and every lookup misses,
+and the documents are reprocessed. To force that for one uttrekk:
 
 ```bash
-rm -rf $SLADD_CACHE/uttrekk_5/ocr
+rm -rf $SLADD_CACHE/uttrekk_5/ocr      # or the whole uttrekk_5/
 ```
 
-### Hva caches?
-
-| Operasjon | Caches? | Begrunnelse |
-|-----------|---------|-------------|
-| PaddleOCR-tokens | ✅ | Tung GPU, deterministisk per dokument |
-| Orientering | ✅ | Lagres sammen med tokens |
-| YOLO-inferens | ❌ | Avhenger av modellvekter som endres ofte |
-| PDF-rendering | ❌ | For store filer (~25 MB/side) |
+PDF rendering is not cached: the files are too large, roughly 25 MB per page.
 
 ---
 
-## Modellageret
+## The model store
 
-`$SLADD_VEKTER` er stedet alle ferdige modeller bor. Én mappe per modell:
+`$SLADD_WEIGHTS` is where finished models live, one directory per model:
 
 ```
 /data2/vekter/
   yolo-yearly-10000-docs/
-    yolo-yearly-10000-docs.pt    ← vektene
-    modell.json                  ← datasett, hyperparametre, mål, git-sha
+    yolo-yearly-10000-docs.pt    ← the weights
+    modell.json                  ← dataset, hyperparameters, metrics, git sha
     trening/                     ← results.csv, args.yaml, data.yaml, split_log.txt
-  uttrekk_4_jou/
-    …
 ```
 
-`$SLADD_RUNS` er arbeidsmapper: checkpoints, plott og `weights/best.pt` fra hver
-kjøring. Der heter alle modeller det samme, så ingenting utenfor treningen skal
-peke dit. `make publiser` er broen mellom de to.
+`$SLADD_RUNS` holds working directories instead: checkpoints, plots and
+`weights/best.pt` from each run. Every model is called the same thing there, so
+nothing outside training should point into it. `make publiser` is the bridge
+between the two.
 
-### Engangsjobb: flytte gamle vekter inn i lageret
+`$SLADD_PRODWEIGHTS` is the exception to this layout. It points at a flat file
+in `/data2/models`, not into the store.
 
-Vektene lå tidligere i repoet (`app/weights/weights/`, levert via et git-submodul).
-Submodulet er borte, og vekter skal aldri i git igjen. Modeller derfra flyttes inn
-i lageret med `--vektfil`, som gir en tynn `modell.json` — treningskjøringen finnes
-ikke lenger, og det står da eksplisitt i metadataen:
-
-```bash
-python $SLADD_TRAIN/scripts/publiser_modell.py \
-  --vektfil $SLADD_REPO/app/weights/weights/yolo-yearly-10000-docs.pt \
-  --navn yolo-yearly-10000-docs \
-  --ut $SLADD_VEKTER
-```
-
-Når alle modellene er flyttet, kan `app/weights/` slettes fra utsjekken.
-
-## Filstruktur
+## File map
 
 ```
-activate.sh        ← Source denne: aktiverer venv + laster variabler
-server.env         ← Globale stier (lastes av activate.sh)
-valider_yolo.sh    ← Validering kun med YOLO
-valider_full.sh    ← Validering med full produksjonslogikk (OCR + YOLO)
-lag_liste.sh       ← Generer dokument-ID-lister fra metadata
-app/ocr_cache.py   ← Per-dokument OCR-cache (les/skriv)
-train/Makefile     ← Treningspipeline
-train/scripts/publiser_modell.py  ← Kjøring → ferdig modell i $SLADD_VEKTER
+activate.sh        ← source this: venv + variables
+server.env         ← the SLADD_ variables (loaded by activate.sh)
+lag_liste.sh       ← generate document ID lists from metadata
+valider_yolo.sh    ← validation, YOLO only
+valider_full.sh    ← validation, full production logic (OCR + YOLO)
+app/ocr_cache.py   ← per-document OCR cache
+app/yolo_cache.py  ← per-document YOLO cache
+train/Makefile     ← training pipeline
+train/scripts/publish_model.py  ← run → finished model in $SLADD_WEIGHTS
 ```
-
-
-
-

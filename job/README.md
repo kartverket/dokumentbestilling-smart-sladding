@@ -11,7 +11,7 @@ The skip_job fetches unprocessed documents from the database, sends them to the 
 This job has **minimal dependencies**:
 - `requests` - For HTTP calls to APIs
 
-See `../requirements-skip-job.txt` for the exact versions.
+See `requirements-skip-job.txt` for the exact versions.
 
 ```sh
 cd job

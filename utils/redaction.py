@@ -4,41 +4,41 @@ from collections import defaultdict
 import fitz
 
 
-def _piksel_til_punkt(boks, bw, bh, pw, ph):
-    x0, y0, x1, y1 = boks
+def _pixel_to_point(box, bw, bh, pw, ph):
+    x0, y0, x1, y1 = box
     return fitz.Rect(x0 / bw * pw, y0 / bh * ph, x1 / bw * pw, y1 / bh * ph)
 
 
-def sladd_fil(inn_sti, ut_sti, sider):
-    d = fitz.open(inn_sti)
+def sladd_file(in_path, out_path, pages):
+    d = fitz.open(in_path)
     n = 0
-    for (si, bw, bh, bokser) in sider:
-        side = d[si - 1]
-        pw, ph = side.rect.width, side.rect.height
-        for boks in bokser:
-            rekt = _piksel_til_punkt(boks, bw, bh, pw, ph)
-            side.add_redact_annot(rekt * side.derotation_matrix, fill=(0, 0, 0))
+    for (si, bw, bh, boxes) in pages:
+        page = d[si - 1]
+        pw, ph = page.rect.width, page.rect.height
+        for box in boxes:
+            page_rect = _pixel_to_point(box, bw, bh, pw, ph)
+            page.add_redact_annot(page_rect * page.derotation_matrix, fill=(0, 0, 0))
             n += 1
-        side.apply_redactions()
-    d.save(ut_sti)
+        page.apply_redactions()
+    d.save(out_path)
     d.close()
     return n
 
 
-def sladd_alle(sladd_bokser, inn_mappe, ut_mappe):
-    os.makedirs(ut_mappe, exist_ok=True)
-    per_fil = defaultdict(list)
-    for (navn, si), (bw, bh, bokser) in sladd_bokser.items():
-        per_fil[navn].append((si, bw, bh, bokser))
+def sladd_files(sladd_boxes, in_dir, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    per_file = defaultdict(list)
+    for (name, si), (bw, bh, boxes) in sladd_boxes.items():
+        per_file[name].append((si, bw, bh, boxes))
 
-    sladdet, feilet = 0, []
-    for navn in sorted(per_fil):
+    sladdet, failed = 0, []
+    for name in sorted(per_file):
         try:
-            n = sladd_fil(os.path.join(inn_mappe, navn),
-                          os.path.join(ut_mappe, navn), sorted(per_fil[navn]))
+            n = sladd_file(os.path.join(in_dir, name),
+                          os.path.join(out_dir, name), sorted(per_file[name]))
             sladdet += 1
-            print(f"   {navn}: {n} boks(er) sladdet")
+            print(f"   {name}: {n} box(es) sladdet")
         except Exception as e:
-            feilet.append((navn, repr(e)))
-            print(f"   {navn}: FEIL {e!r}")
-    return sladdet, feilet
+            failed.append((name, repr(e)))
+            print(f"   {name}: ERROR {e!r}")
+    return sladdet, failed

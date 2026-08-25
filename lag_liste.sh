@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
-# lag_liste.sh — generer en dokument-ID-liste basert på metadata-filter
+# lag_liste.sh: generate a document ID list from a metadata filter.
 #
-# Bruk (eksplisitte navngitte parametere):
-#   ./lag_liste.sh uttrekk=5 docs=SR_JOU name=jou
-#   ./lag_liste.sh uttrekk=5 docs=SR_JOU,FR_REG years=2020-2026 name=jou
-#   ./lag_liste.sh uttrekk=5 years=2024,2025 name=samlet
+#   ./lag_liste.sh uttrekk=N name=ALIAS [docs=TYPE[,TYPE]] [years=RANGE]
 #
-# Parametere:
-#   uttrekk  — uttrekk-nummer (påkrevd)
-#   name     — filnavn-alias for utfilen (påkrevd)
-#   docs     — kommaseparert liste med dokumenttyper å filtrere på (valgfri)
-#   years    — årsfilter: range (2020-2026) eller kommaseparert (2024,2025) (valgfri)
+#   uttrekk  uttrekk number (required)
+#   name     filename alias for the output file (required)
+#   docs     comma-separated document types to filter on
+#   years    year filter: range (2020-2026) or comma-separated (2024,2025)
 #
-# Minst én av docs/years må angis.
-# Lagrer listen til $SLADD_LISTER/uttrekk_<nr>_<name>.txt
-# Krever at server.env er sourcet.
+# At least one of docs/years must be given. Writes $SLADD_LISTS/uttrekk_<nr>_<name>.txt.
+# Requires server.env to be sourced (source activate.sh).
 
 set -euo pipefail
 
 if [[ -z "${SLADD_REPO:-}" ]]; then
-    echo "FEIL: SLADD_-variablene er ikke satt. Kjør: source activate.sh"
+    echo "ERROR: the SLADD_ variables are not set. Run: source activate.sh"
     exit 1
 fi
 
-# ── Parse navngitte parametere ────────────────────────────────────
+# ── Parse named parameters ────────────────────────────────────────
 UTTREKK=""
 NAME=""
 DOCS=""
@@ -36,29 +31,28 @@ for arg in "$@"; do
         docs=*)    DOCS="${arg#docs=}" ;;
         years=*)   YEARS="${arg#years=}" ;;
         *)
-            echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: uttrekk=N docs=TYPE[,TYPE] years=RANGE name=ALIAS"
+            echo "ERROR: Unknown parameter: $arg"
+            echo "Valid: uttrekk=N docs=TYPE[,TYPE] years=RANGE name=ALIAS"
             exit 1
             ;;
     esac
 done
 
-# ── Validering ────────────────────────────────────────────────────
 if [[ -z "$UTTREKK" ]]; then
-    echo "FEIL: uttrekk= er påkrevd"
-    echo "Eksempel: $0 uttrekk=5 docs=SR_JOU name=jou"
+    echo "ERROR: uttrekk= is required"
+    echo "Example: $0 uttrekk=5 docs=SR_JOU name=jou"
     exit 1
 fi
 
 if [[ -z "$NAME" ]]; then
-    echo "FEIL: name= er påkrevd"
-    echo "Eksempel: $0 uttrekk=5 docs=SR_JOU name=jou"
+    echo "ERROR: name= is required"
+    echo "Example: $0 uttrekk=5 docs=SR_JOU name=jou"
     exit 1
 fi
 
 if [[ -z "$DOCS" && -z "$YEARS" ]]; then
-    echo "FEIL: Minst én av docs= eller years= må angis"
-    echo "Eksempler:"
+    echo "ERROR: at least one of docs= or years= must be given"
+    echo "Examples:"
     echo "  $0 uttrekk=5 docs=SR_JOU name=jou"
     echo "  $0 uttrekk=5 years=2020-2026 name=nyere"
     echo "  $0 uttrekk=5 docs=SR_JOU,FR_REG years=2020-2026 name=jou_reg"
@@ -66,19 +60,17 @@ if [[ -z "$DOCS" && -z "$YEARS" ]]; then
 fi
 
 METADATA="$SLADD_METADATA/uttrekk_${UTTREKK}.csv"
-UT_FIL="$SLADD_LISTER/uttrekk_${UTTREKK}_${NAME}.txt"
+OUT_FILE="$SLADD_LISTS/uttrekk_${UTTREKK}_${NAME}.txt"
 
 if [[ ! -f "$METADATA" ]]; then
-    echo "FEIL: Metadata-fil finnes ikke: $METADATA"
+    echo "ERROR: metadata file does not exist: $METADATA"
     exit 1
 fi
 
-mkdir -p "$SLADD_LISTER"
+mkdir -p "$SLADD_LISTS"
 
-# ── Bygg awk-filter ──────────────────────────────────────────────
-# Kolonne 6 = rettsstiftelsestyper, kolonne for dokument_aar finnes i headeren.
-# Vi bruker headeren for å finne riktig kolonne dynamisk.
-
+# ── Build the awk filter ─────────────────────────────────────────
+# Column positions vary, so the header is used to locate them.
 AWK_SCRIPT='
 BEGIN { FS=","; doc_col=0; year_col=0 }
 
@@ -91,7 +83,7 @@ NR==1 {
 }
 
 {
-    # Dokumenttype-filter
+    # Document type filter
     if (docs != "") {
         n_docs = split(docs, doc_arr, ",")
         doc_match = 0
@@ -101,7 +93,7 @@ NR==1 {
         if (!doc_match) next
     }
 
-    # Årsfilter
+    # Year filter
     if (years != "") {
         year_val = $year_col + 0
         if (year_from > 0 && year_to > 0) {
@@ -120,7 +112,7 @@ NR==1 {
 }
 '
 
-# Parse years-parameter: range (2020-2026) eller kommaseparert (2024,2025)
+# years= is either a range (2020-2026) or a comma-separated list (2024,2025).
 YEAR_FROM=0
 YEAR_TO=0
 YEARS_LIST=""
@@ -138,11 +130,11 @@ awk -v docs="$DOCS" \
     -v years="$YEARS_LIST" \
     -v year_from="$YEAR_FROM" \
     -v year_to="$YEAR_TO" \
-    "$AWK_SCRIPT" "$METADATA" > "$UT_FIL"
+    "$AWK_SCRIPT" "$METADATA" > "$OUT_FILE"
 
-ANTALL=$(wc -l < "$UT_FIL")
+COUNT=$(wc -l < "$OUT_FILE")
 
-# ── Vis sammendrag ───────────────────────────────────────────────
+# ── Show a summary ───────────────────────────────────────────────
 echo "╭──────────────────────────────────────────╮"
 echo "│ lag_liste.sh"
 echo "├──────────────────────────────────────────┤"
@@ -151,6 +143,6 @@ printf "│ uttrekk:  %s\n" "$UTTREKK"
 [[ -n "$YEARS" ]] && printf "│ years:    %s\n" "$YEARS"
 printf "│ name:     %s\n" "$NAME"
 echo "├──────────────────────────────────────────┤"
-printf "│ → %s IDer lagret til:\n" "$ANTALL"
-printf "│   %s\n" "$UT_FIL"
+printf "│ → %s IDs written to:\n" "$COUNT"
+printf "│   %s\n" "$OUT_FILE"
 echo "╰──────────────────────────────────────────╯"

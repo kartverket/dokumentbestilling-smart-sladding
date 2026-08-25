@@ -1,25 +1,54 @@
-# Bidra til dokumentbestilling-smart-sladding
+# Contributing to dokumentbestilling-smart-sladding
 
-Takk for at du vurderer å bidra! Dette prosjektet er utviklet av Kartverket og publisert som åpen kildekode under MIT-lisens.
+Built by Kartverket, published as open source under the MIT license.
 
-## Hvordan bidra
+## How to contribute
 
-1. Opprett et issue som beskriver problem eller foreslått endring før du starter arbeidet.
-2. Fork repository og opprett en feature branch fra `main`.
-3. Gjør endringene dine. Hold commits små og fokuserte.
-4. Kjør eksisterende tester og legg til nye der det er relevant:
-   ```sh
-   cd app
-   pytest
-   ```
-5. Åpne en pull request mot `main` med en tydelig beskrivelse av endringen.
+1. Open an issue describing the problem or the change before you start.
+2. Fork the repo and branch off `main`. Keep commits small and focused.
+3. Run the checks below.
+4. Open a pull request against `main`.
 
-## Kodekvalitet
+## Checks
 
-- Følg eksisterende stil og konvensjoner i kodebasen.
-- Nye funksjoner bør ha tester.
-- Unngå å sjekke inn sensitive data, testdokumenter med reelle personopplysninger, eller miljøspesifikke hemmeligheter.
+CI runs `pytest` from `app/` on every push and pull request. Two self-tests run
+without a GPU, a server or access to any documents:
 
-## Rapportering av sikkerhetsproblemer
+```sh
+python utils/fnr_vakt.py --selftest    # the fnr guard catches what it should
+python utils/vlm_selftest.py           # vlm_export -> vlm_judge -> vlm_evaluate
+```
 
-Ikke rapporter sikkerhetsproblemer i offentlige issues. Se [SECURITY.md](.github/SECURITY.md).
+Do not commit sensitive data, test documents with real personal information, or
+environment secrets.
+
+## Fødselsnummer in code
+
+The repo is public. Never use real fødselsnumre as example or test values in
+source, prompts or fasit files, not even ones from an uttrekk you have lawful
+access to. Use synthetic numbers from
+[Tenor](https://skatteetaten.github.io/testnorge/) (month + 80), or numbers
+with invalid check digits.
+
+A pre-commit hook enforces this. Enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+`source activate.sh` does the same automatically. The hook runs
+`utils/fnr_vakt.py --staged`, which looks only at the lines a commit adds and
+stops numbers that both pass the mod-11 check and carry a valid date.
+Coordinates, dagboknumre and ids pass.
+
+```sh
+python utils/fnr_vakt.py --all       # scan the whole working tree
+```
+
+If a kontonummer or another id is flagged by accident, write `fnr-ok` in a
+comment on the same line.
+
+## Security issues
+
+Do not report security issues in public issues. See
+[SECURITY.md](.github/SECURITY.md).

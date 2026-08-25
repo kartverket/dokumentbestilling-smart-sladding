@@ -1,163 +1,137 @@
 """
-Cache for YOLO-deteksjoner per dokument og per modell.
+Cache for YOLO detections per document and per model, so a new run with the
+same weight file skips GPU inference, and when the OCR cache also hits the
+whole PDF rendering. See ocr_cache.py for tokens and orientation.
 
-Lagrer rå YOLO-bokser slik at en ny kjøring med samme vektfil kan hoppe over
-GPU-inferensen — og, når OCR-cachen også treffer, hele PDF-renderingen.
-Se ocr_cache.py for tokens og orientering.
+Keyed by sha256 of the weight file (in the folder name) + document name:
+/data2/cache/uttrekk_5/yolo/a1b2c3d4e5f6a7b8/1000039999.json, so a new model
+gets its own cache without shadowing the old one.
 
-Cache-nøkkel: vektfilens sha256 (i mappenavnet) + dokumentnavn (fil_revisjon_id).
-Struktur: én mappe per uttrekk og modell, utledet automatisk fra --mappe:
-    /data2/cache/uttrekk_5/yolo/a1b2c3d4e5f6a7b8/1000039999.json
-    /data2/cache/uttrekk_5/yolo/9f8e7d6c5b4a3928/1000039999.json
+Invalidation: imgsz, DPI, confidence floor and per-page rotation are stored in
+each file and checked on lookup. See write_cache for the file layout.
 
-Invalidering: imgsz, DPI, konfidens-gulv og rotasjon per side lagres i hver fil
-              og sjekkes ved oppslag. Vektene ligger i mappenavnet, så en ny
-              modell får automatisk sin egen cache uten å skygge for den gamle.
+Boxes are stored down to YOLO_CACHE_CONF_FLOOR and filtered against YOLO_CONF
+on read, so changing YOLO_CONF, the geometry filters, the matching or the
+evaluation threshold still hits, as long as the new threshold is not below
+the floor the cache was written with.
 
-Bokser lagres ned til YOLO_CACHE_CONF_GULV og filtreres mot YOLO_CONF ved
-lesing. Å endre YOLO_CONF — eller geometrifiltrene, matchingen eller
-evalueringsterskelen — gir dermed fortsatt treff, så lenge den nye terskelen
-ikke er lavere enn gulvet cachen ble skrevet med.
-
-«rotasjon» er rotasjonen på bildet YOLO fikk, altså resultatet av
-orienteringssteget. Full pipeline og --kun-yolo mater YOLO med det samme
-orienteringskorrigerte bildet, så entryene er de samme og valider_full.sh og
-valider_yolo.sh deler cache fullt ut. Feltet er likevel en del av nøkkelen:
-skulle orienteringsmodellen endre seg, gir det miss i stedet for bokser i feil
-koordinatrom.
-
-Filformat per dokument:
-    {cache_mappe}/{doc_id}.json
-    {
-      "versjon": 1,
-      "imgsz": 1280,
-      "dpi": 300,
-      "conf_gulv": 0.05,
-      "sider": [
-        {
-          "side": 1,
-          "rotasjon": 0,
-          "bokser": [[x0, y0, x1, y1, conf], ...]
-        }
-      ]
-    }
+"rotation" is the rotation of the image YOLO was given, i.e. the output of the
+orientation step. It is part of the key so a changed orientation model gives a
+miss instead of boxes in the wrong coordinate space.
 """
 
 import hashlib
 import json
 import os
 
-from config import PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF, YOLO_IMGSZ
+from config import PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF, YOLO_IMGSZ
 
-CACHE_VERSJON = 1
+CACHE_VERSION = 1
 
-# Antall hex-siffer av vekt-hashen som brukes i mappenavnet. 16 hex = 64 bit,
-# rikelig mot kollisjon mellom et håndterlig antall modeller.
-HASH_LENGDE = 16
+# Hex digits of the weight hash used in the folder name. 16 hex = 64 bit,
+# ample against collision between a manageable number of models.
+HASH_LENGTH = 16
 
-# (sti, mtime, størrelse) -> hash. Vektfilen er stor nok (~50 MB) at vi ikke vil
-# lese den om igjen for hvert dokument.
+# (path, mtime, size) -> hash. The weight file is large enough (~50 MB) that
+# we do not want to re-read it for every document.
 _hash_cache = {}
 
 
-def vekter_hash(vekter_sti):
-    """sha256-prefiks for en vektfil, memoisert på mtime + størrelse."""
-    st = os.stat(vekter_sti)
-    nokkel = (os.path.abspath(vekter_sti), st.st_mtime_ns, st.st_size)
-    if nokkel not in _hash_cache:
+def weights_hash(weights_path):
+    """sha256 prefix of a weight file, memoised on mtime + size."""
+    st = os.stat(weights_path)
+    key = (os.path.abspath(weights_path), st.st_mtime_ns, st.st_size)
+    if key not in _hash_cache:
         h = hashlib.sha256()
-        with open(vekter_sti, "rb") as f:
-            for blokk in iter(lambda: f.read(1 << 20), b""):
-                h.update(blokk)
-        _hash_cache[nokkel] = h.hexdigest()[:HASH_LENGDE]
-    return _hash_cache[nokkel]
+        with open(weights_path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        _hash_cache[key] = h.hexdigest()[:HASH_LENGTH]
+    return _hash_cache[key]
 
 
-def cache_mappe_for_vekter(base_mappe, vekter_sti):
-    """Utled modell-spesifikk cache-mappe: {base}/{vekt-hash}."""
-    return os.path.join(base_mappe, vekter_hash(vekter_sti))
+def cache_dir_for_weights(base_dir, weights_path):
+    """Model-specific cache folder: {base}/{weight-hash}."""
+    return os.path.join(base_dir, weights_hash(weights_path))
 
 
-def _cache_sti(cache_mappe, doc_navn):
-    doc_id = os.path.splitext(os.path.basename(doc_navn))[0]
-    return os.path.join(cache_mappe, f"{doc_id}.json")
+def _cache_path(cache_dir, doc_name):
+    doc_id = os.path.splitext(os.path.basename(doc_name))[0]
+    return os.path.join(cache_dir, f"{doc_id}.json")
 
 
-def les_cache(cache_mappe, doc_navn, rotasjoner):
-    """Les cachede YOLO-bokser for et dokument.
+def read_cache(cache_dir, doc_name, rotations):
+    """Cached YOLO boxes for a document, or None if missing or invalid.
 
-    `rotasjoner` er rotasjonen på bildet YOLO skal kjøre på, én per side, og
-    må stemme med det som ble lagret.
-
-    Returnerer en liste med én liste av (x0, y0, x1, y1, conf) per side —
-    filtrert mot YOLO_CONF — hvis cachen finnes og er gyldig, ellers None.
+    `rotations` is the rotation of the image YOLO will run on, one per page,
+    and must match what was stored. Returns one list of
+    (x0, y0, x1, y1, conf) per page, filtered against YOLO_CONF.
     """
-    sti = _cache_sti(cache_mappe, doc_navn)
-    if not os.path.isfile(sti):
+    path = _cache_path(cache_dir, doc_name)
+    if not os.path.isfile(path):
         return None
 
     try:
-        with open(sti, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
 
-    # Sjekk at forutsetningene stemmer
-    if data.get("versjon") != CACHE_VERSJON:
+    if data.get("version") != CACHE_VERSION:
         return None
     if data.get("imgsz") != YOLO_IMGSZ:
         return None
     if data.get("dpi") != PDF_DPI:
         return None
-    # Gulvet må ligge på eller under dagens terskel, ellers mangler cachen
-    # bokser vi nå vil ha med.
-    gulv = data.get("conf_gulv")
-    if gulv is None or gulv > YOLO_CONF:
+    # The floor must be at or below today's threshold, or the cache is
+    # missing boxes we now want.
+    floor = data.get("conf_floor")
+    if floor is None or floor > YOLO_CONF:
         return None
 
-    sider = data["sider"]
-    if len(sider) != len(rotasjoner):
+    pages = data["pages"]
+    if len(pages) != len(rotations):
         return None
-    if any(side["rotasjon"] != k for side, k in zip(sider, rotasjoner)):
+    if any(page["rotation"] != k for page, k in zip(pages, rotations)):
         return None
 
     return [
-        [tuple(b) for b in side["bokser"] if b[4] >= YOLO_CONF]
-        for side in sider
+        [tuple(b) for b in page["boxes"] if b[4] >= YOLO_CONF]
+        for page in pages
     ]
 
 
-def skriv_cache(cache_mappe, doc_navn, rotasjoner, bokser_per_side):
-    """Lagre rå YOLO-bokser for et dokument til cache.
+def write_cache(cache_dir, doc_name, rotations, boxes_per_page):
+    """Write a document's raw YOLO boxes to the cache.
 
-    `bokser_per_side` må komme fra en predict på YOLO_CACHE_CONF_GULV — lagrer
-    vi et strengere utvalg, blir gulvet i filen en løgn og senere kjøringer med
-    lavere YOLO_CONF får treff på en ufullstendig cache.
+    `boxes_per_page` must come from a predict at YOLO_CACHE_CONF_FLOOR. Store
+    a stricter selection and the floor in the file becomes a lie, so later
+    runs with a lower YOLO_CONF hit an incomplete cache.
     """
-    os.makedirs(cache_mappe, exist_ok=True)
-    sti = _cache_sti(cache_mappe, doc_navn)
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _cache_path(cache_dir, doc_name)
 
-    sider = []
-    for si, (k, bokser) in enumerate(zip(rotasjoner, bokser_per_side), start=1):
-        sider.append({
-            "side": si,
-            "rotasjon": k,
-            # Lagres uavrundet: json skriver korteste streng som round-tripper
-            # eksakt, så en cachet kjøring gir bit-identiske bokser med en
-            # ucachet. Avrunding her ville kunne vippe en boks over YOLO_CONF.
-            "bokser": [list(boks) for boks in bokser],
+    pages = []
+    for si, (k, boxes) in enumerate(zip(rotations, boxes_per_page), start=1):
+        pages.append({
+            "page": si,
+            "rotation": k,
+            # Stored unrounded: json writes the shortest exactly
+            # round-tripping string, so a cached run gives bit-identical boxes
+            # to an uncached one. Rounding could tip a box over YOLO_CONF.
+            "boxes": [list(box) for box in boxes],
         })
 
     data = {
-        "versjon": CACHE_VERSJON,
+        "version": CACHE_VERSION,
         "imgsz": YOLO_IMGSZ,
         "dpi": PDF_DPI,
-        "conf_gulv": YOLO_CACHE_CONF_GULV,
-        "sider": sider,
+        "conf_floor": YOLO_CACHE_CONF_FLOOR,
+        "pages": pages,
     }
 
-    # Skriv til temp-fil først for å unngå korrupte filer ved avbrudd
-    tmp = sti + ".tmp"
+    # Write to a temp file first so an interrupt cannot leave a corrupt file
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, sti)
+    os.replace(tmp, path)

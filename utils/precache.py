@@ -1,21 +1,17 @@
-"""Forhåndsfyll OCR- og YOLO-cachen for et sett med dokumenter.
+"""Pre-fill the OCR and YOLO caches for a set of documents.
 
-Rendrer hvert dokument én gang og fyller begge cachene i samme pass. Per
-dokument gjøres bare det som mangler, så en ny modell koster kun
-YOLO-delen — rotasjonene kommer gratis fra OCR-cachen, og YOLO-cachen
-krever dem (den invalideres hvis rotasjonen per side ikke stemmer).
+Renders each document once and fills both caches in the same pass, doing only
+what is missing per document. A new model therefore costs only the YOLO part:
+the rotations come free from the OCR cache, and the YOLO cache requires them
+(it is invalidated when the per-page rotation does not match). With both caches
+warm, utils/run.py skips OCR, YOLO and PDF rendering entirely.
 
-Med begge cachene varme hopper valideringen (utils/run.py) over både OCR,
-YOLO og PDF-rendering, så dette er stedet å bruke maskinen — ikke i selve
-valideringsløpet.
+Parallelism lives in parallel_pipeline.py.
 
-Parallellkjøringen ligger i parallell_pipeline.py; her er bare det som er
-spesifikt for OCR og YOLO.
-
-Bruk:
-    python precache.py --mappe /sti/til/pdfer
-    python precache.py --mappe /sti/til/pdfer --kun yolo --yolo-vekter $SLADD_VEKTER/<modell>/<modell>.pt
-    python precache.py --mappe /sti/til/pdfer --gpu-prosesser 4 --start-batch 8 --profil
+Run:
+    python precache.py --folder /path/to/pdfs
+    python precache.py --folder /path/to/pdfs --only yolo --yolo-weights $SLADD_WEIGHTS/<model>/<model>.pt
+    python precache.py --folder /path/to/pdfs --gpu-processes 4 --start-batch 8 --profile
 """
 
 import argparse
@@ -38,323 +34,323 @@ if _APP not in sys.path:
 
 import numpy as np
 
-import parallell_pipeline as pp
-from config import SIDER_PER_OCR_BATCH, standard_vekter
-from file_selection import velg_filer
-from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
-from yolo_cache import (les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache,
-                        cache_mappe_for_vekter)
+import parallel_pipeline as pp
+from config import PAGES_PER_OCR_BATCH, default_weights
+from file_selection import select_files
+from ocr_cache import read_cache as read_ocr_cache, write_cache as write_ocr_cache
+from yolo_cache import (read_cache as read_yolo_cache, write_cache as write_yolo_cache,
+                        cache_dir_for_weights)
 
-STANDARD_VEKTER = standard_vekter()
+STANDARD_WEIGHTS = default_weights()
 
 
-# ── Behandler (kjører i arbeidsprosessen) ────────────────────────
+# ── Handler (runs in the worker process) ─────────────────────────
 
-def lag_behandler(oppgave):
-    """Bygg funksjonen som gjør OCR + YOLO for en gruppe dokumenter.
+def make_handler(task):
+    """Build the function that does OCR + YOLO for a group of documents.
 
-    Kalles i arbeidsprosessen, etter fork og etter at minneflaggene er
-    satt — derfor ligger de tunge importene her.
+    Called in the worker process, after fork and after the GPU memory flags
+    are set, hence the heavy imports in here.
     """
-    e = oppgave["ekstra"]
-    tider = oppgave["tider"]
-    ocr_mappe, yolo_mappe = e["ocr_mappe"], e["yolo_mappe"]
+    e = task["extra"]
+    timings = task["timings"]
+    ocr_dir, yolo_dir = e["ocr_dir"], e["yolo_dir"]
     ocr_batch = e["ocr_batch"]
     force = e["force"]
 
-    from orientering import finn_rotasjoner_batch
+    from orientation import find_rotations_batch
 
-    les_tokens_batched = None
-    if ocr_mappe:
-        from paddle_ocr_model_fnr import les_tokens_batched
+    read_tokens_batched = None
+    if ocr_dir:
+        from paddle_ocr_model_fnr import read_tokens_batched
 
-    finn_yolo_bokser = None
-    if yolo_mappe:
+    find_yolo_boxes = None
+    if yolo_dir:
         import yolo_fnr
-        yolo_fnr.sett_vekter(e["vekter"])
-        finn_yolo_bokser = yolo_fnr.finn_yolo_bokser
+        yolo_fnr.set_weights(e["weights"])
+        find_yolo_boxes = yolo_fnr.find_yolo_boxes
 
-    from config import YOLO_CACHE_CONF_GULV
+    from config import YOLO_CACHE_CONF_FLOOR
 
-    def _tid(post, t0):
-        tider[post] = tider.get(post, 0.0) + (time.perf_counter() - t0)
+    def _time(post, t0):
+        timings[post] = timings.get(post, 0.0) + (time.perf_counter() - t0)
 
-    # Varm opp modellene — engangskostnad som ikke skal med i estimatene
+    # Warm up the models: a one-off cost that must stay out of the estimates.
     dummy = np.zeros((100, 100, 3), dtype=np.uint8)
-    finn_rotasjoner_batch([dummy])
-    if les_tokens_batched:
-        les_tokens_batched([dummy])
-    if finn_yolo_bokser:
-        finn_yolo_bokser(dummy, conf=YOLO_CACHE_CONF_GULV)
+    find_rotations_batch([dummy])
+    if read_tokens_batched:
+        read_tokens_batched([dummy])
+    if find_yolo_boxes:
+        find_yolo_boxes(dummy, conf=YOLO_CACHE_CONF_FLOOR)
 
-    def behandle(gruppe, sider_om_gangen=None):
-        # ── 1. Hva mangler per dokument? ──────────────────────────
-        # Cachet OCR gir rotasjonene gratis, og YOLO-cachen trenger dem.
-        jobber = []
-        for navn, bilder in gruppe:
-            cachet = None if force or not ocr_mappe else les_ocr_cache(ocr_mappe, navn)
-            rotasjoner = list(cachet[0]) if cachet and len(cachet[0]) == len(bilder) else None
-            trenger_yolo = bool(yolo_mappe) and (
-                force or rotasjoner is None
-                or les_yolo_cache(yolo_mappe, navn, rotasjoner) is None)
-            jobber.append({
-                "navn": navn, "bilder": bilder, "rotasjoner": rotasjoner,
-                "tokens": cachet[1] if cachet else None,
-                "trenger_ocr": bool(ocr_mappe) and cachet is None,
-                "trenger_yolo": trenger_yolo,
+    def handle(group, pages_at_a_time=None):
+        # ── 1. What is missing per document? ──────────────────────
+        # Cached OCR gives the rotations for free, and YOLO needs them.
+        workers = []
+        for name, images in group:
+            cached = None if force or not ocr_dir else read_ocr_cache(ocr_dir, name)
+            rotations = list(cached[0]) if cached and len(cached[0]) == len(images) else None
+            needs_yolo = bool(yolo_dir) and (
+                force or rotations is None
+                or read_yolo_cache(yolo_dir, name, rotations) is None)
+            workers.append({
+                "navn": name, "images": images, "rotations": rotations,
+                "tokens": cached[1] if cached else None,
+                "trenger_ocr": bool(ocr_dir) and cached is None,
+                "needs_yolo": needs_yolo,
             })
 
-        # ── 2. Orientering for de som mangler rotasjoner ──────────
-        mangler_rot = [j for j in jobber if j["rotasjoner"] is None]
-        if mangler_rot:
+        # ── 2. Orientation for those missing rotations ────────────
+        missing_root = [j for j in workers if j["rotations"] is None]
+        if missing_root:
             t0 = time.perf_counter()
-            sider = [b for j in mangler_rot for b in j["bilder"]]
-            steg = sider_om_gangen or max(4 * ocr_batch, 8)
-            alle = []
-            for i in range(0, len(sider), steg):
-                alle.extend(finn_rotasjoner_batch(sider[i:i + steg]))
-            _tid("orientering", t0)
+            pages = [b for j in missing_root for b in j["images"]]
+            steg = pages_at_a_time or max(4 * ocr_batch, 8)
+            all_of = []
+            for i in range(0, len(pages), steg):
+                all_of.extend(find_rotations_batch(pages[i:i + steg]))
+            _time("orientation", t0)
             i = 0
-            for j in mangler_rot:
-                j["rotasjoner"] = alle[i:i + len(j["bilder"])]
-                i += len(j["bilder"])
+            for j in missing_root:
+                j["rotations"] = all_of[i:i + len(j["images"])]
+                i += len(j["images"])
 
-        # ── 3. Roter én gang — både OCR og YOLO bruker samme bilde ─
+        # ── 3. Rotate once: OCR and YOLO share the same image ────
         t0 = time.perf_counter()
-        for j in jobber:
-            if j["trenger_ocr"] or j["trenger_yolo"]:
-                j["rotert"] = [np.rot90(b, k) if k else b
-                               for b, k in zip(j["bilder"], j["rotasjoner"])]
-        _tid("rotasjon", t0)
+        for j in workers:
+            if j["trenger_ocr"] or j["needs_yolo"]:
+                j["rotated"] = [np.rot90(b, k) if k else b
+                               for b, k in zip(j["images"], j["rotations"])]
+        _time("rotation", t0)
 
-        # ── 4. OCR i én batch over alle dokumentene som mangler ───
-        ocr_jobber = [j for j in jobber if j["trenger_ocr"]]
-        if ocr_jobber:
+        # ── 4. OCR in one batch across every document missing it ──
+        ocr_workers = [j for j in workers if j["trenger_ocr"]]
+        if ocr_workers:
             t0 = time.perf_counter()
-            sider = [b for j in ocr_jobber for b in j["rotert"]]
-            tokens = les_tokens_batched(sider, batch_size=sider_om_gangen or ocr_batch)
-            _tid("ocr", t0)
+            pages = [b for j in ocr_workers for b in j["rotated"]]
+            tokens = read_tokens_batched(pages, batch_size=pages_at_a_time or ocr_batch)
+            _time("ocr", t0)
             i = 0
-            for j in ocr_jobber:
-                j["tokens"] = tokens[i:i + len(j["bilder"])]
-                i += len(j["bilder"])
+            for j in ocr_workers:
+                j["tokens"] = tokens[i:i + len(j["images"])]
+                i += len(j["images"])
 
-        # ── 5. YOLO, én side om gangen (ultralytics-API-et her) ───
-        for j in jobber:
-            if not j["trenger_yolo"]:
+        # ── 5. YOLO, one page at a time (the ultralytics API here) ─
+        for j in workers:
+            if not j["needs_yolo"]:
                 continue
             t0 = time.perf_counter()
-            j["yolo"] = [finn_yolo_bokser(b, conf=YOLO_CACHE_CONF_GULV)
-                         for b in j["rotert"]]
-            _tid("yolo", t0)
+            j["yolo"] = [find_yolo_boxes(b, conf=YOLO_CACHE_CONF_FLOOR)
+                         for b in j["rotated"]]
+            _time("yolo", t0)
 
-        # ── 6. Skriv cachene ─────────────────────────────────────
+        # ── 6. Write the caches ───────────────────────────────────
         t0 = time.perf_counter()
-        resultater = []
-        for j in jobber:
+        results = []
+        for j in workers:
             if j["trenger_ocr"]:
-                skriv_ocr_cache(ocr_mappe, j["navn"], j["rotasjoner"], j["tokens"])
-            if j["trenger_yolo"]:
-                skriv_yolo_cache(yolo_mappe, j["navn"], j["rotasjoner"], j["yolo"])
+                write_ocr_cache(ocr_dir, j["navn"], j["rotations"], j["tokens"])
+            if j["needs_yolo"]:
+                write_yolo_cache(yolo_dir, j["navn"], j["rotations"], j["yolo"])
 
-            deler = []
+            parts = []
             if j["tokens"] is not None:
-                deler.append(f"{sum(len(t) for t in j['tokens'])} tokens"
-                             + ("" if j["trenger_ocr"] else " (cachet)"))
+                parts.append(f"{sum(len(t) for t in j['tokens'])} tokens"
+                             + ("" if j["trenger_ocr"] else " (cached)"))
             if j.get("yolo") is not None:
-                deler.append(f"{sum(len(b) for b in j['yolo'])} yolo-bokser")
-            elif j["trenger_yolo"] is False and yolo_mappe:
-                deler.append("yolo cachet")
-            if any(k != 0 for k in j["rotasjoner"]):
-                deler.append("rot=[" + ",".join(f"{k * 90}°" for k in j["rotasjoner"]) + "]")
-            resultater.append({"navn": j["navn"], "sider": len(j["bilder"]),
-                               "tekst": ", ".join(deler)})
-        _tid("cache", t0)
-        return resultater
+                parts.append(f"{sum(len(b) for b in j['yolo'])} yolo boxes")
+            elif j["needs_yolo"] is False and yolo_dir:
+                parts.append("yolo cached")
+            if any(k != 0 for k in j["rotations"]):
+                parts.append("rot=[" + ",".join(f"{k * 90}°" for k in j["rotations"]) + "]")
+            results.append({"navn": j["navn"], "sider": len(j["images"]),
+                               "text": ", ".join(parts)})
+        _time("cache", t0)
+        return results
 
-    def nullstill():
-        """Riv ned modellene så allokatoren gir minnet tilbake.
+    def reset():
+        """Tear the models down so the allocator returns the memory.
 
-        Siste utvei når prosessen går tom for minne innenfor sitt eget tak:
-        da er det dens egen cache som er full, og empty_cache() alene får
-        den ikke ned. Modellene er lazy og bygges opp igjen ved neste kall
-        (~10 s), mot at dokumentet faktisk blir gjort.
+        Last resort when the process runs out of memory inside its own cap:
+        then its own allocator cache is what is full, and empty_cache() alone
+        will not release it. The models are lazy and are rebuilt on the next
+        call (~10 s), which buys getting the document done.
         """
-        import orientering
-        orientering._orient = None
-        if ocr_mappe:
+        import orientation
+        orientation._orient = None
+        if ocr_dir:
             import paddle_ocr_model_fnr
             paddle_ocr_model_fnr.reader = None
-        if yolo_mappe:
+        if yolo_dir:
             import yolo_fnr as yf
-            yf._modell = None
-        pp.frigjør_gpu_cache()
+            yf._model = None
+        pp.free_gpu_cache()
 
-    behandle.nullstill = nullstill
-    return behandle
+    handle.reset = reset
+    return handle
 
 
-# ── Filvalg ──────────────────────────────────────────────────────
+# ── File selection ───────────────────────────────────────────────
 
-def _utled_cache_base(args):
-    """Basemappe for cachene: --cache, ellers $SLADD_CACHE/<uttrekk>/."""
+def _derive_cache_base(args):
+    """Cache base folder: --cache, else $SLADD_CACHE/<uttrekk>/."""
     if args.cache:
         return args.cache
     base = os.environ.get("SLADD_CACHE")
     if base:
-        return os.path.join(base, os.path.basename(os.path.normpath(args.mappe)))
+        return os.path.join(base, os.path.basename(os.path.normpath(args.folder)))
     return None
 
 
-def _mangler_cache(filer, ocr_mappe, yolo_mappe):
-    """Behold filer der minst én av de aktive cachene mangler.
+def _missing_cache(files, ocr_dir, yolo_dir):
+    """Keep the files where at least one active cache is missing.
 
-    YOLO-cachen valideres mot rotasjonene, så uten OCR-cache regnes YOLO
-    som manglende — den kan uansett ikke leses uten dem.
+    The YOLO cache is validated against the rotations, so without an OCR cache
+    YOLO counts as missing, because it cannot be read without them.
     """
     ut = []
-    for f in filer:
-        navn = os.path.basename(f)
-        cachet = les_ocr_cache(ocr_mappe, navn) if ocr_mappe else None
-        if ocr_mappe and cachet is None:
+    for f in files:
+        name = os.path.basename(f)
+        cached = read_ocr_cache(ocr_dir, name) if ocr_dir else None
+        if ocr_dir and cached is None:
             ut.append(f)
             continue
-        if yolo_mappe:
-            rotasjoner = list(cachet[0]) if cachet else None
-            if rotasjoner is None or les_yolo_cache(yolo_mappe, navn, rotasjoner) is None:
+        if yolo_dir:
+            rotations = list(cached[0]) if cached else None
+            if rotations is None or read_yolo_cache(yolo_dir, name, rotations) is None:
                 ut.append(f)
     return ut
 
 
 def main():
-    pp.sett_opp_loggfil("precache")
+    pp.setup_logfile("precache")
 
     p = argparse.ArgumentParser(
-        description="Forhåndsfyll OCR- og YOLO-cachen. Rendrer hvert dokument "
-                    "én gang og gjør bare det som mangler.")
-    p.add_argument("--mappe", required=True, help="mappe med PDF-filer")
+        description="Pre-fill the OCR and YOLO caches. Renders each document "
+                    "once and does only what is missing.")
+    p.add_argument("--folder", required=True, help="folder of PDF files")
     p.add_argument("--cache", default=None,
-                   help="basemappe for cachene (default: $SLADD_CACHE/<uttrekk>/)")
-    p.add_argument("--kun", choices=("ocr", "yolo", "begge"), default="begge",
-                   help="hvilke cacher som skal fylles (default: begge)")
-    p.add_argument("--yolo-vekter", default=STANDARD_VEKTER,
-                   help="vektfil for YOLO. Cachen er per vektfil")
-    p.add_argument("--velg", nargs="*", default=[],
-                   help="spesifikke filer (filnavn/delstreng)")
-    p.add_argument("--velg-fra-fil", default=None,
-                   help="les fil-IDer fra en tekstfil (én per linje)")
-    p.add_argument("--antall", default="alle",
-                   help="antall filer når --velg er tom (tall, eller 'alle')")
+                   help="base folder for the caches (default: $SLADD_CACHE/<uttrekk>/)")
+    p.add_argument("--only", choices=("ocr", "yolo", "both"), default="both",
+                   help="which caches to fill (default: begge)")
+    p.add_argument("--yolo-weights", default=STANDARD_WEIGHTS,
+                   help="YOLO weights file; the cache is per weights file")
+    p.add_argument("--select", nargs="*", default=[],
+                   help="specific files (filename/substring)")
+    p.add_argument("--select-from-file", default=None,
+                   help="read file IDs from a text file, one per line")
+    p.add_argument("--count", default="all",
+                   help="number of files when --select is empty (a number, or 'all')")
     p.add_argument("--ocr-batch", type=int, default=None,
-                   help=f"sider per OCR-batch (default: {SIDER_PER_OCR_BATCH} fra "
-                        "config, delt på antall prosesser). Største driver av "
-                        "GPU-minnetoppen — deteksjonsmodellen holder "
-                        "aktiveringer for hele sidebatchen samtidig")
+                   help=f"pages per OCR batch (default: {PAGES_PER_OCR_BATCH} from "
+                        "config, divided by the number of processes). Biggest "
+                        "driver of peak GPU memory. The detection model holds "
+                        "activations for the whole page batch at once")
     p.add_argument("--rec-batch", type=int, default=0,
-                   help="tekstlinjer per gjenkjennings-batch (0=auto ut fra "
-                        "minnetaket per prosess). Påvirker kun minne og "
-                        "hastighet, ikke resultatet")
+                   help="text lines per recognition batch (0=auto from the "
+                        "per-process memory cap). Affects memory and speed "
+                        "only, not the result")
     p.add_argument("--hpi", action="store_true",
-                   help="aktiver High Performance Inference (TensorRT)")
+                   help="enable High Performance Inference (TensorRT)")
     p.add_argument("--force", action="store_true",
-                   help="kjør på nytt selv om dokumentet allerede er cachet")
-    pp.legg_til_argumenter(p)
+                   help="rerun even if the document is already cached")
+    pp.add_arguments(p)
     args = p.parse_args()
 
-    if not os.path.isdir(args.mappe):
-        print(f"FEIL: --mappe finnes ikke: {args.mappe}")
+    if not os.path.isdir(args.folder):
+        print(f"ERROR: --folder does not exist: {args.folder}")
         return 1
-    if args.velg_fra_fil and not os.path.isfile(args.velg_fra_fil):
-        print(f"FEIL: --velg-fra-fil finnes ikke: {args.velg_fra_fil}")
+    if args.select_from_file and not os.path.isfile(args.select_from_file):
+        print(f"ERROR: --select-from-file does not exist: {args.select_from_file}")
         return 1
 
-    cache_base = _utled_cache_base(args)
+    cache_base = _derive_cache_base(args)
     if not cache_base:
-        print("FEIL: Ingen cache-mappe angitt. Bruk --cache eller sett $SLADD_CACHE "
-              "(server-standard: /data2/cache).")
+        print("ERROR: no cache folder given. Use --cache or set $SLADD_CACHE "
+              "(server default: /data2/cache).")
         return 1
 
-    ocr_mappe = os.path.join(cache_base, "ocr") if args.kun in ("ocr", "begge") else None
-    yolo_mappe = None
-    if args.kun in ("yolo", "begge"):
-        if not os.path.isfile(args.yolo_vekter):
-            print(f"FEIL: Finner ikke YOLO-vekter: {args.yolo_vekter}")
+    ocr_dir = os.path.join(cache_base, "ocr") if args.only in ("ocr", "both") else None
+    yolo_dir = None
+    if args.only in ("yolo", "both"):
+        if not os.path.isfile(args.yolo_weights):
+            print(f"ERROR: YOLO weights not found: {args.yolo_weights}")
             return 1
-        yolo_mappe = cache_mappe_for_vekter(os.path.join(cache_base, "yolo"),
-                                            args.yolo_vekter)
-    for m in (ocr_mappe, yolo_mappe):
+        yolo_dir = cache_dir_for_weights(os.path.join(cache_base, "yolo"),
+                                            args.yolo_weights)
+    for m in (ocr_dir, yolo_dir):
         if m:
             os.makedirs(m, exist_ok=True)
 
-    # ── Filliste ─────────────────────────────────────────────────
-    velg, fra_fil = args.velg, False
-    if args.velg_fra_fil:
-        with open(args.velg_fra_fil, encoding="utf-8") as f:
-            velg = [linje.strip() for linje in f if linje.strip()]
-        fra_fil = True
-        print(f"Leste {len(velg)} IDer fra {args.velg_fra_fil}")
+    # ── File list ────────────────────────────────────────────────
+    select, from_file = args.select, False
+    if args.select_from_file:
+        with open(args.select_from_file, encoding="utf-8") as f:
+            select = [line.strip() for line in f if line.strip()]
+        from_file = True
+        print(f"Read {len(select)} IDs from {args.select_from_file}")
 
-    filer = velg_filer(args.mappe, velg, args.antall, eksakt=fra_fil)
-    if not filer:
-        print("Ingen filer å behandle — sjekk --mappe / --velg / --antall.")
+    files = select_files(args.folder, select, args.count, exact=from_file)
+    if not files:
+        print("No files to process. Check --folder / --select / --count.")
         return 1
-    print(f"Filer funnet: {len(filer)}")
-    if ocr_mappe:
-        print(f"OCR-cache:   {ocr_mappe}")
-    if yolo_mappe:
-        print(f"YOLO-cache:  {yolo_mappe}")
-        print(f"YOLO-vekter: {args.yolo_vekter}")
+    print(f"Files found:  {len(files)}")
+    if ocr_dir:
+        print(f"OCR cache:    {ocr_dir}")
+    if yolo_dir:
+        print(f"YOLO cache:   {yolo_dir}")
+        print(f"YOLO weights: {args.yolo_weights}")
 
     if not args.force:
-        opprinnelig = len(filer)
-        filer = _mangler_cache(filer, ocr_mappe, yolo_mappe)
-        if opprinnelig - len(filer):
-            print(f"Hopper over: {opprinnelig - len(filer)} allerede cachet, "
-                  f"{len(filer)} gjenstår")
-    if not filer:
-        print("Alt er allerede cachet!")
+        original = len(files)
+        files = _missing_cache(files, ocr_dir, yolo_dir)
+        if original - len(files):
+            print(f"Skipping:     {original - len(files)} already cached, "
+                  f"{len(files)} remaining")
+    if not files:
+        print("Everything is already cached!")
         return 0
 
-    # ── Oppsett ──────────────────────────────────────────────────
+    # ── Setup ────────────────────────────────────────────────────
     if args.hpi:
         os.environ["SLADD_HPI"] = "1"
-    opts = pp.oppsett(args)
-    n = opts["n_prosesser"]
+    opts = pp.setup(args)
+    n = opts["n_processes"]
 
-    # Gjenkjenningsmodellen kjører 128 linjer per batch som default, og én
-    # slik batch ba om 1,4 GB i målingene. Med et tak på ~6,5 GB per prosess
-    # sprekker den så snart allokatoren har vokst litt, og siden minnet er
-    # prosessens eget hjelper det ikke å vente. 32 linjer holdt kortet på
-    # 69 % uten en eneste minnefeil. Leses av app/paddle_ocr_model_fnr.py.
+    # The recognition model defaults to 128 lines per batch, and one such batch
+    # asked for 1.4 GB in measurements. Under a ~6.5 GB per-process cap it blows
+    # up as soon as the allocator has grown a little, and waiting does not help
+    # because the memory is the process's own. 32 lines held the card at 69 %
+    # with no memory errors at all. Read by app/paddle_ocr_model_fnr.py.
     rec_batch = args.rec_batch
     if not rec_batch and opts["gpu_mb"]:
         rec_batch = 32 if opts["gpu_mb"] < 10000 else 64
     if rec_batch:
         os.environ["SLADD_REC_BATCH"] = str(rec_batch)
-        print(f"  Rec-batch:  {rec_batch} tekstlinjer"
-              + ("" if args.rec_batch else " (auto ut fra minnetaket)"))
+        print(f"  Rec batch:  {rec_batch} text lines"
+              + ("" if args.rec_batch else " (auto from the memory cap)"))
     if args.ocr_batch:
         ocr_batch = args.ocr_batch
     else:
-        gpu = pp.gpu_minne_info()
-        grunn = 32 if gpu and gpu[1] >= 24000 else 16 if gpu and gpu[1] >= 16000 else SIDER_PER_OCR_BATCH
-        ocr_batch = max(grunn // n, 4)
-    opts["ekstra"] = dict(ocr_mappe=ocr_mappe, yolo_mappe=yolo_mappe,
-                          vekter=args.yolo_vekter, ocr_batch=ocr_batch,
+        gpu = pp.gpu_memory_info()
+        reason = 32 if gpu and gpu[1] >= 24000 else 16 if gpu and gpu[1] >= 16000 else PAGES_PER_OCR_BATCH
+        ocr_batch = max(reason // n, 4)
+    opts["extra"] = dict(ocr_dir=ocr_dir, yolo_dir=yolo_dir,
+                          weights=args.yolo_weights, ocr_batch=ocr_batch,
                           force=args.force)
-    print(f"  OCR-batch:  {ocr_batch} sider  |  filene deles dynamisk mellom "
-          f"{n} prosess(er)")
-    pp.skriv_ressursstatus()
+    print(f"  OCR batch:  {ocr_batch} pages  |  files are shared dynamically "
+          f"between {n} process(es)")
+    pp.write_resource_status()
 
-    ferdig, _, feilet = pp.kjør(filer, lag_behandler, opts)
-    if ocr_mappe:
-        print(f"  OCR-cache:  {ocr_mappe}")
-    if yolo_mappe:
-        print(f"  YOLO-cache: {yolo_mappe}")
-    # Ufullført teller som feil: krasjer alle prosessene, står det ingen
-    # feilede dokumenter i lista, men jobben er like fullt ikke gjort.
-    if feilet or ferdig < len(filer):
-        print(f"  Ikke ferdig: {len(filer) - ferdig} dokumenter gjenstår")
+    done, _, failed = pp.run(files, make_handler, opts)
+    if ocr_dir:
+        print(f"  OCR cache:  {ocr_dir}")
+    if yolo_dir:
+        print(f"  YOLO cache: {yolo_dir}")
+    # Unfinished counts as failure: if every process crashes the failed list is
+    # empty, but the job is still not done.
+    if failed or done < len(files):
+        print(f"  Not done:   {len(files) - done} documents remaining")
         return 1
     return 0
 

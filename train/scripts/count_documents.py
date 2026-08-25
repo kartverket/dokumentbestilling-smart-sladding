@@ -1,10 +1,10 @@
-"""
-Count documents matching a given strategy configuration.
+"""Count the documents and labels a training strategy would select.
 
-Run before training to verify how many documents and labels
-are available for a given doc type / year range filter.
+Standard library only, so it runs anywhere.
 
-No external dependencies — uses only the Python standard library.
+Run:
+    python train/scripts/count_documents.py --metadata meta.csv --labels labels.csv \
+        --strategy year_and_doc_type --doc-type JOU --year-from 1990 --year-to 1999
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
-    """Check if any of the comma-separated rettsstiftelsestyper matches doc_type."""
+    """rettsstiftelsestyper is a comma-separated list; match the code before the first space."""
     return any(
         part.strip().split(" ", 1)[0] == doc_type
         for part in str(rettsstiftelsestyper).split(",")
@@ -24,7 +24,6 @@ def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
 
 
 def _safe_int(value: str) -> int | None:
-    """Try to parse an int, return None on failure."""
     try:
         return int(value)
     except (ValueError, TypeError):
@@ -41,11 +40,9 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
           list_files: bool = False, output_ids: bool = False):
     rows = _read_csv(metadata_csv)
 
-    # ── Filter by doc type ──────────────────────────────────────
     if strategy in ("doc_type", "year_and_doc_type") and doc_type:
         rows = [r for r in rows if _has_doc_type(r.get("rettsstiftelsestyper", ""), doc_type)]
 
-    # ── Filter by year range ────────────────────────────────────
     if strategy == "year_and_doc_type" and year_from is not None and year_to is not None:
         rows = [r for r in rows
                 if (y := _safe_int(r.get("dokument_aar"))) is not None
@@ -55,13 +52,11 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
 
     matched_ids = {str(r["fil_revisjon_id"]) for r in rows}
 
-    # ── If --output-ids: just print IDs and exit ────────────────
     if output_ids:
         for doc_id in sorted(matched_ids):
             print(doc_id)
         return
 
-    # ── Normal summary output ───────────────────────────────────
     print(f"Metadata: {len(_read_csv(metadata_csv))} documents total")
     if strategy in ("doc_type", "year_and_doc_type") and doc_type:
         print(f"  Filter doc_type={doc_type}: {len(rows)} documents match")
@@ -88,12 +83,11 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
                     docs_by_year[y].append(str(r["fil_revisjon_id"]))
             for year in sorted(year_counts):
                 files = ", ".join(f"{d}.pdf" for d in sorted(docs_by_year[year]))
-                print(f"  {year}: {year_counts[year]} documents — {files}")
+                print(f"  {year}: {year_counts[year]} documents, {files}")
         else:
             for year in sorted(year_counts):
                 print(f"  {year}: {year_counts[year]} documents")
 
-    # ── Cross-reference with labels if provided ─────────────────
     if labels_csv and Path(labels_csv).exists():
         label_rows = _read_csv(labels_csv)
         matched_labels = [r for r in label_rows if str(r["fil_revisjon_id"]) in matched_ids]

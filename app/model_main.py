@@ -4,328 +4,315 @@ from contextlib import contextmanager
 import fitz
 import numpy as np
 
-from config import (DEDUP_OVERLAPP, PDF_DPI, YOLO_CACHE_CONF_GULV, YOLO_CONF,
-                    YOLO_CONF_UTEN_TEKST, YOLO_CONF_VERTIKAL, YOLO_CONF_GEOMETRI_TERSKEL,
-                    AVVIS_DESIMAL_REC_VETO, AVVIS_DESIMAL_CONF_FRITAK,
-                    AVVIS_DESIMAL_REC_VETO_LAV, AVVIS_DESIMAL_CONF_TAK_LAV,
-                    LINJEBEVIS_LINJE_VETO, LINJEBEVIS_CONF_FRITAK,
-                    LINJEBEVIS_RUN_MAKS,
-                    VINDU_MAKS_LUKE, VINDU_AVVIS_DESIMAL_LUKE,
-                    KOORDFAM_KODER, KOORDFAM_UTEN_TEKST_CONF,
-                    SEKSJONERING_KODER,
-                    SEKSJONERING_MAKS_KORTSIDE_PT, SEKSJONERING_MAKS_LANGSIDE_PT,
-                    SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_SIFFER,
-                    SEKSJONERING_REC_VETO, SEKSJONERING_CONF_FRITAK)
-from load_pdf import les_sider_fra_bytes
-from paddle_ocr_model_fnr import (les_tokens_batched, finn_bokser_fra_tokens,
-                                  ocr_linjer_fra_tokens, bygg_linjer)
-from orientering import finn_rotasjoner_batch, boks_tilbake
-from yolo_fnr import (finn_yolo_bokser, snill_sjekk, tokens_i_boks, overlapp_andel_boks,
-                      er_vertikal, er_for_liten, har_feil_ratio, er_for_tynn,
-                      er_for_smal_yolo, er_for_kort_yolo, har_paddle_stoyform)
-from boks_trekk import trekk_for_boks
-from ocr_cache import les_cache as les_ocr_cache, skriv_cache as skriv_ocr_cache
-from yolo_cache import les_cache as les_yolo_cache, skriv_cache as skriv_yolo_cache
+from config import (DEDUP_OVERLAP, PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF,
+                    YOLO_CONF_NO_TEXT, YOLO_CONF_VERTICAL, YOLO_CONF_GEOMETRY_THRESHOLD,
+                    REJECT_DECIMAL_REC_VETO, REJECT_DECIMAL_CONF_EXEMPT,
+                    REJECT_DECIMAL_LOW_TIER_REC_VETO, REJECT_DECIMAL_LOW_TIER_CONF_MAX,
+                    LINE_EVIDENCE_REC_VETO, LINE_EVIDENCE_CONF_EXEMPT,
+                    LINE_EVIDENCE_RUN_MAX,
+                    WINDOW_MAX_GAP, WINDOW_REJECT_DECIMAL_IN_GAP,
+                    KOORDFAM_CODES, KOORDFAM_NO_TEXT_CONF,
+                    SEKSJONERING_CODES,
+                    SEKSJONERING_MAX_SHORT_SIDE_PT, SEKSJONERING_MAX_LONG_SIDE_PT,
+                    SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_DIGITS,
+                    SEKSJONERING_REC_VETO, SEKSJONERING_CONF_EXEMPT)
+from load_pdf import read_pages_from_bytes
+from paddle_ocr_model_fnr import (read_tokens_batched, sladd_boxes_from_tokens,
+                                  lines_with_fnr_marks, build_lines)
+from orientation import find_rotations_batch, unrotate_box
+from yolo_fnr import (find_yolo_boxes, lenient_check, tokens_in_box, overlap_share_box,
+                      is_vertical, is_too_small, has_wrong_ratio, is_too_thin,
+                      is_too_narrow_yolo, is_too_short_yolo, has_paddle_noise_shape)
+from box_features import features_for_box
+from ocr_cache import read_cache as read_ocr_cache, write_cache as write_ocr_cache
+from yolo_cache import read_cache as read_yolo_cache, write_cache as write_yolo_cache
 
 
 @contextmanager
-def _ta_tid(t, post):
+def _take_time(t, post):
     start = time.perf_counter()
     yield
     t[post] = t.get(post, 0.0) + (time.perf_counter() - start)
 
 
-def _hopp_over_geometrifilter(conf, kilde):
-    """Høy konfidens → stol på modellen, hopp over geometrifiltrene.
+def _skip_over_geometry_filter(conf, source):
+    """High confidence -> trust the model, skip the geometry filters.
 
-    Tar bare konfidens, ikke kilde: grensene er de samme for yolo og
-    begge. «begge»-bokser var tidligere fritatt uansett konfidens, men
-    gjennomgangen av uttrekk 4 viste at lav-konfidens «begge» står for en reell
-    del av oversladdingen (4 av 7 tap hadde conf 0.17-0.31), så de går nå
-    gjennom samme port som resten. Paddle-bokser fritas aldri — OCR-konfidens
-    indikerer gjenkjenningskvalitet, ikke deteksjonssikkerhet.
+    "begge" used to be exempt at any confidence, but low-confidence "begge"
+    caused real oversladding (4 of 7 losses at conf 0.17-0.31). Paddle is
+    never exempt: OCR confidence is read quality, not detection certainty.
     """
-    if kilde == "paddle":
+    if source == "paddle":
         return False
-    return conf is not None and conf >= YOLO_CONF_GEOMETRI_TERSKEL
+    return conf is not None and conf >= YOLO_CONF_GEOMETRY_THRESHOLD
 
 
-def _desimalregel_forkaster(trekk, conf):
-    """Desimalskille i sikkert lest tekst → koordinat/beløp, ikke fnr.
+def _decimal_rule_discards(features, conf):
+    """Decimal separator in confidently read text -> coordinate, not fnr.
 
-    Speiler _ocr_grunn i utils/filter_felles.py med des=1,
-    rveto=AVVIS_DESIMAL_REC_VETO, cfritak=AVVIS_DESIMAL_CONF_FRITAK.
-    Kalles på ENDELIG kilde etter dedup: en boks som ble «begge» underveis
-    har et Paddle-funn bak seg og rammes ikke. Se config for tallgrunnlaget.
+    Mirrors _ocr_grunn in utils/filter_common.py (des=1, rveto, cfritak).
+    Called on the FINAL kilde after dedup, so a box that became "begge" is
+    spared. See config.
     """
-    if not trekk or not trekk.get("har_tokens"):
+    if not features or not features.get("har_tokens"):
         return False
-    rec = trekk.get("rec_min")
-    if rec is None or not trekk.get("har_desimal_naer"):
+    rec = features.get("rec_min")
+    if rec is None or not features.get("har_desimal_naer"):
         return False
-    if rec >= AVVIS_DESIMAL_REC_VETO \
-            and (conf is None or conf < AVVIS_DESIMAL_CONF_FRITAK):
+    if rec >= REJECT_DECIMAL_REC_VETO \
+            and (conf is None or conf < REJECT_DECIMAL_CONF_EXEMPT):
         return True
-    # Lav-tier: litt svakere lesing holder når deteksjonen selv er svak.
-    return (rec >= AVVIS_DESIMAL_REC_VETO_LAV
-            and (conf is None or conf < AVVIS_DESIMAL_CONF_TAK_LAV))
+    # Low tier: a weaker read suffices when the detection itself is weak.
+    return (rec >= REJECT_DECIMAL_LOW_TIER_REC_VETO
+            and (conf is None or conf < REJECT_DECIMAL_LOW_TIER_CONF_MAX))
 
 
-def _linjebevis_forkaster(trekk, conf):
-    """Sikkert lest linje beviser at tallet ikke kan være et fnr.
+def _line_evidence_discards(features, conf):
+    """A confidently read line proves the number cannot be an fnr.
 
-    Speiler _ocr_grunn i utils/filter_felles.py med avvis_run_6_10=RUN_MAKS,
-    avvis_orgnr=1, linje_veto og ocr_conf_fritak. Kalles på ENDELIG kilde
-    etter dedup, som desimalregelen. Se config for tallgrunnlaget.
+    Mirrors _ocr_grunn in utils/filter_common.py (avvis_run_6_10, avvis_orgnr,
+    linje_veto, ocr_conf_fritak). Final kilde after dedup. See config.
     """
-    if not trekk or not trekk.get("har_tokens"):
+    if not features or not features.get("har_tokens"):
         return False
-    if conf is not None and conf >= LINJEBEVIS_CONF_FRITAK:
+    if conf is not None and conf >= LINE_EVIDENCE_CONF_EXEMPT:
         return False
-    linje = trekk.get("rec_min_linje")
-    if linje is None or linje < LINJEBEVIS_LINJE_VETO:
+    line = features.get("rec_min_linje")
+    if line is None or line < LINE_EVIDENCE_REC_VETO:
         return False
-    lang = trekk.get("lang_run")
-    if lang is not None and 6 <= lang <= LINJEBEVIS_RUN_MAKS:
+    long = features.get("lang_run")
+    if long is not None and 6 <= long <= LINE_EVIDENCE_RUN_MAX:
         return True
-    return bool(trekk.get("har_orgnr"))
+    return bool(features.get("har_orgnr"))
 
 
-_SEKSJONERING_MAKS_KORTSIDE_PX = SEKSJONERING_MAKS_KORTSIDE_PT * PDF_DPI / 72.0
-_SEKSJONERING_MAKS_LANGSIDE_PX = SEKSJONERING_MAKS_LANGSIDE_PT * PDF_DPI / 72.0
+_SEKSJONERING_MAX_SHORT_SIDE_PX = SEKSJONERING_MAX_SHORT_SIDE_PT * PDF_DPI / 72.0
+_SEKSJONERING_MAX_LONG_SIDE_PX = SEKSJONERING_MAX_LONG_SIDE_PT * PDF_DPI / 72.0
 
 
-def _seksjonering_geometri_forkaster(boks):
-    """Orienteringsfri form: for stor til å være en 5-siffer-sladd."""
-    x0, y0, x1, y1 = boks[:4]
-    kort, lang = sorted((x1 - x0, y1 - y0))
-    return (kort > _SEKSJONERING_MAKS_KORTSIDE_PX
-            or lang > _SEKSJONERING_MAKS_LANGSIDE_PX)
+def _seksjonering_geometry_discards(box):
+    """Orientation-free shape: too large to be a 5-digit sladd."""
+    x0, y0, x1, y1 = box[:4]
+    short, long = sorted((x1 - x0, y1 - y0))
+    return (short > _SEKSJONERING_MAX_SHORT_SIDE_PX
+            or long > _SEKSJONERING_MAX_LONG_SIDE_PX)
 
 
-def _seksjonering_yolo_forkaster(boks, trekk, conf):
-    """Seksjonering-dokument: tabellcelle, ikke fnr-sladd.
+def _seksjonering_yolo_discards(box, features, conf):
+    """Seksjonering document: table cell, not an fnr sladd.
 
-    Speiler er_filtrert i utils/filter_felles.py med per-kilde-spec
-    «yolo:kmaks=40,lmaks=80,smin=6,rveto=0.98,cfritak=0.5». Geometrien
-    gjelder ubetinget; sifferkravet bare for bokser med sikkert lest tekst
-    (har_tokens, rec_min ≥ veto) under conf-fritaket. Se config.
+    Mirrors er_filtrert in utils/filter_common.py, per-kilde spec
+    "yolo:kmaks=40,lmaks=80,smin=6,rveto=0.98,cfritak=0.5". Geometry always
+    applies; the digit requirement only on confidently read text.
     """
-    if _seksjonering_geometri_forkaster(boks):
+    if _seksjonering_geometry_discards(box):
         return True
-    if not trekk or not trekk.get("har_tokens"):
+    if not features or not features.get("har_tokens"):
         return False
-    if conf is not None and conf >= SEKSJONERING_CONF_FRITAK:
+    if conf is not None and conf >= SEKSJONERING_CONF_EXEMPT:
         return False
-    rec = trekk.get("rec_min")
+    rec = features.get("rec_min")
     if rec is None or rec < SEKSJONERING_REC_VETO:
         return False
-    return (trekk.get("n_siffer") or 0) < SEKSJONERING_MIN_SIFFER
+    return (features.get("n_siffer") or 0) < SEKSJONERING_MIN_DIGITS
 
 
-def _seksjonering_paddle_forkaster(boks):
-    """Speiler «paddle:e=3,kmaks=40,lmaks=80» — kvadratiske/store celler."""
-    x0, y0, x1, y1 = boks[:4]
-    kort, lang = sorted((x1 - x0, y1 - y0))
-    if kort <= 0:
+def _seksjonering_paddle_discards(box):
+    """Mirrors "paddle:e=3,kmaks=40,lmaks=80": square or oversized cells."""
+    x0, y0, x1, y1 = box[:4]
+    short, long = sorted((x1 - x0, y1 - y0))
+    if short <= 0:
         return True
-    if lang / kort < SEKSJONERING_PADDLE_MIN_ELONG:
+    if long / short < SEKSJONERING_PADDLE_MIN_ELONG:
         return True
-    return _seksjonering_geometri_forkaster(boks)
+    return _seksjonering_geometry_discards(box)
 
 
-def _koordfam_forkaster(trekk, conf):
-    """Koordinat-dokument: tall uten fnr-bevis er koordinater, ikke fnr.
+def _koordfam_discards(features, conf):
+    """Coordinate document: a number without fnr evidence is a coordinate.
 
-    Speiler _ocr_grunn i utils/filter_felles.py med krev_fnr_kandidat=1,
-    avvis_desimal=1 og uten_tekst_conf=KOORDFAM_UTEN_TEKST_CONF, uten
-    veto/fritak. Gjelder KUN når dokumentets rettsstiftelsestyper treffer
-    KOORDFAM_KODER — globalt koster de samme reglene hundrevis av ekte fnr.
-    Bokser med lest tekst dømmes på tekstbevis; tokenløse bokser
-    (kart/grafikk) krever høy deteksjons-conf.
+    Mirrors _ocr_grunn in utils/filter_common.py (krev_fnr_kandidat,
+    avvis_desimal, uten_tekst_conf). Only when the document's
+    rettsstiftelsestyper hit KOORDFAM_CODES. Globally the same rules cost
+    hundreds of real fnr. Token-less boxes are map graphics with no text
+    evidence, so they need detection conf instead.
     """
-    if not trekk:
+    if not features:
         return False
-    har_tokens = trekk.get("har_tokens")
+    har_tokens = features.get("har_tokens")
     if har_tokens is None:
         return False
     if not har_tokens:
-        return conf is None or conf < KOORDFAM_UTEN_TEKST_CONF
-    if not trekk.get("har_fnr_kandidat"):
+        return conf is None or conf < KOORDFAM_NO_TEXT_CONF
+    if not features.get("har_fnr_kandidat"):
         return True
-    return bool(trekk.get("har_desimal_naer"))
+    return bool(features.get("har_desimal_naer"))
 
 
-def _paddle_vindu_forkaster(trekk):
-    """11-vinduet boksen ble bygget fra er en søm, ikke et fnr.
+def _paddle_window_discards(features):
+    """The 11-digit window the box was built from is a seam, not an fnr.
 
-    Speiler _ocr_grunn i utils/filter_felles.py med avvis_desimal_luke=1 og
-    maks_luke=VINDU_MAKS_LUKE. Kalles på ENDELIG kilde etter dedup: bokser
-    som ble «begge» underveis er yolo-bekreftet og fritas. Trekkene er
-    posisjonsbevisste allerede ved beregning (_vindu_trekk) — luker etter
-    siffer 2/4/6 teller ikke. Se config for tallgrunnlaget.
+    Mirrors _ocr_grunn in utils/filter_common.py (avvis_desimal_luke,
+    maks_luke). Final kilde after dedup: boxes that became "begge" are
+    YOLO-confirmed and spared. The features are already position-aware from
+    _window_features. Gaps after digit 2/4/6 do not count. See config.
     """
-    if not trekk:
+    if not features:
         return False
-    if VINDU_AVVIS_DESIMAL_LUKE and trekk.get("har_desimal_luke"):
+    if WINDOW_REJECT_DECIMAL_IN_GAP and features.get("har_desimal_luke"):
         return True
-    luke = trekk.get("maks_luke")
-    return luke is not None and luke >= VINDU_MAKS_LUKE
+    gap = features.get("maks_luke")
+    return gap is not None and gap >= WINDOW_MAX_GAP
 
 
-def _finn_bokser_kun_yolo(yolo_bokser):
-    bokser = []
-    for (x0, y0, x1, y1, conf) in yolo_bokser:
+def _find_boxes_only_yolo(yolo_boxes):
+    boxes = []
+    for (x0, y0, x1, y1, conf) in yolo_boxes:
         yb = (x0, y0, x1, y1)
-        if not er_for_liten(yb) and not er_for_smal_yolo(yb) and (
-                _hopp_over_geometrifilter(round(conf, 3), "yolo")
-                or (not har_feil_ratio(yb) and not er_for_tynn(yb)
-                    and not er_for_kort_yolo(yb))):
-            bokser.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
-    return [tuple(par) for par in bokser]
+        if not is_too_small(yb) and not is_too_narrow_yolo(yb) and (
+                _skip_over_geometry_filter(round(conf, 3), "yolo")
+                or (not has_wrong_ratio(yb) and not is_too_thin(yb)
+                    and not is_too_short_yolo(yb))):
+            boxes.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
+    return [tuple(pair) for pair in boxes]
 
 
-def _finn_bokser_med_kilde(tokens, yolo_bokser, koordfam=False,
-                           seksjonering=False, etterfilter=True):
-    """Slå sammen Paddle- og YOLO-bokser.
+def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
+                           seksjonering=False, postfilter=True):
+    """Merge Paddle and YOLO boxes.
 
-    En tom `yolo_bokser` gir ren Paddle-deteksjon — det er slik
-    elektronisk tinglyste dokumenter behandles.
+    An empty `yolo_boxes` gives pure Paddle detection. That is how
+    elektronisk tinglyste documents are handled.
 
-    Intern struktur per boks: [boks, kilde, yolo_conf, paddle_rec_score, trekk]
+    Internal per-box layout: [box, kilde, yolo_conf, paddle_rec_score, trekk]
     """
-    # Linjegrupperingen er den dyre delen. Den gjøres én gang per side og
-    # deles av både fnr-søket og trekk-beregningen for hver YOLO-boks.
-    linjer = bygg_linjer(tokens) if tokens else []
+    # Line grouping is the expensive part: done once per page and shared by
+    # the fnr search and the per-box feature computation.
+    lines = build_lines(tokens) if tokens else []
 
-    bokser = [[boks, "paddle", None, rec_score, vindu_trekk]
-              for (boks, _mod11, rec_score, vindu_trekk)
-              in finn_bokser_fra_tokens(tokens, linjer)]
+    boxes = [[box, "paddle", None, rec_score, window_features]
+              for (box, _mod11, rec_score, window_features)
+              in sladd_boxes_from_tokens(tokens, lines)]
 
-    for (x0, y0, x1, y1, conf) in yolo_bokser:
+    for (x0, y0, x1, y1, conf) in yolo_boxes:
         yb = (x0, y0, x1, y1)
-        dekket = [par for par in bokser if overlapp_andel_boks(yb, par[0]) > DEDUP_OVERLAPP]
-        # Bare Paddle-funn kan bekreftes til «begge». Tidligere ble også
-        # tidligere YOLO-bokser i listen omdøpt og fikk denne boksens
-        # konfidens — det kontaminerte «begge»-bøtta med rene YOLO-funn og
-        # skjulte dem for OCR-reglene (som kun gjelder kilde «yolo»).
-        paddle_dekket = [par for par in dekket if par[1] in ("paddle", "begge")]
-        if paddle_dekket:
-            for par in paddle_dekket:
-                par[1] = "begge"
-                par[2] = round(conf, 3)           # yolo_conf
-        elif dekket:
-            # Overlapper kun en tidligere YOLO-boks: duplikat — behold den
-            # første, uten omdøping.
+        covered = [pair for pair in boxes if overlap_share_box(yb, pair[0]) > DEDUP_OVERLAP]
+        # Only Paddle hits may be promoted to "begge". Renaming earlier YOLO
+        # boxes too contaminated the "begge" bucket with pure YOLO hits and
+        # hid them from the OCR rules, which only apply to kilde "yolo".
+        paddle_covered = [pair for pair in covered if pair[1] in ("paddle", "begge")]
+        if paddle_covered:
+            for pair in paddle_covered:
+                pair[1] = "begge"
+                pair[2] = round(conf, 3)           # yolo_conf
+        elif covered:
+            # Overlaps only an earlier YOLO box: duplicate, so keep the first.
             pass
-        elif kilde := _godta_yolo_boks(tokens, yb, conf):
-            # Trekkene beskriver hva snill_sjekk hadde å gå på, og skrives til
-            # resultat-CSV-en så strengere varianter kan feies uten ny kjøring.
-            # Se boks_trekk: «yolo» får tekst-trekkene — «yolo_vertikal»
-            # leser ikke tokens. Paddle/begge bærer i stedet VINDU-trekkene
-            # (maks_luke/har_desimal_luke) fra finn_bokser_fra_tokens.
-            trekk = trekk_for_boks(tokens, linjer, yb) if kilde == "yolo" else None
-            bokser.append([yb, kilde, round(conf, 3), None, trekk])
+        elif source := _accept_yolo_box(tokens, yb, conf):
+            # Features describe what lenient_check had to go on; they go to
+            # the result CSV so stricter variants can be swept without a
+            # rerun. Only "yolo" gets them: "yolo_vertikal" reads no tokens,
+            # and paddle/begge carry the window features instead.
+            features = features_for_box(tokens, lines, yb) if source == "yolo" else None
+            boxes.append([yb, source, round(conf, 3), None, features])
 
-    # ── Desimal- og linjebevis-reglene ──────────────────────────────────────────
-    # Etter dedup-løkken med vilje: kilden er endelig, så bokser som ble
-    # «begge» underveis beholder sladdingen sin.
-    # etterfilter=False hopper over BEGGE blokkene under (regler + geometri)
-    # — måler rå deteksjon+mod11+dedup, for å tallfeste hva hele regelverket
-    # bidrar med. YOLO_CONF og snill_sjekk (_godta_yolo_boks) gjelder
-    # fortsatt: de er modellens driftspunkt, ikke etterfiltre.
-    if etterfilter:
-        bokser = [par for par in bokser
-                  if not (par[1] == "yolo"
-                          and (_desimalregel_forkaster(par[4], par[2])
-                               or _linjebevis_forkaster(par[4], par[2])
+    # ── Decimal and line-evidence rules ────────────────────────────────────
+    # Deliberately after the dedup loop: the kilde is final, so boxes that
+    # became "begge" keep their sladding.
+    # postfilter=False skips BOTH blocks below (rules + geometry) to measure
+    # raw detection+mod11+dedup. YOLO_CONF and lenient_check still apply,
+    # they are the model's operating point, not postfilters.
+    if postfilter:
+        boxes = [pair for pair in boxes
+                  if not (pair[1] == "yolo"
+                          and (_decimal_rule_discards(pair[4], pair[2])
+                               or _line_evidence_discards(pair[4], pair[2])
                                or (koordfam
-                                   and _koordfam_forkaster(par[4], par[2]))
+                                   and _koordfam_discards(pair[4], pair[2]))
                                or (seksjonering
-                                   and _seksjonering_yolo_forkaster(
-                                       par[0], par[4], par[2]))))
-                  and not (par[1] == "paddle"
-                           and (_paddle_vindu_forkaster(par[4])
+                                   and _seksjonering_yolo_discards(
+                                       pair[0], pair[4], pair[2]))))
+                  and not (pair[1] == "paddle"
+                           and (_paddle_window_discards(pair[4])
                                 or (seksjonering
-                                    and _seksjonering_paddle_forkaster(
-                                        par[0]))))]
+                                    and _seksjonering_paddle_discards(
+                                        pair[0]))))]
 
-        # ── Dimensjonsfiltre ────────────────────────────────────
-        # Universelle grenser for alle kilder; kun høy yolo-konfidens
-        # fritar. I tillegg: kortsidekrav for «yolo» og full støyform for
-        # «paddle», som begge gjelder uansett konfidens, og langsidekrav
-        # for «yolo» bak conf-porten.
-        bokser = [par for par in bokser
-                  if not er_for_liten(par[0])
-                  and not (par[1] == "yolo" and er_for_smal_yolo(par[0]))
-                  and not (par[1] == "paddle" and har_paddle_stoyform(par[0]))
+        # ── Dimension filters ──────────────────────────────────
+        # Universal limits; only high yolo confidence exempts. On top: the
+        # short-side limit for "yolo" and the full noise shape for "paddle"
+        # apply at any confidence; the long-side limit for "yolo" sits behind
+        # the conf gate.
+        boxes = [pair for pair in boxes
+                  if not is_too_small(pair[0])
+                  and not (pair[1] == "yolo" and is_too_narrow_yolo(pair[0]))
+                  and not (pair[1] == "paddle" and has_paddle_noise_shape(pair[0]))
                   and (
-                      _hopp_over_geometrifilter(par[2], par[1])
-                      or (not har_feil_ratio(par[0]) and not er_for_tynn(par[0])
-                          and not (par[1] == "yolo"
-                                   and er_for_kort_yolo(par[0])))
+                      _skip_over_geometry_filter(pair[2], pair[1])
+                      or (not has_wrong_ratio(pair[0]) and not is_too_thin(pair[0])
+                          and not (pair[1] == "yolo"
+                                   and is_too_short_yolo(pair[0])))
                   )]
 
-    return [tuple(par) for par in bokser]
+    return [tuple(pair) for pair in boxes]
 
 
-def _godta_yolo_boks(tokens, boks, conf):
-    if er_vertikal(boks):
-        return "yolo_vertikal" if conf >= YOLO_CONF_VERTIKAL else None
-    if tokens_i_boks(tokens, boks):
-        return "yolo" if snill_sjekk(tokens, boks) else None
-    return "yolo" if conf >= YOLO_CONF_UTEN_TEKST else None
+def _accept_yolo_box(tokens, box, conf):
+    if is_vertical(box):
+        return "yolo_vertikal" if conf >= YOLO_CONF_VERTICAL else None
+    if tokens_in_box(tokens, box):
+        return "yolo" if lenient_check(tokens, box) else None
+    return "yolo" if conf >= YOLO_CONF_NO_TEXT else None
 
 
-def _bygg_side(si, storrelse, tokens, bokser_med_kilde, k, med_linjer):
-    w, h = storrelse
-    bokser = []
-    for boks, kilde, yolo_conf, paddle_rec_score, trekk in bokser_med_kilde:
-        x0, y0, x1, y1 = boks_tilbake(boks, k, w, h)
-        b = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": kilde}
+def _build_page(si, size, tokens, boxes_with_source, k, with_lines):
+    w, h = size
+    boxes = []
+    for box, source, yolo_conf, paddle_rec_score, features in boxes_with_source:
+        x0, y0, x1, y1 = unrotate_box(box, k, w, h)
+        b = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "kilde": source}
         if yolo_conf is not None:
             b["yolo_conf"] = yolo_conf
         if paddle_rec_score is not None:
             b["paddle_rec_score"] = paddle_rec_score
-        if trekk is not None:
-            b["trekk"] = trekk
-        bokser.append(b)
-    side = {"side": si, "bilde_bredde": w, "bilde_hoyde": h, "bokser": bokser}
-    if med_linjer:
-        side["linjer"] = ocr_linjer_fra_tokens(tokens)
-    return side
+        if features is not None:
+            b["trekk"] = features
+        boxes.append(b)
+    page = {"side": si, "bilde_bredde": w, "bilde_hoyde": h, "boxes": boxes}
+    if with_lines:
+        page["linjer"] = lines_with_fnr_marks(tokens)
+    return page
 
 
-def _sidegeometri(pdf_bytes):
-    """Sidestørrelser uten å rasterisere: (piksler ved PDF_DPI, punkt).
+def _page_geometry(pdf_bytes):
+    """Page sizes without rasterising: (pixels at PDF_DPI, points).
 
-    Pikselmålene må bli identiske med det get_pixmap(dpi=PDF_DPI) ville gitt,
-    siden de brukes som bilde_bredde/bilde_hoyde når renderingen hoppes over.
-    get_pixmap tar irect-en av siden skalert med zoom, så vi gjør det samme.
+    The pixel sizes must match get_pixmap(dpi=PDF_DPI), since they are used as
+    the image size when rendering is skipped: hence irect of page * zoom.
     """
     zoom = PDF_DPI / 72.0
     m = fitz.Matrix(zoom, zoom)
-    piksler, punkt = [], []
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as dok:
-        for side in dok:
-            r = side.rect
+    pixels, point = [], []
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            r = page.rect
             ir = (r * m).irect
-            piksler.append((ir.width, ir.height))
-            punkt.append((r.width, r.height))
-    return piksler, punkt
+            pixels.append((ir.width, ir.height))
+            point.append((r.width, r.height))
+    return pixels, point
 
 
-def _til_flat(sider, sidefelt):
+def _to_flat(pages, page_field):
     ut = []
-    for side in sider:
-        n = side["side"]
-        bb, bh = side.get("bilde_bredde"), side.get("bilde_hoyde")
-        if not bb or not bh or not (1 <= n <= len(sidefelt)):
+    for page in pages:
+        n = page["side"]
+        bb, bh = page.get("bilde_bredde"), page.get("bilde_hoyde")
+        if not bb or not bh or not (1 <= n <= len(page_field)):
             continue
-        pt_bredde, pt_hoyde = sidefelt[n - 1]
-        sx = pt_bredde / bb
-        sy = pt_hoyde / bh
-        for b in side.get("bokser", []):
+        pt_width, pt_height = page_field[n - 1]
+        sx = pt_width / bb
+        sy = pt_height / bh
+        for b in page.get("boxes", []):
             x0, x1 = sorted((b["x0"] * sx, b["x1"] * sx))
             y0, y1 = sorted((b["y0"] * sy, b["y1"] * sy))
             d = {"page": n, "x": x0, "y": y0,
@@ -341,150 +328,145 @@ def _til_flat(sider, sidefelt):
     return ut
 
 
-def run_model_on_pdf_bytes(pdf_bytes, skriv_tid=False, med_linjer=False, navn=None,
-                           elektronisk_tinglyst=False, kun_yolo=False,
-                           cache_mappe=None, yolo_cache_mappe=None,
-                           kun_cache=False, rettsstiftelsestyper=None,
-                           etterfilter=True):
-    """kun_cache=True: returner None i stedet for å kjøre modeller ved
-    cache-miss. Lar arbeiderprosesser uten GPU behandle cache-treff og
-    sende missene tilbake til en prosess som har modellene.
+def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=None,
+                           elektronisk_tinglyst=False, only_yolo=False,
+                           cache_dir=None, yolo_cache_dir=None,
+                           only_cache=False, rettsstiftelsestyper=None,
+                           postfilter=True):
+    """only_cache=True: return None instead of running the models on a cache
+    miss. Lets GPU-less worker processes handle cache hits and send the misses
+    back to a process that has the models.
 
-    rettsstiftelsestyper: dokumentets XX_YYY-koder fra grunnboken (liste av
-    strenger). Aktiverer regelprofiler per dokumenttype (KOORDFAM_KODER i
-    config). None/tom liste = dagens globale oppførsel, så manglende
-    metadata aldri kan koste recall."""
+    rettsstiftelsestyper: the document's XX_YYY codes from the grunnbok.
+    Enables per-document-type rule profiles (KOORDFAM_CODES in config).
+    None/empty = global behaviour, so missing metadata can never cost recall.
+    """
     t = {}
-    koder = {k.strip().upper() for k in (rettsstiftelsestyper or ()) if k}
-    koordfam = bool(KOORDFAM_KODER & koder)
-    seksjonering = bool(SEKSJONERING_KODER & koder)
-    bruker_yolo = kun_yolo or not elektronisk_tinglyst
-    yolo_cache = bool(yolo_cache_mappe and navn and bruker_yolo)
+    codes = {k.strip().upper() for k in (rettsstiftelsestyper or ()) if k}
+    koordfam = bool(KOORDFAM_CODES & codes)
+    seksjonering = bool(SEKSJONERING_CODES & codes)
+    uses_yolo = only_yolo or not elektronisk_tinglyst
+    yolo_cache = bool(yolo_cache_dir and name and uses_yolo)
 
-    with _ta_tid(t, "render"):
-        sidemaal, sidefelt = _sidegeometri(pdf_bytes)
-    n_sider = len(sidemaal)
+    with _take_time(t, "render"):
+        page_target, page_field = _page_geometry(pdf_bytes)
+    n_pages = len(page_target)
 
-    # ── Forsøk å laste OCR-resultater fra cache ─────────────────
-    # Rotasjonene er verdt å hente selv med --kun-yolo: de kommer fra
-    # orienteringsmodellen, ikke fra tekstgjenkjenningen, og YOLO kjører på
-    # det orienteringskorrigerte bildet. Uten dem måtte --kun-yolo rendre og
-    # orientere hvert dokument på nytt selv med full YOLO-cache.
-    rotasjoner, tokens_per_side = None, None
-    ocr_treff = rot_treff = False
-    if cache_mappe and navn:
-        cachet = les_ocr_cache(cache_mappe, navn)
-        if cachet is not None and len(cachet[0]) == n_sider:
-            rotasjoner = cachet[0]
-            rot_treff = True
-            if not kun_yolo:
-                tokens_per_side = cachet[1]
-                ocr_treff = True
+    # The rotations are worth fetching even with --only-yolo: YOLO runs on the
+    # orientation-corrected image, so without them --only-yolo would re-render
+    # and re-orient every document even with a full YOLO cache.
+    rotations, tokens_per_page = None, None
+    ocr_hit = root_hit = False
+    if cache_dir and name:
+        cached = read_ocr_cache(cache_dir, name)
+        if cached is not None and len(cached[0]) == n_pages:
+            rotations = cached[0]
+            root_hit = True
+            if not only_yolo:
+                tokens_per_page = cached[1]
+                ocr_hit = True
 
-    # ── Forsøk å laste YOLO-bokser fra cache ────────────────────
-    # YOLO kjører på det orienteringskorrigerte bildet, så oppslaget krever
-    # rotasjonene. Har vi dem fra cache før render, kan rasteriseringen
-    # hoppes over helt; ellers må orienteringssteget kjøre først.
-    yolo_bokser_per_side = None
-    if yolo_cache and rot_treff:
-        yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
+    # The lookup needs the rotations. Having them before render lets us skip
+    # rasterising entirely; otherwise orientation must run first.
+    yolo_boxes_per_page = None
+    if yolo_cache and root_hit:
+        yolo_boxes_per_page = read_yolo_cache(yolo_cache_dir, name, rotations)
 
-    # ── Rendre bare når noe faktisk trenger piksler ─────────────
-    # Treff i begge cachene betyr at ingenting leser bildene: sidemålene over
-    # dekker det _bygg_side trenger. Med --kun-yolo trengs ikke tokens, så
-    # rotasjoner + YOLO fra cache er nok.
-    mangler_ocr = not ocr_treff and not kun_yolo
-    trenger_piksler = (mangler_ocr or not rot_treff
-                       or (bruker_yolo and yolo_bokser_per_side is None))
-    bilder = bilder_ocr = None
+    # Hits in both caches mean nothing reads the images: the page sizes above
+    # cover what _build_page needs. With --only-yolo, rotations + YOLO is
+    # enough.
+    missing_ocr = not ocr_hit and not only_yolo
+    needs_pixels = (missing_ocr or not root_hit
+                       or (uses_yolo and yolo_boxes_per_page is None))
+    images = images_ocr = None
 
-    if trenger_piksler:
-        if kun_cache:
+    if needs_pixels:
+        if only_cache:
             return None
-        with _ta_tid(t, "render"):
-            bilder = list(les_sider_fra_bytes(pdf_bytes))
+        with _take_time(t, "render"):
+            images = list(read_pages_from_bytes(pdf_bytes))
 
-        if not rot_treff:
-            with _ta_tid(t, "orientering"):
-                # Batch: ett modellkall for hele dokumentet. Per side ble
-                # GPU-en startet og stoppet én gang per side.
-                rotasjoner = finn_rotasjoner_batch(bilder)
+        if not root_hit:
+            with _take_time(t, "orientation"):
+                # One model call for the whole document; per page the GPU was
+                # spun up and down once per page.
+                rotations = find_rotations_batch(images)
 
-        bilder_ocr = [np.rot90(b, k) if k else b for b, k in zip(bilder, rotasjoner)]
+        images_ocr = [np.rot90(b, k) if k else b for b, k in zip(images, rotations)]
 
-        if not ocr_treff and not kun_yolo:
-            with _ta_tid(t, "ocr"):
-                tokens_per_side = les_tokens_batched(bilder_ocr)
-            # Lagre til cache for fremtidige kjøringer
-            if cache_mappe and navn:
-                skriv_ocr_cache(cache_mappe, navn, rotasjoner, tokens_per_side)
+        if not ocr_hit and not only_yolo:
+            with _take_time(t, "ocr"):
+                tokens_per_page = read_tokens_batched(images_ocr)
+            # Cache for future runs
+            if cache_dir and name:
+                write_ocr_cache(cache_dir, name, rotations, tokens_per_page)
 
-    if tokens_per_side is None:
-        tokens_per_side = [[] for _ in range(n_sider)]
+    if tokens_per_page is None:
+        tokens_per_page = [[] for _ in range(n_pages)]
 
-    # Uten treff ble rotasjonene kjent først nå, etter orienteringssteget
-    if yolo_cache and not rot_treff:
-        yolo_bokser_per_side = les_yolo_cache(yolo_cache_mappe, navn, rotasjoner)
+    # On a miss the rotations only became known now, after orientation
+    if yolo_cache and not root_hit:
+        yolo_boxes_per_page = read_yolo_cache(yolo_cache_dir, name, rotations)
 
-    yolo_treff = yolo_bokser_per_side is not None
-    # Rå bokser å skrive til cache etterpå (kun når vi faktisk kjørte modellen)
-    nye_yolo_bokser = [] if (yolo_cache and not yolo_treff) else None
+    yolo_hit = yolo_boxes_per_page is not None
+    # Raw boxes to cache afterwards (only when we actually ran the model)
+    new_yolo_boxes = [] if (yolo_cache and not yolo_hit) else None
 
-    sider = []
-    for si in range(n_sider):
-        k = rotasjoner[si]
-        tokens = tokens_per_side[si]
+    pages = []
+    for si in range(n_pages):
+        k = rotations[si]
+        tokens = tokens_per_page[si]
 
-        with _ta_tid(t, "yolo+match"):
-            if not bruker_yolo:
-                yolo_bokser = []
-            elif yolo_treff:
-                yolo_bokser = yolo_bokser_per_side[si]
+        with _take_time(t, "yolo+match"):
+            if not uses_yolo:
+                yolo_boxes = []
+            elif yolo_hit:
+                yolo_boxes = yolo_boxes_per_page[si]
             else:
-                bilde_yolo = bilder_ocr[si]
-                # Med cache predikerer vi ned til gulvet og filtrerer selv, slik
-                # at cachen dekker senere endringer i YOLO_CONF. Boksene som
-                # overlever filteret er de samme som en predict på YOLO_CONF gir.
-                raa = finn_yolo_bokser(
-                    bilde_yolo, conf=YOLO_CACHE_CONF_GULV if yolo_cache else None)
-                if nye_yolo_bokser is not None:
-                    nye_yolo_bokser.append(raa)
-                yolo_bokser = [b for b in raa if b[4] >= YOLO_CONF] if yolo_cache else raa
+                image_yolo = images_ocr[si]
+                # With a cache we predict down to the floor and filter here, so
+                # the cache survives later YOLO_CONF changes. The survivors are
+                # the same boxes a predict at YOLO_CONF would give.
+                raw = find_yolo_boxes(
+                    image_yolo, conf=YOLO_CACHE_CONF_FLOOR if yolo_cache else None)
+                if new_yolo_boxes is not None:
+                    new_yolo_boxes.append(raw)
+                yolo_boxes = [b for b in raw if b[4] >= YOLO_CONF] if yolo_cache else raw
 
-            if kun_yolo:
-                bokser_med_kilde = _finn_bokser_kun_yolo(yolo_bokser)
+            if only_yolo:
+                boxes_with_source = _find_boxes_only_yolo(yolo_boxes)
             else:
-                bokser_med_kilde = _finn_bokser_med_kilde(
-                    tokens, yolo_bokser, koordfam=koordfam,
-                    seksjonering=seksjonering, etterfilter=etterfilter)
+                boxes_with_source = _find_boxes_with_source(
+                    tokens, yolo_boxes, koordfam=koordfam,
+                    seksjonering=seksjonering, postfilter=postfilter)
 
-        with _ta_tid(t, "etterbehandling"):
-            sider.append(_bygg_side(si + 1, sidemaal[si], tokens, bokser_med_kilde,
-                                    k, med_linjer))
+        with _take_time(t, "postprocessing"):
+            pages.append(_build_page(si + 1, page_target[si], tokens, boxes_with_source,
+                                    k, with_lines))
 
-    if nye_yolo_bokser is not None and len(nye_yolo_bokser) == n_sider:
-        skriv_yolo_cache(yolo_cache_mappe, navn, rotasjoner, nye_yolo_bokser)
+    if new_yolo_boxes is not None and len(new_yolo_boxes) == n_pages:
+        write_yolo_cache(yolo_cache_dir, name, rotations, new_yolo_boxes)
 
-    if skriv_tid:
-        _skriv_tid(t, len(sider), navn, ocr_treff, yolo_treff)
+    if write_time:
+        _write_time(t, len(pages), name, ocr_hit, yolo_hit)
 
-    return _til_flat(sider, sidefelt)
+    return _to_flat(pages, page_field)
 
 
-def _skriv_tid(t, n_sider, navn=None, ocr_treff=False, yolo_treff=False):
-    poster = ["render", "orientering", "ocr", "yolo+match", "etterbehandling"]
-    total = sum(t.get(p, 0.0) for p in poster)
+def _write_time(t, n_pages, name=None, ocr_hit=False, yolo_hit=False):
+    entries = ["render", "orientation", "ocr", "yolo+match", "postprocessing"]
+    total = sum(t.get(p, 0.0) for p in entries)
 
-    label = f"Timing [{navn}]:" if navn else "Timing:"
-    fra_cache = [n for n, treff in (("OCR", ocr_treff), ("YOLO", yolo_treff)) if treff]
-    if fra_cache:
-        label += f" ({' + '.join(fra_cache)} fra cache)"
+    label = f"Timing [{name}]:" if name else "Timing:"
+    from_cache = [n for n, hit in (("OCR", ocr_hit), ("YOLO", yolo_hit)) if hit]
+    if from_cache:
+        label += f" ({' + '.join(from_cache)} from cache)"
     print(label)
-    for post in poster:
-        sek = t.get(post, 0.0)
-        pct = (sek / total * 100) if total else 0.0
-        print(f"  {post:<18}{sek:9.3f} s{pct:7.1f}%")
+    for post in entries:
+        sec = t.get(post, 0.0)
+        pct = (sec / total * 100) if total else 0.0
+        print(f"  {post:<18}{sec:9.3f} s{pct:7.1f}%")
     print(f"  {'Total':<18}{total:9.3f} s")
-    print(f"  {'Sider totalt':<18}{n_sider:9d}")
-    if n_sider:
-        print(f"  {'Per side':<18}{total / n_sider:9.3f} s")
+    print(f"  {'Pages total':<18}{n_pages:9d}")
+    if n_pages:
+        print(f"  {'Per page':<18}{total / n_pages:9.3f} s")

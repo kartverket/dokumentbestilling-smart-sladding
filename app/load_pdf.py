@@ -4,21 +4,21 @@ import numpy as np
 from config import PDF_DPI
 
 
-def _render(dokument):
-    sider = []
-    for side in dokument:
-        pix = side.get_pixmap(dpi=PDF_DPI)
+def _render(document):
+    pages = []
+    for page in document:
+        pix = page.get_pixmap(dpi=PDF_DPI)
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
         if pix.n == 4:  
             img = img[:, :, :3]
-        sider.append(img.copy())  
-    dokument.close()
-    return sider
+        pages.append(img.copy())  
+    document.close()
+    return pages
 
 
-def les_sider(sti):
-    return _render(fitz.open(sti))
+def read_pages(path):
+    return _render(fitz.open(path))
 
 
-def les_sider_fra_bytes(pdf_bytes):
+def read_pages_from_bytes(pdf_bytes):
     return _render(fitz.open(stream=pdf_bytes, filetype="pdf"))

@@ -1,120 +1,94 @@
 """
-Cache for PaddleOCR-tokens og orienteringsresultater per dokument.
+Cache for PaddleOCR tokens and orientation results per document, so expensive
+GPU work is skipped when the same document turns up in a new run.
 
-Lagrer OCR-resultater per dokument slik at dyre GPU-operasjoner kan
-hoppes over når samme dokument dukker opp i en ny kjøring.
+One file per document, keyed by document name (fil_revisjon_id), under one
+folder per uttrekk: /data2/cache/uttrekk_4/ocr/123456789.json
 
-Cache-nøkkel: dokumentnavn (fil_revisjon_id).
-Struktur: én cache-mappe per uttrekk, utledet automatisk fra --mappe:
-    /data2/cache/uttrekk_4/ocr/123456789.json
-    /data2/cache/uttrekk_5/ocr/345678901.json
-
-Invalidering: OCR-modellversjon + DPI lagres i hver fil og sjekkes
-              ved oppslag. Ved endring misser alle oppslag automatisk.
-
-Filformat per dokument:
-    {cache_mappe}/{doc_id}.json
-    {
-      "versjon": 2,
-      "ocr_modell": "v6",
-      "dpi": 300,
-      "sider": [
-        {
-          "side": 1,
-          "rotasjon": 0,
-          "tokens": [
-            {"tekst": "ord", "x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0, "rec_score": 0.95},
-            ...
-          ]
-        }
-      ]
-    }
+Invalidation: OCR model version + DPI are stored in each file and checked on
+lookup, so a change misses every entry automatically. See write_cache for the
+file layout.
 """
 
 import json
 import os
 from collections import namedtuple
 
-from config import MODELL_SETT, PDF_DPI
+from config import PADDLE_MODEL_SET, PDF_DPI
 
-# Identisk med Token i paddle_ocr_model_fnr.py — definert her separat
-# for å unngå å importere PaddleOCR bare for å lese cache.
-Token = namedtuple("Token", ["tekst", "x0", "y0", "x1", "y1", "rec_score"])
+# Identical to Token in paddle_ocr_model_fnr.py, duplicated here to avoid
+# importing PaddleOCR just to read the cache.
+Token = namedtuple("Token", ["text", "x0", "y0", "x1", "y1", "rec_score"])
 
-CACHE_VERSJON = 2
-
-
-def _cache_sti(cache_mappe, doc_navn):
-    doc_id = os.path.splitext(os.path.basename(doc_navn))[0]
-    return os.path.join(cache_mappe, f"{doc_id}.json")
+CACHE_VERSION = 2
 
 
-def les_cache(cache_mappe, doc_navn):
-    """Les cachet OCR-resultat for et dokument.
+def _cache_path(cache_dir, doc_name):
+    doc_id = os.path.splitext(os.path.basename(doc_name))[0]
+    return os.path.join(cache_dir, f"{doc_id}.json")
 
-    Returnerer (rotasjoner, tokens_per_side) hvis cachen finnes og er gyldig,
-    ellers None.
-    """
-    sti = _cache_sti(cache_mappe, doc_navn)
-    if not os.path.isfile(sti):
+
+def read_cache(cache_dir, doc_name):
+    """Cached OCR result for a document, or None if missing or invalid."""
+    path = _cache_path(cache_dir, doc_name)
+    if not os.path.isfile(path):
         return None
 
     try:
-        with open(sti, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
 
-    # Sjekk at forutsetningene stemmer
-    if data.get("versjon") != CACHE_VERSJON:
+    if data.get("version") != CACHE_VERSION:
         return None
-    if data.get("ocr_modell") != MODELL_SETT:
+    if data.get("ocr_model") != PADDLE_MODEL_SET:
         return None
     if data.get("dpi") != PDF_DPI:
         return None
 
-    rotasjoner = []
-    tokens_per_side = []
-    for side in data["sider"]:
-        rotasjoner.append(side["rotasjon"])
+    rotations = []
+    tokens_per_page = []
+    for page in data["pages"]:
+        rotations.append(page["rotation"])
         tokens = [
-            Token(t["tekst"], t["x0"], t["y0"], t["x1"], t["y1"], t.get("rec_score"))
-            for t in side["tokens"]
+            Token(t["text"], t["x0"], t["y0"], t["x1"], t["y1"], t.get("rec_score"))
+            for t in page["tokens"]
         ]
-        tokens_per_side.append(tokens)
+        tokens_per_page.append(tokens)
 
-    return rotasjoner, tokens_per_side
+    return rotations, tokens_per_page
 
 
-def skriv_cache(cache_mappe, doc_navn, rotasjoner, tokens_per_side):
-    """Lagre OCR-resultat for et dokument til cache."""
-    os.makedirs(cache_mappe, exist_ok=True)
-    sti = _cache_sti(cache_mappe, doc_navn)
+def write_cache(cache_dir, doc_name, rotations, tokens_per_page):
+    """Write a document's OCR result to the cache."""
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _cache_path(cache_dir, doc_name)
 
-    sider = []
-    for si, (rot, tokens) in enumerate(zip(rotasjoner, tokens_per_side), start=1):
-        sider.append({
-            "side": si,
-            "rotasjon": rot,
+    pages = []
+    for si, (rot, tokens) in enumerate(zip(rotations, tokens_per_page), start=1):
+        pages.append({
+            "page": si,
+            "rotation": rot,
             "tokens": [
-                {"tekst": t.tekst, "x0": t.x0, "y0": t.y0, "x1": t.x1, "y1": t.y1,
+                {"text": t.text, "x0": t.x0, "y0": t.y0, "x1": t.x1, "y1": t.y1,
                  "rec_score": t.rec_score}
                 for t in tokens
             ],
         })
 
     data = {
-        "versjon": CACHE_VERSJON,
-        "ocr_modell": MODELL_SETT,
+        "version": CACHE_VERSION,
+        "ocr_model": PADDLE_MODEL_SET,
         "dpi": PDF_DPI,
-        "sider": sider,
+        "pages": pages,
     }
 
-    # Skriv til temp-fil først for å unngå korrupte filer ved avbrudd
-    tmp = sti + ".tmp"
+    # Write to a temp file first so an interrupt cannot leave a corrupt file
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, sti)
+    os.replace(tmp, path)
 
 
 

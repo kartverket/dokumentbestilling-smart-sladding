@@ -7,11 +7,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI
 from utils_config import (
-    BOM_FARGE, KORREKT_PADDLE_FARGE, KORREKT_YOLO_FARGE, KORREKT_BEGGE_FARGE,
-    OVERSLADD_PADDLE_FARGE, OVERSLADD_YOLO_FARGE, OVERSLADD_BEGGE_FARGE, UKJENT_FARGE
+    MISSED_TRUTH_COLOR, CORRECT_PADDLE_COLOR, CORRECT_YOLO_COLOR, CORRECT_BOTH_COLOR,
+    OVERSLADD_PADDLE_COLOR, OVERSLADD_YOLO_COLOR, OVERSLADD_BOTH_COLOR, UNKNOWN_COLOR
 )
 
-SKALA = PDF_DPI / 72.0           # PDF-punkt -> piksel
+SCALE = PDF_DPI / 72.0           # PDF points -> pixels
 
 _CONF_FONT = None
 
@@ -23,38 +23,38 @@ def _conf_font():
     return _CONF_FONT
 
 
-def _tegn_conf(tegner, r, conf, farge):
+def _draw_conf(drawer, r, conf, color):
     if conf is None:
         return
-    tegner.text((r[0] + 2, max(r[1] + 2, 2)), f"{conf:.2f}",
-                fill=farge, font=_conf_font())
+    drawer.text((r[0] + 2, max(r[1] + 2, 2)), f"{conf:.2f}",
+                fill=color, font=_conf_font())
 
 
-def _dok_nr(navn):
-    m = re.match(r"0*(\d+)", os.path.basename(navn))
+def _doc_no(name):
+    m = re.match(r"0*(\d+)", os.path.basename(name))
     return int(m.group(1)) if m else None
 
 
-def _fasit_piksler(boks, ph_px, y_origin):
-    x, y, w, h = boks
+def _fasit_pixels(box, ph_px, y_origin):
+    x, y, w, h = box
     x0, x1 = sorted((x, x + w))
     y0, y1 = sorted((y, y + h))
-    if y_origin == "bunn":
-        ph_pt = ph_px / SKALA
+    if y_origin == "bottom":
+        ph_pt = ph_px / SCALE
         y0, y1 = ph_pt - max(y, y + h), ph_pt - min(y, y + h)
-    return [x0 * SKALA, y0 * SKALA, x1 * SKALA, y1 * SKALA]
+    return [x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE]
 
 
-def _render_side(side):
-    pix = side.get_pixmap(dpi=PDF_DPI)
-    modus = "RGBA" if pix.n == 4 else "RGB"
-    return Image.frombytes(modus, (pix.w, pix.h), pix.samples).convert("RGB")
+def _render_page(page):
+    pix = page.get_pixmap(dpi=PDF_DPI)
+    mode = "RGBA" if pix.n == 4 else "RGB"
+    return Image.frombytes(mode, (pix.w, pix.h), pix.samples).convert("RGB")
 
 
-def _er_oversladd(boks, oversladd_liste):
-    """Sjekk om en boks finnes i over-sladding-lista (sammenlign koordinater)."""
-    x0, y0, x1, y1 = boks[:4]
-    for ob in oversladd_liste:
+def _is_oversladd(box, oversladd_list):
+    """Whether the box appears in the oversladding list (by coordinates)."""
+    x0, y0, x1, y1 = box[:4]
+    for ob in oversladd_list:
         ox0, oy0, ox1, oy1 = ob[:4]
         if abs(x0 - ox0) < 0.5 and abs(y0 - oy0) < 0.5 and \
            abs(x1 - ox1) < 0.5 and abs(y1 - oy1) < 0.5:
@@ -62,119 +62,117 @@ def _er_oversladd(boks, oversladd_liste):
     return False
 
 
-def _velg_farge(kilde, er_over):
-    """Velg farge basert paa kilde og om boksen er over-sladding."""
-    if kilde not in ("paddle", "yolo", "begge"):
-        return UKJENT_FARGE
+def _select_color(source, er_over):
+    """Colour by kilde and by whether the box is oversladding."""
+    if source not in ("paddle", "yolo", "begge"):
+        return UNKNOWN_COLOR
     if er_over:
-        if kilde == "paddle":
-            return OVERSLADD_PADDLE_FARGE
-        if kilde == "yolo":
-            return OVERSLADD_YOLO_FARGE
-        return OVERSLADD_BEGGE_FARGE
+        if source == "paddle":
+            return OVERSLADD_PADDLE_COLOR
+        if source == "yolo":
+            return OVERSLADD_YOLO_COLOR
+        return OVERSLADD_BOTH_COLOR
     else:
-        if kilde == "paddle":
-            return KORREKT_PADDLE_FARGE
-        if kilde == "yolo":
-            return KORREKT_YOLO_FARGE
-        return KORREKT_BEGGE_FARGE
+        if source == "paddle":
+            return CORRECT_PADDLE_COLOR
+        if source == "yolo":
+            return CORRECT_YOLO_COLOR
+        return CORRECT_BOTH_COLOR
 
 
-def _sider_aa_tegne(sladd_bokser, ground_truth, mappe):
-    per_fil = {}
-    for (navn, si) in sladd_bokser:
-        per_fil.setdefault(navn, set()).add(si)
+def _pages_to_draw(sladd_boxes, ground_truth, folder):
+    per_file = {}
+    for (name, si) in sladd_boxes:
+        per_file.setdefault(name, set()).add(si)
 
     if ground_truth:
-        nr_til_navn = {}
-        for navn in per_fil:
-            nr_til_navn.setdefault(_dok_nr(navn), navn)
+        no_to_name = {}
+        for name in per_file:
+            no_to_name.setdefault(_doc_no(name), name)
         for (nr, si) in ground_truth:
-            navn = nr_til_navn.get(nr)
-            if navn:
-                per_fil.setdefault(navn, set()).add(si)
+            name = no_to_name.get(nr)
+            if name:
+                per_file.setdefault(name, set()).add(si)
 
-    return {navn: sorted(sider) for navn, sider in per_fil.items()}
+    return {name: sorted(pages) for name, pages in per_file.items()}
 
 
-def tegn_og_lagre(sladd_bokser, ground_truth, mappe, ut_mappe, y_origin="topp",
-                  skriv_logg=True, rydd=True, yolo_bokser=None, kilder=None,
-                  oversladd_bokser=None, bom_indekser=None):
-    os.makedirs(ut_mappe, exist_ok=True)
-    if rydd:
-        for png in glob.glob(os.path.join(ut_mappe, "*.png")):
+def draw_and_save(sladd_boxes, ground_truth, folder, out_dir, y_origin="top",
+                  write_log=True, clean=True, yolo_boxes=None, sources=None,
+                  oversladd_boxes=None, miss_indices=None):
+    os.makedirs(out_dir, exist_ok=True)
+    if clean:
+        for png in glob.glob(os.path.join(out_dir, "*.png")):
             os.remove(png)
 
-    per_fil = _sider_aa_tegne(sladd_bokser, ground_truth, mappe)
+    per_file = _pages_to_draw(sladd_boxes, ground_truth, folder)
 
-    for navn in sorted(per_fil):
-        nr = _dok_nr(navn)
+    for name in sorted(per_file):
+        nr = _doc_no(name)
         try:
-            d = fitz.open(os.path.join(mappe, navn))
+            d = fitz.open(os.path.join(folder, name))
         except Exception as e:
-            print(f"   {navn}: kunne ikke aapnes ({e!r})")
+            print(f"   {name}: could not be opened ({e!r})")
             continue
-        n_sider_tegnet = 0
-        n_med_funn = 0
-        for si in per_fil[navn]:
+        n_pages_drawn = 0
+        n_with_funn = 0
+        for si in per_file[name]:
             if not 1 <= si <= len(d):
                 continue
-            bilde = _render_side(d[si - 1])
-            base = bilde.convert("RGBA")
+            image = _render_page(d[si - 1])
+            base = image.convert("RGBA")
             overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            tegner = ImageDraw.Draw(overlay)
+            drawer = ImageDraw.Draw(overlay)
 
-            bw, bh, funnet = sladd_bokser.get((navn, si), (bilde.width, bilde.height, []))
-            sx, sy = bilde.width / bw, bilde.height / bh
+            bw, bh, found = sladd_boxes.get((name, si), (image.width, image.height, []))
+            sx, sy = image.width / bw, image.height / bh
 
-            # Hent over-sladding-liste for denne siden (om tilgjengelig)
-            over_liste = []
-            if oversladd_bokser and (navn, si) in oversladd_bokser:
-                _, _, over_liste = oversladd_bokser[(navn, si)]
+            over_names = []
+            if oversladd_boxes and (name, si) in oversladd_boxes:
+                _, _, over_names = oversladd_boxes[(name, si)]
 
-            # 1) Tegn prediksjons-bokser (kun outline, ingen fyll)
-            if kilder and (navn, si) in kilder:
-                _, _, med_kilde = kilder[(navn, si)]
-                for boks in med_kilde:
-                    x0, y0, x1, y1 = boks[:4]
-                    kilde_val = boks[4] if len(boks) > 4 else "paddle"
-                    conf = boks[5] if len(boks) > 5 else None
+            # 1) Prediction boxes, outline only
+            if sources and (name, si) in sources:
+                _, _, with_source = sources[(name, si)]
+                for box in with_source:
+                    x0, y0, x1, y1 = box[:4]
+                    source_choice = box[4] if len(box) > 4 else "paddle"
+                    conf = box[5] if len(box) > 5 else None
                     r = [x0 * sx, y0 * sy, x1 * sx, y1 * sy]
 
-                    er_over = _er_oversladd(boks, over_liste) if over_liste else False
-                    farge = _velg_farge(kilde_val, er_over)
-                    tegner.rectangle(r, outline=farge, width=3)
-                    if kilde_val in ("yolo", "begge"):
-                        _tegn_conf(tegner, r, conf, farge)
+                    er_over = _is_oversladd(box, over_names) if over_names else False
+                    color = _select_color(source_choice, er_over)
+                    drawer.rectangle(r, outline=color, width=3)
+                    if source_choice in ("yolo", "begge"):
+                        _draw_conf(drawer, r, conf, color)
 
-            # 2) YOLO kjort live (--yolo): egne rammer med conf
-            if yolo_bokser and (navn, si) in yolo_bokser:
-                yw, yh, yolo_f = yolo_bokser[(navn, si)]
-                ysx, ysy = bilde.width / yw, bilde.height / yh
-                for boks in yolo_f:
-                    x0, y0, x1, y1 = boks[:4]
+            # 2) YOLO run live (--yolo): its own frames, with conf
+            if yolo_boxes and (name, si) in yolo_boxes:
+                yw, yh, yolo_f = yolo_boxes[(name, si)]
+                ysx, ysy = image.width / yw, image.height / yh
+                for box in yolo_f:
+                    x0, y0, x1, y1 = box[:4]
                     r = [x0 * ysx, y0 * ysy, x1 * ysx, y1 * ysy]
-                    tegner.rectangle(r, outline=KORREKT_YOLO_FARGE, width=3)
-                    _tegn_conf(tegner, r, boks[4] if len(boks) > 4 else None,
-                               KORREKT_YOLO_FARGE)
+                    drawer.rectangle(r, outline=CORRECT_YOLO_COLOR, width=3)
+                    _draw_conf(drawer, r, box[4] if len(box) > 4 else None,
+                               CORRECT_YOLO_COLOR)
 
-            # 3) Fasit: vis kun bommede bokser (roed)
+            # 3) Truth: only the missed boxes (red)
             if ground_truth:
                 for fi, (x, y, w, h, _t) in enumerate(ground_truth.get((nr, si), [])):
-                    if bom_indekser is None or (nr, si, fi) in bom_indekser:
-                        tegner.rectangle(
-                            _fasit_piksler((x, y, w, h), bilde.height, y_origin),
-                            outline=BOM_FARGE, width=3)
+                    if miss_indices is None or (nr, si, fi) in miss_indices:
+                        drawer.rectangle(
+                            _fasit_pixels((x, y, w, h), image.height, y_origin),
+                            outline=MISSED_TRUTH_COLOR, width=3)
 
-            # Komponer overlay med 0.8 opacity paa base
-            bilde = Image.alpha_composite(base, overlay).convert("RGB")
+            image = Image.alpha_composite(base, overlay).convert("RGB")
 
-            ut = os.path.join(ut_mappe, f"{os.path.splitext(navn)[0]}_side{si}.png")
-            bilde.save(ut)
-            n_sider_tegnet += 1
-            if funnet:
-                n_med_funn += 1
+            ut = os.path.join(out_dir, f"{os.path.splitext(name)[0]}_side{si}.png")
+            image.save(ut)
+            n_pages_drawn += 1
+            if found:
+                n_with_funn += 1
 
-        if skriv_logg:
-            print(f"  PNG: {navn} — {n_sider_tegnet} sider, {n_med_funn} med deteksjoner")
+        if write_log:
+            print(f"  PNG: {name}, {n_pages_drawn} pages, {n_with_funn} with detections")
         d.close()

@@ -5,18 +5,18 @@ from collections import defaultdict
 
 import fitz
 
-from save_result import lagre_resultat
+from save_result import write_result_files
 
 
-def _dok_nr(navn):
-    m = re.match(r"0*(\d+)", os.path.basename(navn))
+def _doc_no(name):
+    m = re.match(r"0*(\d+)", os.path.basename(name))
     return int(m.group(1)) if m else None
 
 
 def _norm_csv(x, y, w, h, pw, ph, y_origin):
     x0, x1 = sorted((x, x + w))
     y0, y1 = sorted((y, y + h))
-    if y_origin == "bunn":
+    if y_origin == "bottom":
         y0, y1 = ph - y1, ph - y0
     return (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
 
@@ -27,186 +27,183 @@ def _overlap(a, b):
     return (ix1 - ix0) * (iy1 - iy0) if (ix1 > ix0 and iy1 > iy0) else 0.0
 
 
-def _areal(a):
+def _area(a):
     return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
 
 
-def _sidestr(navn, si, mappe, sladd_bokser):
-    fil = os.path.join(mappe, navn)
-    if fil.lower().endswith(".pdf"):
+def _page_str(name, si, folder, sladd_boxes):
+    file = os.path.join(folder, name)
+    if file.lower().endswith(".pdf"):
         try:
-            d = fitz.open(fil)
+            d = fitz.open(file)
             r = d[si - 1].rect
             d.close()
             return r.width, r.height
         except Exception:
             pass
-    iw, ih, _ = sladd_bokser[(navn, si)]
+    iw, ih, _ = sladd_boxes[(name, si)]
     return iw, ih
 
-def mal_overlapp(sladd_bokser, fasit, mappe, terskel=0.32, y_origin="topp", kilder=None,
-                 yolo_bokser=None, skriv=None, diagnostikk=True):
-    """Mål sladde-bokser mot fasit.
+def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin="top", sources=None,
+                 yolo_boxes=None, write=None, diagnostics=True):
+    """Measures sladd boxes against the truth labels.
 
-    skriv        — funksjon som tar imot rapportlinjene (samme signatur som print).
-                   Default er print. Flere tråder kan kalle samtidig ved å gi hver
-                   sin egen samler; redirect_stdout ville byttet global sys.stdout.
-    diagnostikk  — skriv ID-diagnostikken når ingen fasit-bokser ble funnet. Den er
-                   bare meningsfull for hele kjøringen: for ett enkelt dokument
-                   betyr «ingen fasit» som regel bare at dokumentet er ulabelt.
+    write        receives the report lines (same signature as print). Threads can
+                   call concurrently by each passing its own collector;
+                   redirect_stdout would swap the global sys.stdout.
+    diagnostics  prints the ID diagnostics when no truth boxes were found. Only
+                   meaningful for a whole run: for a single document "no truth"
+                   usually just means the document is unlabelled.
     """
-    skriv = skriv or print
+    write = write or print
 
-    if fasit is None:
-        skriv("Ingen fasit — hopper over måling.")
+    if truth is None:
+        write("No truth labels, skipping measurement.")
         return None
 
-    sum_fasit = sum_truffet = sum_pred = sum_overflod = 0
-    sum_ov_areal = sum_fa_areal = 0.0
+    total_truth = total_hit = total_pred = total_surplus = 0
+    total_ov_area = total_fa_area = 0.0
     pr_type = defaultdict(lambda: [0, 0])
-    bom_filer = defaultdict(lambda: [0, 0])
-    overflod_filer = defaultdict(int)
-    oversladd_bokser = {}   # (navn, si) -> (iw, ih, [(x0,y0,x1,y1)])
-    detaljer = []
+    miss_files = defaultdict(lambda: [0, 0])
+    surplus_files = defaultdict(int)
+    oversladd_boxes = {}   # (navn, si) -> (iw, ih, [(x0,y0,x1,y1)])
+    details = []
 
-    for (navn, si) in sorted(sladd_bokser):
-        nr = _dok_nr(navn)
-        iw, ih, raw = sladd_bokser[(navn, si)]
-        # YOLO-bokser for denne siden (som koordinat-sett for oppslag)
+    for (name, si) in sorted(sladd_boxes):
+        nr = _doc_no(name)
+        iw, ih, raw = sladd_boxes[(name, si)]
         yolo_coords = set()
-        if yolo_bokser and (navn, si) in yolo_bokser:
-            _, _, yolo_raw = yolo_bokser[(navn, si)]
+        if yolo_boxes and (name, si) in yolo_boxes:
+            _, _, yolo_raw = yolo_boxes[(name, si)]
             yolo_coords = set(yolo_raw)
-        kilde_liste = []
-        conf_liste = []
-        if kilder and (navn, si) in kilder:
-            _, _, med_kilde = kilder[(navn, si)]
-            kilde_liste = [b[4] if len(b) > 4 else "paddle" for b in med_kilde]
-            conf_liste  = [b[5] if len(b) > 5 else None for b in med_kilde]
-        pw, ph = _sidestr(navn, si, mappe, sladd_bokser)
+        source_names = []
+        conf_names = []
+        if sources and (name, si) in sources:
+            _, _, with_source = sources[(name, si)]
+            source_names = [b[4] if len(b) > 4 else "paddle" for b in with_source]
+            conf_names  = [b[5] if len(b) > 5 else None for b in with_source]
+        pw, ph = _page_str(name, si, folder, sladd_boxes)
         pred = [(b[0] / iw, (b[1] - 2) / ih, b[2] / iw, (b[3] + 2) / ih) for b in raw]
-        fbokser = [(_norm_csv(x, y, w, h, pw, ph, y_origin), t)
-                   for (x, y, w, h, t) in fasit.get((nr, si), [])]
+        filtered_boxes = [(_norm_csv(x, y, w, h, pw, ph, y_origin), t)
+                   for (x, y, w, h, t) in truth.get((nr, si), [])]
 
-        sum_pred += len(pred)
-        sum_fasit += len(fbokser)
-        truffet_pred = set()
-        if fbokser:
-            skriv(f"\n{navn}  (dok_nr={nr}, side {si})")
-        for fi, (fb, t) in enumerate(fbokser):
-            fa = _areal(fb)
-            best_dek = best_iou = best_ov = 0.0
+        total_pred += len(pred)
+        total_truth += len(filtered_boxes)
+        hit_pred = set()
+        if filtered_boxes:
+            write(f"\n{name}  (doc_no={nr}, page {si})")
+        for fi, (fb, t) in enumerate(filtered_boxes):
+            fa = _area(fb)
+            best_cov = best_iou = best_ov = 0.0
             best_pi = -1
             for pi, pb in enumerate(pred):
                 ov = _overlap(fb, pb)
                 if ov > best_ov:
                     best_ov = ov
-                    best_dek = ov / fa if fa else 0.0
-                    best_iou = ov / (fa + _areal(pb) - ov)
+                    best_cov = ov / fa if fa else 0.0
+                    best_iou = ov / (fa + _area(pb) - ov)
                     best_pi = pi
-            truffet = best_dek >= terskel
-            if kilde_liste:
-                kilde = kilde_liste[best_pi] if (0 <= best_pi < len(kilde_liste)) else ""
-                kilde = kilde or "ukjent"   # prod-CSV har ingen kilde-kolonne
-                conf  = conf_liste[best_pi]  if (0 <= best_pi < len(conf_liste)) else None
+            hit = best_cov >= threshold
+            if source_names:
+                source = source_names[best_pi] if (0 <= best_pi < len(source_names)) else ""
+                source = source or "unknown"   # prod CSV has no kilde column
+                conf  = conf_names[best_pi]  if (0 <= best_pi < len(conf_names)) else None
             else:
-                kilde = "yolo" if (best_pi >= 0 and raw[best_pi] in yolo_coords) else "paddle"
+                source = "yolo" if (best_pi >= 0 and raw[best_pi] in yolo_coords) else "paddle"
                 conf  = None
             pr_type[t][1] += 1
-            sum_fa_areal += fa
-            sum_ov_areal += best_ov
-            bom_filer[(navn, si)][1] += 1
-            detaljer.append({
-                "fil": navn, "side": si, "fasit_nr": fi + 1, "type": t,
-                "dekning_pst": round(best_dek * 100, 1),
-                "resultat": "TRUFFET" if truffet else "MANGLER",
-                "kilde": kilde if truffet else "",
-                "conf": round(conf, 3) if (truffet and conf is not None) else "",
+            total_fa_area += fa
+            total_ov_area += best_ov
+            miss_files[(name, si)][1] += 1
+            details.append({
+                "fil": name, "side": si, "fasit_nr": fi + 1, "type": t,
+                "coverage_pct": round(best_cov * 100, 1),
+                "result": "HIT" if hit else "MISSING",
+                "kilde": source if hit else "",
+                "conf": round(conf, 3) if (hit and conf is not None) else "",
                 "fasit_x0": round(fb[0], 6),
                 "fasit_y0": round(fb[1], 6),
                 "fasit_x1": round(fb[2], 6),
                 "fasit_y1": round(fb[3], 6),
             })
-            if truffet:
-                sum_truffet += 1
+            if hit:
+                total_hit += 1
                 pr_type[t][0] += 1
-                truffet_pred.add(best_pi)
+                hit_pred.add(best_pi)
             else:
-                bom_filer[(navn, si)][0] += 1
-            skriv(f"   fasit#{fi + 1} {t:<22} dekning={best_dek:5.0%}  IoU={best_iou:5.0%}  "
-                  f"-> {'TRUFFET' if truffet else 'MANGLER'}")
-        n_overflod = len(pred) - len(truffet_pred)
-        sum_overflod += n_overflod
-        if n_overflod > 0:
-            overflod_filer[(navn, si)] += n_overflod
-            over_bokser = [raw[i] for i in range(len(raw)) if i not in truffet_pred]
-            oversladd_bokser[(navn, si)] = (iw, ih, over_bokser)
+                miss_files[(name, si)][0] += 1
+            write(f"   truth#{fi + 1} {t:<22} coverage={best_cov:5.0%}  IoU={best_iou:5.0%}  "
+                  f"-> {'HIT' if hit else 'MISSING'}")
+        n_surplus = len(pred) - len(hit_pred)
+        total_surplus += n_surplus
+        if n_surplus > 0:
+            surplus_files[(name, si)] += n_surplus
+            over_boxes = [raw[i] for i in range(len(raw)) if i not in hit_pred]
+            oversladd_boxes[(name, si)] = (iw, ih, over_boxes)
 
-    skriv("\n" + "=" * 64)
-    rec = sum_truffet / sum_fasit if sum_fasit else 0.0
-    skriv(f"Recall (truffet / fasit):         {sum_truffet}/{sum_fasit} = {rec:.0%}")
-    skriv(f"Samlet overlapp (areal):          {(sum_ov_areal / sum_fa_areal if sum_fa_areal else 0):.0%}")
-    skriv(f"Sladde-bokser totalt:             {sum_pred}")
-    skriv(f"Over-sladding (uten fasit-treff): {sum_overflod}")
-    skriv(f"Terskel for treff:                {terskel:.0%} av fasit-boksens areal")
+    write("\n" + "=" * 64)
+    rec = total_hit / total_truth if total_truth else 0.0
+    write(f"Recall (hits / truth):        {total_hit}/{total_truth} = {rec:.0%}")
+    write(f"Total overlap (area):         {(total_ov_area / total_fa_area if total_fa_area else 0):.0%}")
+    write(f"Sladd boxes in total:         {total_pred}")
+    write(f"Oversladding (no truth hit):  {total_surplus}")
+    write(f"Hit threshold:                {threshold:.0%} of the truth box area")
 
-    # Diagnostikk: vis om fasit-oppslag feilet
-    eval_dok_nrs = {_dok_nr(n) for (n, _) in sladd_bokser}
-    eval_dok_nrs.discard(None)
-    fasit_dok_nrs = {nr for (nr, _) in fasit}
-    felles = eval_dok_nrs & fasit_dok_nrs
-    n_fasit_totalt = sum(len(v) for v in fasit.values())
+    eval_doc_nos = {_doc_no(n) for (n, _) in sladd_boxes}
+    eval_doc_nos.discard(None)
+    truth_doc_nos = {nr for (nr, _) in truth}
+    common = eval_doc_nos & truth_doc_nos
+    n_truth_total = sum(len(v) for v in truth.values())
 
-    if diagnostikk and sum_fasit == 0 and n_fasit_totalt > 0 and eval_dok_nrs:
-        skriv(f"\n!! ADVARSEL: Ingen av de {len(eval_dok_nrs)} evaluerte dokumentene "
-              f"matcher de {len(fasit_dok_nrs)} dokumentene i fasit.")
-        skriv(f"   Evaluert (dok_nr fra filnavn), 5 laveste:  {sorted(eval_dok_nrs)[:5]}")
-        skriv(f"   Fasit (fil_revisjon_id), 5 laveste:        {sorted(fasit_dok_nrs)[:5]}")
-        eval_navneksempler = sorted({n for (n, _) in sladd_bokser})[:3]
-        skriv(f"   Filnavn-eksempler:              {eval_navneksempler}")
-        skriv(f"   Sjekk at filnavnene i --mappe samsvarer med fil_revisjon_id i --fasit-csv.")
-    elif diagnostikk and felles and len(felles) < len(eval_dok_nrs):
-        n_uten = len(eval_dok_nrs) - len(felles)
-        skriv(f"\n   Info: {len(felles)}/{len(eval_dok_nrs)} evaluerte dokumenter har fasit "
-              f"({n_uten} uten fasit-bokser)")
+    if diagnostics and total_truth == 0 and n_truth_total > 0 and eval_doc_nos:
+        write(f"\n!! WARNING: none of the {len(eval_doc_nos)} evaluated documents "
+              f"match the {len(truth_doc_nos)} documents in the truth labels.")
+        write(f"   Evaluated (doc_no from filename), 5 lowest: {sorted(eval_doc_nos)[:5]}")
+        write(f"   Truth (fil_revisjon_id), 5 lowest:          {sorted(truth_doc_nos)[:5]}")
+        eval_name_examples = sorted({n for (n, _) in sladd_boxes})[:3]
+        write(f"   Filename examples:                          {eval_name_examples}")
+        write(f"   Check that the filenames in --folder match fil_revisjon_id in --truth-csv.")
+    elif diagnostics and common and len(common) < len(eval_doc_nos):
+        n_without = len(eval_doc_nos) - len(common)
+        write(f"\n   Info: {len(common)}/{len(eval_doc_nos)} evaluated documents have "
+              f"truth labels ({n_without} without truth boxes)")
 
-    skriv("Recall per type:")
+    write("Recall per type:")
     for t, (tr, tot) in sorted(pr_type.items()):
-        skriv(f"   {t or '(tom)':<22} {tr}/{tot} = {tr / tot:.0%}")
+        write(f"   {t or '(empty)':<22} {tr}/{tot} = {tr / tot:.0%}")
 
-    feil = sorted((k for k, (b, _tot) in bom_filer.items() if b > 0))
-    skriv("\n" + "=" * 64)
-    if sum_fasit == 0:
-        if n_fasit_totalt > 0:
-            skriv(f"Ingen fasit-bokser matchet de evaluerte dokumentene "
-                  f"({n_fasit_totalt} fasit-bokser finnes, men for andre dokumenter).")
+    error = sorted((k for k, (b, _tot) in miss_files.items() if b > 0))
+    write("\n" + "=" * 64)
+    if total_truth == 0:
+        if n_truth_total > 0:
+            write(f"No truth box matched the evaluated documents "
+                  f"({n_truth_total} truth boxes exist, but for other documents).")
         else:
-            skriv("Ingen fasit-bokser lastet — kan ikke måle recall.")
-    elif feil:
-        skriv(f"Filer med bom ({len(feil)} side(r) med minst én MANGLER):")
-       
-        for (navn, si) in feil:
-            bom, tot = bom_filer[(navn, si)]
-            skriv(f"   {navn}  side {si}:  {bom}/{tot} fasit-bokser bommet")
+            write("No truth boxes loaded, cannot measure recall.")
+    elif error:
+        write(f"Files with bom ({len(error)} page(s) with at least one MISSING):")
+        for (name, si) in error:
+            miss, tot = miss_files[(name, si)]
+            write(f"   {name}  page {si}:  {miss}/{tot} truth boxes missed")
     else:
-        skriv("Ingen bom — alle fasit-bokser ble truffet. 🎉")
-                   
+        write("No bom, every truth box was hit. 🎉")
+
 
     return {
-        "recall": rec, "truffet": sum_truffet, "fasit": sum_fasit,
-        "pred": sum_pred, "overflod": sum_overflod,
-        "samlet_overlapp": sum_ov_areal / sum_fa_areal if sum_fa_areal else 0.0,
-        "terskel": terskel,
+        "recall": rec, "hit": total_hit, "fasit": total_truth,
+        "pred": total_pred, "surplus": total_surplus,
+        "total_overlap": total_ov_area / total_fa_area if total_fa_area else 0.0,
+        "threshold": threshold,
         "pr_type": {t: tuple(v) for t, v in pr_type.items()},
-        "detaljer": detaljer,
-        "bom_filer": [
-            {"fil": navn, "side": si, "bom": b, "fasit_totalt": tot}
-            for (navn, si), (b, tot) in sorted(bom_filer.items()) if b > 0
+        "details": details,
+        "miss_files": [
+            {"fil": name, "side": si, "bom": b, "truth_total": tot}
+            for (name, si), (b, tot) in sorted(miss_files.items()) if b > 0
         ],
-        "oversladd_bokser": oversladd_bokser,
-        "overflod_filer": [
-            {"fil": navn, "side": si, "oversladd": n}
-            for (navn, si), n in sorted(overflod_filer.items())
+        "oversladd_boxes": oversladd_boxes,
+        "surplus_files": [
+            {"fil": name, "side": si, "oversladd": n}
+            for (name, si), n in sorted(surplus_files.items())
         ],
     }
 
@@ -214,32 +211,32 @@ import csv
 from collections import defaultdict
 
 
-def les_fasit(csv_sti):
-    from filter_felles import les_ugyldige_label_ids, _advar_uten_id_kolonne
-    ugyldige = les_ugyldige_label_ids()
-    fasit = defaultdict(list)
+def read_truth_xywh(csv_path):
+    from filter_common import read_invalid_label_ids, _warn_missing_id_column
+    invalid = read_invalid_label_ids()
+    truth = defaultdict(list)
     try:
-        with open(csv_sti, newline="", encoding="utf-8-sig") as f:
+        with open(csv_path, newline="", encoding="utf-8-sig") as f:
             leser = csv.DictReader(f)
-            _advar_uten_id_kolonne(ugyldige, leser.fieldnames)
+            _warn_missing_id_column(invalid, leser.fieldnames)
             for r in leser:
                 if (r.get("ml_status") or "").strip().upper() == "REJECTED":
                     continue
                 rid = (r.get("id") or "").strip()
-                if rid and rid in ugyldige:
+                if rid and rid in invalid:
                     continue
                 try:
                     nr = int(r["fil_revisjon_id"])
-                    side = int(r["sidetall"])
+                    page = int(r["sidetall"])
                     x, y = float(r["x"]), float(r["y"])
                     w, h = float(r["width"]), float(r["height"])
                 except (TypeError, ValueError, KeyError):
                     continue
-                fasit[(nr, side)].append((x, y, w, h, (r.get("type") or "").strip()))
+                truth[(nr, page)].append((x, y, w, h, (r.get("type") or "").strip()))
     except FileNotFoundError:
-        print(f"!! Fant ikke CSV: {csv_sti} — fasit tegnes ikke, og treff måles ikke.")
+        print(f"!! CSV not found: {csv_path}, truth is not drawn and hits are not measured.")
         return None
 
-    print(f"Fasit: {sum(len(v) for v in fasit.values())} boks(er) i "
-          f"{len(fasit)} (dok_nr, side)-grupper fra {csv_sti}.")
-    return fasit
+    print(f"Truth: {sum(len(v) for v in truth.values())} box(es) in "
+          f"{len(truth)} (doc_no, page) groups from {csv_path}.")
+    return truth

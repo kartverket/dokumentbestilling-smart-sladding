@@ -38,8 +38,8 @@ PP-LCNet_x1_0_doc_ori_infer.tar
 runs/
 .deploy-historikk
 
-# Vekter hører hjemme i modellageret ($SLADD_VEKTER), aldri i repoet.
-# .byggvekter/ er staging for ./deploy.sh build og lever i sekunder.
+# Weights belong in the model store ($SLADD_WEIGHTS), never in the repo.
+# .byggvekter/ is staging for ./deploy.sh build and lives for seconds.
 .byggvekter/
 app/weights/
 *.pt

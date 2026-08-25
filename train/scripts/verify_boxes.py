@@ -1,8 +1,8 @@
-"""
-Draw YOLO labels back onto rendered images to visually verify correctness.
+"""Draw YOLO labels back onto the rendered images, to check before training
+that the boxes actually land on the fnr.
 
-Run this BEFORE training to confirm boxes land on the FNRs.
-Outputs annotated images to a verification folder.
+Run:
+    python train/scripts/verify_boxes.py --images dataset/images_all --labels dataset/labels_all
 """
 
 import argparse

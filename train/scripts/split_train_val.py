@@ -1,11 +1,11 @@
-"""
-Split images_all/labels_all into train/val/test sets.
+"""Split images_all/labels_all into train/val/test sets.
 
-Strategies:
-  - random: shuffle all images and split by ratio
-  - yearly: group by dokument_aar, select N per year, split per group
-  - doc_type: filter by rettsstiftelsestyper, split by ratio
-  - year_and_doc_type: filter by rettsstiftelsestyper + group by year
+Strategies: random, yearly (group by dokument_aar), doc_type (filter by
+rettsstiftelsestyper) and year_and_doc_type (both).
+
+Run:
+    python train/scripts/split_train_val.py --dataset dataset --strategy yearly \
+        --metadata meta.csv --per-year 100
 """
 
 import argparse
@@ -30,7 +30,6 @@ def _is_negative(img: Path, labels_all: Path) -> bool:
 
 
 def _separate_positives_negatives(imgs: list, labels_all: Path) -> tuple[list, list]:
-    """Split image list into positives (have annotations) and negatives (empty labels)."""
     positives = []
     negatives = []
     for img in imgs:
@@ -42,7 +41,7 @@ def _separate_positives_negatives(imgs: list, labels_all: Path) -> tuple[list, l
 
 
 def _add_negatives(splits: list, negatives: list, ratio: float = NEGATIVE_RATIO):
-    """Add negatives to each split subset proportional to its positive count."""
+    """Adds negatives to each subset in proportion to its positive count."""
     random.shuffle(negatives)
     offset = 0
     for i, (subset, positives) in enumerate(splits):
@@ -64,7 +63,6 @@ def _do_split(imgs: list, train_ratio: float, val_ratio: float):
 
 
 def _copy_and_log(dataset: Path, splits: list, log_lines: list):
-    """Copy images+labels into split folders and write log."""
     labels_all = dataset / "labels_all"
     for subset, group in splits:
         img_dest = dataset / "images" / subset
@@ -96,7 +94,6 @@ def _copy_and_log(dataset: Path, splits: list, log_lines: list):
 
 def _shuffle_and_split(dataset: Path, imgs: list, train_ratio: float, val_ratio: float,
                        seed: int, log_header: list):
-    """Shuffle positives, split by ratio, add 10% negatives per subset, copy and log."""
     labels_all = dataset / "labels_all"
     positives, negatives = _separate_positives_negatives(imgs, labels_all)
 
@@ -112,7 +109,7 @@ def _shuffle_and_split(dataset: Path, imgs: list, train_ratio: float, val_ratio:
 
 def _split_per_group(dataset: Path, groups: dict, per_group: int,
                      train_ratio: float, val_ratio: float, seed: int, log_header: list):
-    """Split per group: shuffle each, select up to per_group, split, merge. Add 10% negatives."""
+    """Splits each group on its own, capped at per_group, then merges the subsets."""
     labels_all = dataset / "labels_all"
     random.seed(seed)
     train, val, test = [], [], []
@@ -157,7 +154,7 @@ def _load_metadata(metadata_csv: str, required_columns: list) -> pd.DataFrame:
 
 
 def _group_images_by(images_all: Path, id_to_key: dict) -> tuple[dict, list]:
-    """Group images by a key from id_to_key. Returns (groups, unmatched)."""
+    """Returns (groups, images whose document id was not in id_to_key)."""
     imgs = sorted(images_all.glob("*.png"))
     groups = defaultdict(list)
     unmatched = []
@@ -172,7 +169,7 @@ def _group_images_by(images_all: Path, id_to_key: dict) -> tuple[dict, list]:
 
 
 def _year_map(meta: pd.DataFrame) -> dict:
-    """Build {fil_revisjon_id(str) -> year(int)} from a DataFrame with dokument_aar."""
+    """{fil_revisjon_id (str) -> year (int)}, skipping rows without dokument_aar."""
     years = pd.to_numeric(meta["dokument_aar"], errors="coerce")
     ids = meta["fil_revisjon_id"].astype(str)
     return {id_: int(y) for id_, y in zip(ids, years) if not pd.isna(y)}
@@ -216,7 +213,7 @@ def split_yearly(dataset_dir: str, metadata_csv: str, per_year: int,
 
 
 def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
-    """Check if any of the comma-separated rettsstiftelsestyper matches doc_type."""
+    """rettsstiftelsestyper is a comma-separated list; match the code before the first space."""
     return any(
         part.strip().split(" ", 1)[0] == doc_type
         for part in str(rettsstiftelsestyper).split(",")
@@ -254,7 +251,6 @@ def split_year_and_doc_type(dataset_dir: str, metadata_csv: str, doc_type: str,
     filtered = meta[mask]
     id_to_year = _year_map(filtered)
 
-    # Keep only IDs within the year range
     valid_ids = {id_ for id_, year in id_to_year.items() if year_from <= year <= year_to}
 
     imgs = sorted((dataset / "images_all").glob("*.png"))

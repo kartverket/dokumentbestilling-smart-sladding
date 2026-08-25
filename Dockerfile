@@ -28,7 +28,6 @@ RUN set -eux; \
         rm "${model}.tar"; \
     done
 
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
@@ -37,16 +36,15 @@ RUN pip install --no-cache-dir torch==2.12.1 torchvision==0.27.1 \
     --index-url https://download.pytorch.org/whl/cu126
 RUN pip install --no-cache-dir --force-reinstall --no-deps nvidia-cudnn-cu12==9.5.1.17
 
-# Vektene ligger utenfor repoet (se SLADD_VEKTER i server.env), og docker
-# kan bare kopiere fra byggekonteksten. ./deploy.sh legger derfor den valgte
-# modellen i .byggvekter/ (modell.pt + modell.json) før bygget og rydder
-# etterpå. Uten den mappen feiler bygget her — det er med vilje: et image
-# uten vekter starter fint og feiler først ved første /model-kall.
+# The weights live outside the repo (see SLADD_WEIGHTS in server.env) and
+# docker only copies from the build context, so ./deploy.sh stages the chosen
+# model in .byggvekter/ (modell.pt + modell.json) before the build and cleans
+# up afterwards. Without that directory the build fails here, on purpose: an
+# image without weights starts fine and fails first at /model.
 #
-# Delt i to lag med vilje. Vektene er 51 MB og endres sjelden; koden er
-# 64 kB og endres hele tiden. Med vektene i et eget lag *før* koden
-# gjenbruker hvert nytt bygg vektlaget, så ti versjoner av samme modell
-# koster 51 MB til sammen og ikke 51 MB hver.
+# Own layer, before the code, on purpose. The weights are 51 MB and change
+# rarely, the code is 64 kB and changes constantly, so every build reuses the
+# weight layer instead of storing 51 MB per version.
 COPY .byggvekter/ ./weights/
 
 COPY config/ config/

@@ -1,139 +1,101 @@
-# ---- PDF-rendering -----------------------------------------
-PDF_DPI = 300                  # oppløsning ved rendering (høyere = tregere, mer nøyaktig)
+# ---- PDF rendering -----------------------------------------
+PDF_DPI = 300                  # higher = slower, more accurate
 
-# ---- Dimensjonsfiltre ------------------------------------------------------
-# Grensene er UNIVERSELLE: samme verdier for alle kilder (paddle, yolo, begge).
-# Eneste unntak er høy konfidens, se YOLO_CONF_GEOMETRI_TERSKEL — det gjelder
-# også likt for alle kilder, men paddle har ingen konfidens fra OCR og blir
-# derfor alltid filtrert.
-#
-# Grensene er orienteringsuavhengige: en sladding av 5 sifre kan stå loddrett,
-# og da er «høyde» den lange siden. Tidligere MAKS_BOKS_HOYDE_PT/…_BREDDE_PT
-# målte høyde og bredde hver for seg og forkastet derfor stående sladdinger
-# systematisk — 30 av 34 feilaktige fjerninger i gjennomgangen av uttrekk 4.
-#
-# Verdiene er utledet fra 41 manuelt gjennomgåtte tap på uttrekk 4
-# (utils/filter_sweep.py + filter_review.py). Resultat med disse: 64 fjernede
-# oversladdinger, 7 tapte fasit-bokser, alle 7 bekreftet som bokser som ikke
-# skulle vært sladdet. Holdout-validert på uavhengige dokumenter.
-MIN_BOKS_AREAL     = 965       # bokser med mindre areal regnes som støy (px²) — gjelder alle
-MIN_ELONGATION     = 1.44      # min max(w/h, h/w) — forkaster nesten-kvadratiske bokser
-                               # (1.5 tok 3 ekte sladdinger på 1.47-1.49)
-MAKS_ELONGATION    = 9         # maks max(w/h, h/w) — bokser 3-4x bredere enn feltet
-MIN_KORTSIDE_PT    = 6         # min korteste side i punkt — for tynn til å være tekst
+# ---- Dimension filters -----------------------------------------------------
+# Universal across kilde; only high YOLO confidence exempts (paddle has none
+# and is always filtered). Short/long side, not width/height: width/height
+# discarded vertical sladdinger, 30 of 34 wrong removals in uttrekk 4.
+# Tuned on 41 reviewed losses in uttrekk 4: 64 oversladdinger removed, 7 fasit
+# boxes lost, all confirmed as boxes that should not be sladdet.
+MIN_BOX_AREA     = 965       # px²
+MIN_ELONGATION     = 1.44      # 1.5 cost 3 real sladdinger at 1.47-1.49
+MAX_ELONGATION    = 9         # 3-4x wider than the field itself
+MIN_SHORT_SIDE_PT    = 6
 
-# Strengere formkrav for rene YOLO-bokser (kun kilde «yolo» — «begge» og
-# paddle har et Paddle-funn bak seg og rammes ikke, «yolo_vertikal» heller
-# ikke). Utledet fra uttrekk 6 på samme måte som grensene over: 4 tapte
-# fasit-bokser, alle bekreftet som referansenumre som ikke skulle vært
-# sladdet, mot ~53 fjernede oversladdinger. Kortsidekravet gjelder uansett
-# konfidens (runde 2: 0 tapt uten conf-port); langsidekravet fritas ved
-# conf ≥ YOLO_CONF_GEOMETRI_TERSKEL som resten av geometrien.
-MIN_KORTSIDE_YOLO_PT = 7       # smalere enn dette er støy
-MIN_LANGSIDE_YOLO_PT = 20      # for kort til å romme 5 sifre
+# Kilde "yolo" only ("begge", paddle and "yolo_vertikal" are spared). Uttrekk
+# 6: ~53 oversladdinger removed, 4 fasit boxes lost, all confirmed reference
+# numbers. Short side applies at any conf; long side sits behind the exemption.
+MIN_SHORT_SIDE_YOLO_PT = 7
+MIN_LONG_SIDE_YOLO_PT = 20      # too short to hold 5 digits
 
-# Strengere formkrav for paddle-bokser (kun kilde «paddle», ikke «begge»).
-# Paddle fritas aldri av konfidens — OCR-konfidens er lesekvalitet, ikke
-# deteksjonssikkerhet. Utledet fra uttrekk 6 runde 2 (etter runde 1-
-# filtrene): 0 tapte fasit-bokser på både trening og holdout, ~20 fjernede
-# oversladdinger. Paddle-BOM er tynne streker: kortside p99.9 = 14,6pt der
-# minste ekte paddle-treff er 8,6pt.
-MIN_KORTSIDE_PADDLE_PT = 7
-MIN_LANGSIDE_PADDLE_PT = 20
-MAKS_ELONGATION_PADDLE = 6
+# Kilde "paddle" only, never exempted by conf: OCR conf is read quality, not
+# detection certainty. Uttrekk 6: ~20 oversladdinger removed, 0 fasit lost.
+# Paddle noise is thin strokes, short side p99.9 = 14.6pt against 8.6pt for
+# the smallest real paddle hit.
+MIN_SHORT_SIDE_PADDLE_PT = 7
+MIN_LONG_SIDE_PADDLE_PT = 20
+MAX_ELONGATION_PADDLE = 6
 
-# Bokser med conf ≥ dette hopper over geometrifiltrene. Gjelder alle kilder;
-# paddle-bokser har conf=None og fritas aldri. «begge»-bokser var tidligere
-# fritatt uansett konfidens — det er fjernet, se _hopp_over_geometrifilter.
-YOLO_CONF_GEOMETRI_TERSKEL = 0.5
+# Skips the geometry filters. "begge" used to be exempt at any confidence;
+# removed, see _hopp_over_geometrifilter.
+YOLO_CONF_GEOMETRY_THRESHOLD = 0.5
 
-# Kun default for --maks-bredde i utils/tegn.py; ikke del av filterstien.
-MAKS_BREDDE_ELEKTRONISK_PT = 50
+# Only the default for --max-width in utils/draw.py; not in the filter path.
+MAX_WIDTH_ELECTRONIC_PT = 50
 
-# ---- YOLO-vekter -------------------------------------------
-# Vektene bor ikke i repoet. I containeren har ./deploy.sh bygget inn den
-# valgte modellen som weights/modell.pt; utenfor containeren peker
-# SLADD_PRODVEKTER (server.env) på en modell i vektlageret. YOLO_VEKTER
-# overstyrer begge, og --yolo-vekter overstyrer alt (utils/run.py).
+# ---- YOLO weights ------------------------------------------
+# The weights do not live in the repo. In the container ./deploy.sh bakes the
+# chosen model in as weights/modell.pt; outside it SLADD_PRODWEIGHTS
+# (server.env) points at the weight store. YOLO_WEIGHTS overrides both,
+# --yolo-weights overrides everything (utils/run.py).
 import os as _os
 
 
-def standard_vekter():
-    for var in ("YOLO_VEKTER", "SLADD_PRODVEKTER"):
-        sti = _os.environ.get(var)
-        if sti:
-            return sti
+def default_weights():
+    for var in ("YOLO_WEIGHTS", "SLADD_PRODWEIGHTS"):
+        path = _os.environ.get(var)
+        if path:
+            return path
     return _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                          "weights", "modell.pt")
 
 
 # ---- YOLO --------------------------------------------------
-YOLO_CONF          = 0.12      # predict-terskel
-YOLO_CONF_UTEN_TEKST = 0.40   # krav når Paddle ikke leste noe i boksen
-YOLO_CONF_VERTIKAL = 0.90     # vertikale bokser (stående tekst)
-VERTIKAL_FAKTOR    = 1.3       # høyde > 1.3 × bredde regnes som vertikal
-YOLO_IMGSZ         = 1280      # bildestørrelse inn til YOLO
-MIN_SIFFER         = 1         # minst så mange siffer i boksen (snill-sjekk)
-MAKS_BOKSTAVER     = 1         # 2+ bokstaver, ikke FNR, uansett YOLO
+YOLO_CONF          = 0.12      # predict threshold
+YOLO_CONF_NO_TEXT = 0.40   # required when Paddle read nothing in the box
+YOLO_CONF_VERTICAL = 0.90
+VERTICAL_FACTOR    = 1.3       # height > 1.3 x width counts as vertical
+YOLO_IMGSZ         = 1280
+MIN_DIGITS         = 1         # lenient_check floor
+MAX_LETTERS     = 1         # 2+ letters is not an fnr, whatever YOLO says
 
-# Desimalregelen (uttrekk 6): står det et desimalskille i tallet OG Paddle
-# leste teksten sikkert, er boksen en koordinat eller et beløp — fnr har
-# aldri desimalskille. Høy deteksjonskonfidens fritar: manuell gjennomgang av
-# samtlige tap viste at ekte fnr som rammes nesten alle har conf ≥ 0.5
-# (typisk fnr skrevet «ddmmåå.xxxxx»), mens koordinater ligger ≤ 0.37.
-# Anvendes på ENDELIG kilde etter dedup — bare rene «yolo»-bokser. Målt på
-# uttrekk 6: ~1250 fjernede oversladdinger mot 3 tapte ekte fnr (alle i
-# conf-båndet 0.49–0.57). Se _desimalregel_forkaster i model_main.py og
-# _ocr_grunn i utils/filter_felles.py.
-AVVIS_DESIMAL_REC_VETO    = 0.98   # regelen gjelder først når rec_min ≥ dette
-AVVIS_DESIMAL_CONF_FRITAK = 0.6    # conf ≥ dette overstyrer regelen
-# Lavere tier (uttrekk 6, full fasit): rec_min i [0.95, 0.98) er også bevis
-# nok NÅR deteksjonen selv er svak — målt +38 fjernede oversladdinger mot
-# 1 tapt.
-AVVIS_DESIMAL_REC_VETO_LAV  = 0.95
-AVVIS_DESIMAL_CONF_TAK_LAV  = 0.4  # lav-tier gjelder bare når conf < dette
+# A decimal separator in confidently read text means coordinate or amount; an
+# fnr never has one. High detection conf exempts: real fnr caught by the rule
+# sit at conf >= 0.5, coordinates at <= 0.37. Final kilde after dedup, so pure
+# "yolo" only. Uttrekk 6: ~1250 oversladdinger removed / 3 real fnr lost.
+# Mirrored by _desimalregel_forkaster (model_main) and _ocr_grunn
+# (utils/filter_common.py).
+REJECT_DECIMAL_REC_VETO    = 0.98
+REJECT_DECIMAL_CONF_EXEMPT = 0.6
+# Lower tier: a weaker read suffices when the detection itself is weak.
+# Uttrekk 6: +38 oversladdinger removed / 1 lost.
+REJECT_DECIMAL_LOW_TIER_REC_VETO  = 0.95
+REJECT_DECIMAL_LOW_TIER_CONF_MAX  = 0.4
 
-# Linjebevis-reglene (uttrekk 6 med fasit som dekker hele uttrekket; manuelt
-# labelet i tre runder — pakke C): når HELE linjen er sikkert lest, kan
-# tallet bevises å ikke være et fnr. To bevistyper:
-#   * sifferløp på 6-8 (med luker): for langt for nakent personnummer, for
-#     kort for fnr — dagboknr, beløp, koordinat. 9-løp er BEVISST utenfor:
-#     manuell gjennomgang viste at de ofte er ekte fnr der OCR selvsikkert
-#     har mistet to tegn (samme sykdom som felte 10-løpene).
-#   * gyldig orgnr-mod11 i boksen.
-# Målt: 79 fjernede oversladdinger mot 1 ekte fnr (conf 0.463, rett under
-# fritaket) + 1 fasit-støy.
-LINJEBEVIS_LINJE_VETO  = 0.99  # rec_min_linje ≥ dette for at reglene gjelder
-LINJEBEVIS_CONF_FRITAK = 0.5   # conf ≥ dette overstyrer reglene
-LINJEBEVIS_RUN_MAKS    = 8     # sifferløp 6..8 forkastes
+# A confidently read line can prove the number is no fnr: a digit run of 6-8
+# (too long for a personnummer, too short for an fnr, so dagboknummer, amount
+# or coordinate) or a valid orgnr mod11. 9-runs are excluded on purpose, they
+# are often real fnr with two characters dropped by OCR. Uttrekk 6: 79
+# oversladdinger removed / 1 real fnr. Mirrored by _ocr_grunn.
+LINE_EVIDENCE_REC_VETO  = 0.99
+LINE_EVIDENCE_CONF_EXEMPT = 0.5
+LINE_EVIDENCE_RUN_MAX    = 8
 
-# Paddle-vindu-reglene: forkast paddle-bokser der 11-siffer-vinduet boksen
-# ble bygget fra er sydd sammen over et desimalskille eller en stor fysisk
-# luke UTENFOR de lovlige posisjonene (etter siffer 2/4/6 — datoformatets
-# punktum og skilletegnet/feltskillet). Koordinat- og målekolonner
-# («6626630.58 549810.29») og spredte skissemål er kilden; et ekte fnr har
-# aldri slike luker. Gjelder KUN endelig kilde «paddle» — «begge» er
-# yolo-bekreftet og fritas (posisjonsblind variant på begge-bokser målte
-# 974 tapte fnr: datoformat/OCR-prikker/håndskriftsgap er vanlige i ekte
-# fnr). Terskel 8, ikke 3: håndskrevne fnr kan ha luker opp mot ~6 siffer-
-# bredder (målt 5.94 på ekte fnr), koordinat-gap ligger typisk ≥10.
-# Målt uttrekk 6 (vindu2): 72 oversladdinger fjernet / 0 tapte fnr
-# (luke 3: 91/1 — netto ved kostnad 20: 71 mot 72, og null tap vinner).
-VINDU_MAKS_LUKE          = 8.0   # sifferbredder, luker utenfor posisjon 2/4/6
-VINDU_AVVIS_DESIMAL_LUKE = True  # desimalskille i luke utenfor 2/4/6
+# Reject paddle boxes whose 11-digit window was stitched across a decimal or a
+# large gap outside the legal positions (after digit 2/4/6). Coordinate
+# columns are the source; a real fnr has no such gaps. Final kilde "paddle"
+# only. Position-blind on "begge" it cost 974 fnr. 8, not 3: handwritten fnr
+# reach ~6 digit widths (5.94 measured), coordinate gaps >= 10. Uttrekk 6:
+# 72 oversladdinger removed / 0 lost (gap 3 gave 91/1). Mirrored by _ocr_grunn.
+WINDOW_MAX_GAP          = 8.0   # digit widths
+WINDOW_REJECT_DECIMAL_IN_GAP = True
 
-# ── Regelprofil per rettsstiftelsestype ──────────────────────────
-# Koordinat-familien: jordskifte, målebrev, grensejustering, massetransport,
-# skjønn og jordsameie — dokumenter som er kart, måltabeller og koordinat-
-# lister. Målt på uttrekk 6: 221 dokumenter, 865 prediksjoner, presisjon
-# 21 % — mot 88,5 % ellers. I disse dokumentene aktiveres koordfam-regelen
-# (_koordfam_forkaster): YOLO-bokser med lest tekst forkastes når linjen
-# mangler 11-sifret fnr-kandidat eller tallet har desimalskille. Globalt
-# koster den regelen hundrevis av ekte fnr; innenfor familien er den målt
-# til 576 fjernede oversladdinger mot 0 ekte fnr (5 «tap» var fasit-støy,
-# manuelt bekreftet). Dokumentets koder kommer fra skip-jobben via
-# dokumentbestilling-API-et; mangler de, gjelder dagens globale oppførsel.
-KOORDFAM_KODER = frozenset((
+# ── Rule profile per rettsstiftelsestype ──────────────────────────
+# The coordinate family is maps, measurement tables and coordinate lists:
+# 21 % precision against 88.5 % elsewhere. Inside it _koordfam_forkaster
+# removed 576 oversladdinger / 0 real fnr; globally it costs hundreds of fnr.
+# Codes come from the skip job; without them the global behaviour applies.
+KOORDFAM_CODES = frozenset((
     "SR_JOU",   # Jordskifte
     "AH_JOU",   # Jordskifte (annen hjemmel)
     "KA_MOB",   # Målebrev
@@ -141,79 +103,61 @@ KOORDFAM_KODER = frozenset((
     "TR_MAS",   # Massetransport
     "SR_SKN",   # Skjønn
     "JS_JSA",   # Opprettelse av jordsameie
-    "FR_REG",   # Registrering av grunn — oppmålingsdokumenter; målt
-                # marginalt: 183 ov.fj / 1 ekte fnr + 1 usikker (ov/tapt ≥91)
-    "SR_UTS",   # Utskifting — historisk jordskifte
+    "FR_REG",   # Registrering av grunn, marginal: 183 removed / 1 real fnr
+    "SR_UTS",   # Utskifting, historical jordskifte
 ))
 
-# Seksjonering-profilen: SE_SEK-dokumenter er tabelltunge (eierbrøker,
-# arealer, seksjonsnumre) — presisjon 72 % mot 92 % ellers, og BOM-ene er
-# tabellceller: for store bokser eller korte talløp. Målt på uttrekk 6:
-# 143 oversladdinger fjernet / 2 ekte fnr tapt (ov/tapt 71). De to tapene
-# er fnr der Paddle bare leste 5 av 11 siffer selvsikkert (kjent klasse,
-# jf. rec-score-kalibreringen) — smin 5 ville reddet dem, men koster ~80
-# oversladdinger (40 per fnr > kostnad 20). Geometrien er ORIENTERINGSFRI
-# (kortside/langside), så prod (rotert rom) og analysen (side-rom) er
-# bit-like også på roterte sider. NB: koordfam-reglene er DØDELIGE her
-# (fnr står i samme tabellinjer som desimal-arealene: 130 tapt globalt) —
-# derfor egne profiler per dokumenttype. Kun SE_SEK er målt;
-# reseksjonering-slektningene (RS_RES, SB_SEB, …) er fnr-tette og holdes
-# utenfor til de eventuelt måles for seg.
-# Tokenløse bokser i koordfam-dokumenter er kart-/grafikkdeteksjoner —
-# tekstreglene over ser dem aldri (har_tokens=0), så de krever i stedet
-# høy deteksjons-conf. Målt marginalt (uttrekk6_sesek, med profilen aktiv):
-# 26 oversladdinger fjernet / 0 tapt ved 0.7 — samme tall som før profilen,
-# gevinsten er uavhengig av fnr-kandidat-regelen. Globalt er samme regel
-# tapsgivende (tokenløse bokser over conf 0.4 er oftere ekte fnr enn støy —
-# uten_tekst_conf-hypotesen døde globalt); den er trygg KUN i koordfam.
-KOORDFAM_UTEN_TEKST_CONF = 0.7
+# Token-less boxes in koordfam documents are map graphics the text rules never
+# see, so they need detection conf instead: 26 oversladdinger removed / 0
+# lost. Globally the same rule loses fnr, so it is safe ONLY in koordfam.
+KOORDFAM_NO_TEXT_CONF = 0.7
 
-SEKSJONERING_KODER = frozenset(("SE_SEK",))
-SEKSJONERING_MAKS_KORTSIDE_PT = 40.0  # yolo+paddle: fnr-sladd p99.9 = 29.5
-SEKSJONERING_MAKS_LANGSIDE_PT = 80.0  # yolo+paddle: fnr-sladd p99.9 = 78.9
-SEKSJONERING_PADDLE_MIN_ELONG = 3.0   # paddle: kvadratiske celler forkastes
-SEKSJONERING_MIN_SIFFER  = 6          # yolo: færre lest siffer = brøk/snr
-SEKSJONERING_REC_VETO    = 0.98       # sifferkravet kun ved sikker lesning
-SEKSJONERING_CONF_FRITAK = 0.5        # høy deteksjons-conf overstyrer
+# SE_SEK documents are table-heavy: 72 % precision against 92 % elsewhere, and
+# the false positives are table cells: oversized boxes or short digit runs.
+# Uttrekk 6: 143 oversladdinger removed / 2 real fnr lost (smin 5 would save
+# them but costs ~80 oversladdinger). NB: the koordfam rules are lethal here.
+# fnr sit in the same table lines as the decimal areas, 130 lost globally,
+# hence separate profiles per document type. Only SE_SEK is measured; the
+# reseksjonering relatives (RS_RES, SB_SEB, …) stay out until measured.
+SEKSJONERING_CODES = frozenset(("SE_SEK",))
+SEKSJONERING_MAX_SHORT_SIDE_PT = 40.0  # yolo+paddle: fnr-sladd p99.9 = 29.5
+SEKSJONERING_MAX_LONG_SIDE_PT = 80.0  # yolo+paddle: fnr-sladd p99.9 = 78.9
+SEKSJONERING_PADDLE_MIN_ELONG = 3.0   # paddle: square cells rejected
+SEKSJONERING_MIN_DIGITS  = 6          # yolo: fewer digits = fraction/snr
+SEKSJONERING_REC_VETO    = 0.98       # digit rule only on a certain read
+SEKSJONERING_CONF_EXEMPT = 0.5
 
-# Trekkene boks_trekk beregner per YOLO-boks og som skrives til resultat-CSV-en.
-# Navnet bor her, ikke i boks_trekk, fordi utils/csv_export.py og
-# utils/filter_felles.py trenger listen uten å dra inn PaddleOCR.
-# De to siste er VINDU-trekk og finnes kun for paddle/begge-bokser: de
-# beskriver 11-siffer-vinduet boksen ble bygget fra (paddle_ocr_model_fnr.
-# _vindu_trekk). maks_luke = største fysiske avstand mellom to nabosiffer i
-# vinduet, i median sifferbredde; har_desimal_luke = 1 når en luke inneholder
-# desimalskille (. eller ,). Ekte fnr har verken store luker eller desimaler —
-# koordinat- og målekolonner («6626630.58 549810.29») har begge.
-TREKK_FELT = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
+# Features box_features computes per YOLO box and writes to the result CSV.
+# The list lives here so utils/csv_export.py and utils/filter_common.py get it
+# without pulling in PaddleOCR. The last two are paddle/begge only, see
+# _window_features in paddle_ocr_model_fnr.py.
+FEATURE_FIELDS = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_median",
               "rec_min_linje", "n_siffer_linje", "siffer_run",
               "har_fnr_kandidat", "har_desimal_naer",
               "har_00_run", "har_orgnr", "har_org_ord", "lang_run",
               "maks_luke", "har_desimal_luke")
 
-# Konfidens-gulv YOLO-cachen skrives med (utils/run.py --yolo-cache). Må ligge
-# under alle terskler man vil kunne endre uten å invalidere cachen: bokser
-# lagres ned til gulvet og filtreres mot YOLO_CONF ved lesing. Merk at et lavere
-# gulv sender flere kandidater inn i NMS enn en ren predict på YOLO_CONF gjør;
-# boksene som overlever YOLO_CONF blir de samme, siden NMS alltid undertrykker
-# med en høyere-skårende boks.
-YOLO_CACHE_CONF_GULV = 0.05
+# Must stay below every threshold one might change without invalidating the
+# YOLO cache: boxes are stored down to the floor and filtered against
+# YOLO_CONF on read. A lower floor feeds more candidates into NMS, but the
+# survivors are the same. NMS always suppresses with a higher-scoring box.
+YOLO_CACHE_CONF_FLOOR = 0.05
 
 # ---- Paddle OCR --------------------------------------------
-MODELL_SETT        = "v6"      # "v5" eller "v6"
-DET_SIDE_LEN       = 2048      # deteksjon: maks sidelengde i piksler
-REC_BATCH          = 64        # tekstlinjer per gjenkjennings-batch
-SIDER_PER_OCR_BATCH = 8        # sider per predict-kall (GPU-utnyttelse)
+PADDLE_MODEL_SET        = "v6"      # "v5" or "v6"
+DET_PAGE_LEN       = 2048      # detection: max page side in pixels
+REC_BATCH          = 64        # text lines per recognition batch
+PAGES_PER_OCR_BATCH = 8        # pages per predict call (GPU utilisation)
 
-# ---- Sladde-boks -------------------------------------------
-SLADDE_SIFFER      = 5         # antall sifre som vises i sladde-boksen
-LUFT_X             = 0.35      # horisontal utvidelse (andel av sifferbredde)
-LUFT_Y             = 0.0       # vertikal utvidelse
-MAKS_HOYDE_FAKTOR  = 3.0       # sladde-høyde maks N × median sifferbredde
+# ---- Sladd box ---------------------------------------------
+SLADD_DIGITS      = 5
+PAD_X_FACTOR             = 0.35      # share of digit width
+PAD_Y_FACTOR             = 0.0
+MAX_HEIGHT_FACTOR  = 3.0       # max N x median digit width
 
 # ---- Pipeline ----------------------------------------------
-DEDUP_OVERLAPP     = 0.5       # YOLO-boks regnes som "samme" når den dekker Paddle-boks så mye
+DEDUP_OVERLAP     = 0.5       # coverage at which a YOLO box is "the same" as a Paddle box
 
-# ---- Orientering -------------------------------------------
-NEDSKALERING       = 4         # nedskalering av bilde før orienteringssjekk
-MIN_KONFIDENS      = 0.7       # under dette: stol ikke på gjetningen, ikke roter
+# ---- Orientation -------------------------------------------
+ORIENTATION_DOWNSCALE       = 4
+ORIENTATION_MIN_CONFIDENCE      = 0.7       # below this: do not trust the guess, do not rotate

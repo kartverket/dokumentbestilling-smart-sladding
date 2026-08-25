@@ -1,24 +1,25 @@
-# --- Stier / kjøre-standarder (run.py) ---
-MAPPE        = "../uttrekk_3"
-ANTALL       = "20"
-FASIT_CSV    = "smartsladding_uttrekk_labels_3_07_07_26.csv"
-CSV_UT       = "sladd_koordinater.csv"
-OCR_LOGG_FIL = "ocr_linjer.txt"
-PNG_MAPPE    = "visning"
-SLADD_MAPPE  = "sladdet"
-Y_ORIGIN     = "topp"         
+# --- Paths / run defaults (run.py) ---
+DOC_DIR        = "../uttrekk_3"
+DEFAULT_FILE_COUNT       = "20"
+TRUTH_CSV    = "smartsladding_uttrekk_labels_3_07_07_26.csv"
+CSV_OUT       = "sladd_koordinater.csv"
+OCR_LOG_FILE = "ocr_linjer.txt"
+PNG_DIR    = "visning"
+SLADD_DIR  = "sladdet"
+Y_ORIGIN     = "top"         
 
-# --- Evaluering ---
-TERSKEL      = 0.32            # andel fasit-areal som kreves for TRUFFET
-                               # (manuelt validert — se STD_TERSKEL i filter_felles.py)
+# --- Evaluation ---
+# Share of the truth area required for a HIT. Manually validated, see
+# STD_THRESHOLD in filter_common.py.
+HIT_THRESHOLD      = 0.32
 
-# --- Farger (visualization.py) ---
-# Alle farger RGBA med 0.8 opacity (alpha=204). Aldri fyll, kun outline.
-BOM_FARGE              = (220, 30, 30, 204)     # rød = fasit-boks som ble bommet (MANGLER)
-KORREKT_PADDLE_FARGE   = (30, 180, 30, 204)     # grønn = korrekt sladding fra Paddle
-KORREKT_YOLO_FARGE     = (30, 80, 220, 204)     # blå = korrekt sladding fra YOLO
-KORREKT_BEGGE_FARGE    = (0, 180, 180, 204)     # teal = korrekt sladding fra begge
-OVERSLADD_PADDLE_FARGE = (255, 140, 0, 204)     # oransje = over-sladding fra Paddle
-OVERSLADD_YOLO_FARGE   = (255, 180, 0, 204)     # mørk gul/amber = over-sladding fra YOLO
-OVERSLADD_BEGGE_FARGE  = (180, 180, 0, 204)     # mørk gul-grønn = over-sladding fra begge
-UKJENT_FARGE           = (110, 110, 110, 204)   # grå = kilde ukjent (prod-CSV)
+# --- Colors (visualization.py) ---
+# RGBA at 0.8 opacity (alpha=204). Outline only, never filled.
+MISSED_TRUTH_COLOR              = (220, 30, 30, 204)     # red = truth box that was missed
+CORRECT_PADDLE_COLOR   = (30, 180, 30, 204)     # green = correct sladd from Paddle
+CORRECT_YOLO_COLOR     = (30, 80, 220, 204)     # blue = correct sladd from YOLO
+CORRECT_BOTH_COLOR    = (0, 180, 180, 204)     # teal = correct sladd from both
+OVERSLADD_PADDLE_COLOR = (255, 140, 0, 204)     # orange = over-sladding from Paddle
+OVERSLADD_YOLO_COLOR   = (255, 180, 0, 204)     # amber = over-sladding from YOLO
+OVERSLADD_BOTH_COLOR  = (180, 180, 0, 204)     # dark yellow-green = over-sladding from both
+UNKNOWN_COLOR           = (110, 110, 110, 204)   # gray = source unknown (prod CSV)

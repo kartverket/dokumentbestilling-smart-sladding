@@ -1,18 +1,13 @@
-"""
-Convert CSV with FNR bounding boxes (PDF points, top-left origin) to YOLO format.
+"""Convert a labels CSV into rendered pages plus YOLO label files.
 
-Reads coordinates.csv, filters to ACCEPTED + ml_generated rows,
-renders each PDF page at 300 DPI, and writes normalized YOLO labels.
+Rendering is the whole cost, pure CPU and disk, so documents run in parallel
+processes: each one is independent, with its own PDF handle and output files.
 
-Rendering is the whole cost here — pure CPU and disk, no GPU — so documents
-are converted in parallel processes. Each document is independent: its own
-PDF handle, its own output files.
+CSV coordinates are PDF points with (x, y) at the TOP-LEFT corner and the
+y-axis growing downwards, the same convention as the image, so no flip.
 
-Coordinate conventions (confirmed from codebase):
-  - (x, y) is the TOP-LEFT corner of the bounding box
-  - Y-axis origin is TOP-LEFT (image convention, no flip needed)
-  - Values are in PDF points (1/72 inch)
-  - Scale factor: DPI / 72
+Run:
+    python train/scripts/convert_csv_to_yolo.py labels.csv pdfs/ --output dataset
 """
 
 import argparse
@@ -35,16 +30,15 @@ def _default_workers():
 
 
 def _render_document(job):
-    """Render one PDF to page images + YOLO labels. Runs in a worker process.
+    """Render one PDF to page images + YOLO labels, in a worker process.
 
-    `job["pages"]` maps page number (1-based) to a list of (x, y, w, h) boxes
-    in PDF points. Pages not listed are rendered as negatives (empty labels).
-    Returns counters for the parent to accumulate.
+    `job["pages"]` maps a 1-based page number to (x, y, w, h) boxes in PDF
+    points. Pages not listed are rendered as negatives (empty labels).
     """
-    fil_id = job["fil_id"]
+    file_id = job["fil_id"]
     images_dir = Path(job["images_dir"])
     labels_dir = Path(job["labels_dir"])
-    out = {"fil_id": fil_id, "pages": 0, "boxes": 0, "negatives": 0,
+    out = {"fil_id": file_id, "pages": 0, "boxes": 0, "negatives": 0,
            "skipped_pages": 0, "error": None}
 
     try:
@@ -55,7 +49,7 @@ def _render_document(job):
 
     try:
         annotated = set()
-        for page_no, bokser in sorted(job["pages"].items()):
+        for page_no, boxes in sorted(job["pages"].items()):
             idx = int(page_no) - 1
             if idx < 0 or idx >= len(doc):
                 out["skipped_pages"] += 1
@@ -64,10 +58,10 @@ def _render_document(job):
             annotated.add(int(page_no))
             pix = doc[idx].get_pixmap(dpi=DPI)
             img_w, img_h = pix.width, pix.height
-            stem = f"{fil_id}_p{page_no}"
+            stem = f"{file_id}_p{page_no}"
             pix.save(str(images_dir / f"{stem}.png"))
 
-            arr = np.asarray(bokser, dtype=float) * SCALE
+            arr = np.asarray(boxes, dtype=float) * SCALE
             x_px, y_px, w_px, h_px = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
             x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
             y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
@@ -86,7 +80,7 @@ def _render_document(job):
             if page_no in annotated:
                 continue
             pix = doc[idx].get_pixmap(dpi=DPI)
-            stem = f"{fil_id}_p{page_no}"
+            stem = f"{file_id}_p{page_no}"
             pix.save(str(images_dir / f"{stem}.png"))
             (labels_dir / f"{stem}.txt").write_text("")
             out["negatives"] += 1
@@ -119,7 +113,7 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
         df["ml_generated"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "YES"])
     )
 
-    # Beholder kun dokumenter med: ml_generated=TRUE + ACCEPTED, OR ml_generated=FALSE (human-placed boxes)
+    # Keep ml_generated=TRUE + ACCEPTED, plus every hand-placed box.
     ml_accepted = (df["ml_generated"]) & (df["ml_status"] == "ACCEPTED")
     manual = ~df["ml_generated"]
     rejected = (df["ml_generated"]) & (df["ml_status"] == "REJECTED")
@@ -131,25 +125,25 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
     skipped_docs = 0
     jobs = []
 
-    def _legg_til(fil_id, pages):
+    def _add_to(file_id, pages):
         """Queue one document unless the PDF is gone or it is already done."""
         nonlocal skipped_docs
-        pdf_path = pdf_dir / f"{fil_id}.pdf"
+        pdf_path = pdf_dir / f"{file_id}.pdf"
         if not pdf_path.exists():
-            missing.add(str(fil_id))
+            missing.add(str(file_id))
             return
-        if (images_dir / f"{fil_id}_p1.png").exists():   # cache
+        if (images_dir / f"{file_id}_p1.png").exists():   # cache
             skipped_docs += 1
             return
-        jobs.append({"fil_id": fil_id, "pdf_path": str(pdf_path), "pages": pages,
+        jobs.append({"fil_id": file_id, "pdf_path": str(pdf_path), "pages": pages,
                      "images_dir": str(images_dir), "labels_dir": str(labels_dir)})
 
-    for fil_id, doc_group in df.groupby("fil_revisjon_id"):
+    for file_id, doc_group in df.groupby("fil_revisjon_id"):
         pages = {
             int(page_no): page_group[["x", "y", "width", "height"]].values.tolist()
             for page_no, page_group in doc_group.groupby("sidetall")
         }
-        _legg_til(fil_id, pages)
+        _add_to(file_id, pages)
 
     # Documents in the ID list but not in the CSV are pure negatives
     negative_docs = 0
@@ -158,10 +152,10 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
         unlabeled_ids = only_ids - labeled_ids
         if unlabeled_ids:
             print(f"Rendering {len(unlabeled_ids)} unlabeled documents as negatives...")
-        for fil_id in sorted(unlabeled_ids):
-            før = len(jobs)
-            _legg_til(fil_id, {})
-            negative_docs += len(jobs) - før
+        for file_id in sorted(unlabeled_ids):
+            before = len(jobs)
+            _add_to(file_id, {})
+            negative_docs += len(jobs) - before
 
     done = total_boxes = negatives = skipped_pages = 0
     failed = []
@@ -192,8 +186,8 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
         print(f"Skipped {skipped_pages} out-of-range pages")
     if failed:
         print(f"Failed: {len(failed)} documents")
-        for fil_id, err in failed[:10]:
-            print(f"  {fil_id}: {err}")
+        for file_id, err in failed[:10]:
+            print(f"  {file_id}: {err}")
 
 
 if __name__ == "__main__":

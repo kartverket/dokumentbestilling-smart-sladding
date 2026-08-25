@@ -1,27 +1,27 @@
 @startuml
-title Smart sladding – overordnet arkitektur
+title Smart sladding - overall architecture
 
 skinparam componentStyle rectangle
 
-cloud "Eksterne systemer" {
-  [Database\ndokumentkø + sladde-labels] as db
-  [Dokument-API\nleverer PDF-er] as dok
+cloud "External systems" {
+  [Database\ndocument queue + sladd labels] as db
+  [Document API\nserves the PDFs] as dok
 }
 
-[Batch-jobb\ngår gjennom ubehandlede\ndokumenter] as jobb
+[Batch job\nwalks the unprocessed\ndocuments] as jobb
 
-[Modell-API\nfinner fødselsnummer i PDF\n(OCR + YOLO)] as modell
+[Model API\nfinds fødselsnummer in a PDF\n(OCR + YOLO)] as modell
 
-package "Utvikling og forbedring" {
-  [Analyse- og testverktøy\nmåler treffsikkerhet mot fasit,\nvisualiserer resultatene] as verktoy
-  [Treningspipeline\ntrener YOLO-modellen] as trening
+package "Development and improvement" {
+  [Analysis and test tools\nmeasure accuracy against fasit,\nvisualise the results] as verktoy
+  [Training pipeline\ntrains the YOLO model] as trening
 }
 
-jobb --> db : 1. hent ubehandlede\n4. lagre sladdinger
-jobb --> dok : 2. hent PDF
-jobb --> modell : 3. PDF inn → sladde-bokser ut
+jobb --> db : 1. fetch unprocessed\n4. store sladdinger
+jobb --> dok : 2. fetch PDF
+jobb --> modell : 3. PDF in -> sladd boxes out
 
-verktoy ..> modell : kjører samme modellkode\nlokalt på testdokumenter
-trening ..> modell : leverer nye vekter (best.pt)
-db ..> trening : labels brukes\nsom treningsdata
+verktoy ..> modell : runs the same model code\nlocally on test documents
+trening ..> modell : delivers new weights (best.pt)
+db ..> trening : labels used\nas training data
 @enduml

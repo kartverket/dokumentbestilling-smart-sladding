@@ -1,182 +1,157 @@
 #!/usr/bin/env bash
-# valider_yolo.sh — validering kun med YOLO (uten OCR)
+# valider_yolo.sh: validation with YOLO only (no OCR). See valider_full.sh for OCR + YOLO.
 #
-# Bruk (eksplisitte navngitte parametere):
-#   ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
-#   ./valider_yolo.sh modell=$SLADD_PRODVEKTER uttrekk=5           # alle dokumenter
-#   ./valider_yolo.sh modell=$SLADD_VEKTER/uttrekk_4_jou/uttrekk_4_jou.pt uttrekk=5 liste=jou
-#   ./valider_yolo.sh modell=$SLADD_RUNS/uttrekk_4_jou/weights/best.pt uttrekk=4 liste=mob   # upublisert kjøring
+#   ./valider_yolo.sh model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no]
 #
-# Se også: valider_full.sh — full produksjonslogikk (OCR + YOLO)
+#   model     path to the YOLO weights file (required)
+#   uttrekk   uttrekk number to validate against (required)
+#   list      name of the ID list (default: all documents)
+#   name      custom name for the output directory
+#   precache  'no' skips filling the cache (default: yes)
 #
-# Parametere:
-#   modell   — sti til YOLO-vektfil (påkrevd)
-#   uttrekk  — uttrekk-nummer å validere på (påkrevd)
-#   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
-#   navn     — egendefinert navn på utmappen (valgfri, utledes fra modell ellers)
-#   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
-#
-# Modellnavnet utledes automatisk fra stien for å navngi utmappen.
-# Krever at server.env er sourcet (SLADD_-variablene må finnes).
+# Requires server.env to be sourced (source activate.sh).
 
 set -euo pipefail
 
-# ── Sjekk at miljøvariabler er satt ──────────────────────────────
 if [[ -z "${SLADD_REPO:-}" ]]; then
-    echo "FEIL: SLADD_-variablene er ikke satt. Kjør først:"
+    echo "ERROR: the SLADD_ variables are not set. Run first:"
     echo "  source activate.sh"
     exit 1
 fi
 
-# ── Parse navngitte parametere ────────────────────────────────────
-MODELL=""
+# ── Parse named parameters ────────────────────────────────────────
+MODEL=""
 UTTREKK_NR=""
-LISTE=""
-NAVN=""
-PRECACHE="ja"
-EKSTRA_FLAGG=()
+LIST=""
+NAME=""
+PRECACHE="yes"
+EXTRA_FLAGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        modell=*)  MODELL="${arg#modell=}" ;;
+        model=*)  MODEL="${arg#model=}" ;;
         uttrekk=*) UTTREKK_NR="${arg#uttrekk=}" ;;
-        liste=*)   LISTE="${arg#liste=}" ;;
-        navn=*)    NAVN="${arg#navn=}" ;;
+        list=*)   LIST="${arg#list=}" ;;
+        name=*)    NAME="${arg#name=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
-        -*)        EKSTRA_FLAGG+=("$arg") ;;
+        -*)        EXTRA_FLAGS+=("$arg") ;;
         *)
-            echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS] [precache=nei]"
+            echo "ERROR: Unknown parameter: $arg"
+            echo "Valid: model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no]"
             exit 1
             ;;
     esac
 done
 
-# ── Validering ────────────────────────────────────────────────────
-if [[ -z "$MODELL" ]]; then
-    echo "FEIL: modell= er påkrevd"
-    echo "Eksempel: $0 modell=\$SLADD_PRODVEKTER uttrekk=5 liste=jou"
+if [[ -z "$MODEL" ]]; then
+    echo "ERROR: model= is required"
+    echo "Example: $0 model=\$SLADD_PRODWEIGHTS uttrekk=5 list=jou"
     exit 1
 fi
 
 if [[ -z "$UTTREKK_NR" ]]; then
-    echo "FEIL: uttrekk= er påkrevd"
-    echo "Eksempel: $0 modell=\$SLADD_PRODVEKTER uttrekk=5 liste=jou"
+    echo "ERROR: uttrekk= is required"
+    echo "Example: $0 model=\$SLADD_PRODWEIGHTS uttrekk=5 list=jou"
     exit 1
 fi
 
-# ── Utled modellnavn fra stien ───────────────────────────────────
-# Publiserte modeller heter <navn>/<navn>.pt og bærer navnet sitt selv.
-# Rå treningskjøringer heter <run>/weights/best.pt — da er navnet på
-# run-mappen det eneste navnet som finnes.
-utled_modellnavn() {
-    local navn
-    navn=$(basename "$1"); navn=${navn%.pt}
-    if [[ "$navn" == best || "$navn" == last ]]; then
-        navn=$(basename "$(dirname "$(dirname "$1")")")
+# Published models are <name>/<name>.pt; raw runs are <run>/weights/best.pt, where only the run dir names it.
+derive_model_name() {
+    local name
+    name=$(basename "$1"); name=${name%.pt}
+    if [[ "$name" == best || "$name" == last ]]; then
+        name=$(basename "$(dirname "$(dirname "$1")")")
     fi
-    echo "$navn"
+    echo "$name"
 }
 
-if [[ -n "$NAVN" ]]; then
-    MODELL_NAVN="$NAVN"
+if [[ -n "$NAME" ]]; then
+    MODEL_NAME="$NAME"
 else
-    MODELL_NAVN=$(utled_modellnavn "$MODELL")
+    MODEL_NAME=$(derive_model_name "$MODEL")
 fi
 
-# ── Bygg stier ───────────────────────────────────────────────────
-UTTREKK_MAPPE="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
-FASIT="$SLADD_LABELS/uttrekk_${UTTREKK_NR}.csv"
+# ── Build paths ──────────────────────────────────────────────────
+UTTREKK_DIR="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
+TRUTH="$SLADD_LABELS/uttrekk_${UTTREKK_NR}.csv"
 
-LISTE_FIL=""
-if [[ -n "$LISTE" ]]; then
-    LISTE_FIL="$SLADD_LISTER/uttrekk_${UTTREKK_NR}_${LISTE}.txt"
-    UT_NAVN="${MODELL_NAVN}_validert_pa_uttrekk_${UTTREKK_NR}_${LISTE}"
+LIST_FILE=""
+if [[ -n "$LIST" ]]; then
+    LIST_FILE="$SLADD_LISTS/uttrekk_${UTTREKK_NR}_${LIST}.txt"
+    OUT_NAME="${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_${LIST}"
 else
-    UT_NAVN="${MODELL_NAVN}_validert_pa_uttrekk_${UTTREKK_NR}_alle"
+    OUT_NAME="${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_all"
 fi
-UT_MAPPE="$SLADD_VALIDERING/$UT_NAVN"
+OUT_DIR="$SLADD_VALIDATION/$OUT_NAME"
 
-# ── Sjekk at filer finnes ────────────────────────────────────────
-SJEKK_FILER=("$MODELL" "$FASIT")
-if [[ -n "$LISTE_FIL" ]]; then
-    SJEKK_FILER+=("$LISTE_FIL")
+# ── Check that the files exist ───────────────────────────────────
+CHECK_FILES=("$MODEL" "$TRUTH")
+if [[ -n "$LIST_FILE" ]]; then
+    CHECK_FILES+=("$LIST_FILE")
 fi
-for fil in "${SJEKK_FILER[@]}"; do
-    if [[ ! -f "$fil" ]]; then
-        echo "FEIL: Finner ikke: $fil"
+for file in "${CHECK_FILES[@]}"; do
+    if [[ ! -f "$file" ]]; then
+        echo "ERROR: Cannot find: $file"
         exit 1
     fi
 done
 
-if [[ ! -d "$UTTREKK_MAPPE" ]]; then
-    echo "FEIL: Uttrekk-mappe finnes ikke: $UTTREKK_MAPPE"
+if [[ ! -d "$UTTREKK_DIR" ]]; then
+    echo "ERROR: uttrekk directory does not exist: $UTTREKK_DIR"
     exit 1
 fi
 
-# Kjøringen omfatter ALLE dokumentene i mappa (uten liste=): labels-filen
-# dekker hele uttrekket, så et dokument uten rader der er gjennomgått med
-# null fnr — prediksjoner på det er ekte oversladdinger som skal telles.
-# Analyseverktøyene regner dem med (inkluder-ulabelte er default på).
+# Without list= all documents run: labels cover the whole uttrekk, so a document with no rows holds zero fnr.
 
-# ── Vis hva som kjøres ──────────────────────────────────────────
+# ── Show what is being run ───────────────────────────────────────
 echo "╭─────────────────────────────────────────────╮"
-echo "│ Validering: $UT_NAVN"
+echo "│ Validation: $OUT_NAME"
 echo "├─────────────────────────────────────────────┤"
-printf "│ modell:   %s\n" "$MODELL"
-printf "│ uttrekk:  %s\n" "$UTTREKK_MAPPE"
-if [[ -n "$LISTE_FIL" ]]; then
-    printf "│ liste:    %s\n" "$LISTE_FIL"
+printf "│ modell:   %s\n" "$MODEL"
+printf "│ uttrekk:  %s\n" "$UTTREKK_DIR"
+if [[ -n "$LIST_FILE" ]]; then
+    printf "│ liste:    %s\n" "$LIST_FILE"
 else
-    printf "│ liste:    (alle dokumenter)\n"
+    printf "│ liste:    (all documents)\n"
 fi
-printf "│ fasit:    %s\n" "$FASIT"
-printf "│ utmappe:  %s\n" "$UT_MAPPE"
+printf "│ truth:    %s\n" "$TRUTH"
+printf "│ out dir:  %s\n" "$OUT_DIR"
 printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/yolo"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 
-# ── Fyll cachene først ───────────────────────────────────────────
-# run.py kjører ett dokument om gangen i én prosess. precache.py gjør
-# det samme arbeidet i parallelle prosesser mot samme GPU — målt 3,3×
-# på V100S — og legger det i cachen run.py leser. Etterpå er
-# valideringen nesten gratis. precache=nei hopper over steget.
-#
-# Merk «--kun begge»: --kun-yolo trenger rotasjonene, og de ligger i
-# OCR-cachen. Uten den må run.py rendre og orientere hvert dokument på
-# nytt selv med full YOLO-cache. OCR-cachen er modelluavhengig, så den
-# kostnaden tas én gang per uttrekk og betaler seg på hver kjøring.
-if [[ "$PRECACHE" == "ja" ]]; then
-    echo "── Fyller cache (precache.py) ──"
+# ── Fill the caches first ────────────────────────────────────────
+# "--only both" is deliberate: --only-yolo needs the rotations, and they live in the OCR cache.
+if [[ "$PRECACHE" == "yes" ]]; then
+    echo "── Filling cache (precache.py) ──"
     PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
-        --mappe "$UTTREKK_MAPPE"
-        --kun begge
-        --yolo-vekter "$MODELL"
+        --folder "$UTTREKK_DIR"
+        --only both
+        --yolo-weights "$MODEL"
     )
-    if [[ -n "$LISTE_FIL" ]]; then
-        PRECACHE_CMD+=(--velg-fra-fil "$LISTE_FIL")
+    if [[ -n "$LIST_FILE" ]]; then
+        PRECACHE_CMD+=(--select-from-file "$LIST_FILE")
     fi
     "${PRECACHE_CMD[@]}"
     echo ""
 fi
 
-# ── Bygg kommando ────────────────────────────────────────────────
+# ── Build the command ────────────────────────────────────────────
 CMD=(python -u "$SLADD_RUN"
-    --mappe "$UTTREKK_MAPPE"
-    --yolo-vekter "$MODELL"
-    --kun-yolo
-    --csv --fasit --kun-feil
-    --fasit-csv "$FASIT"
-    --csv-ut "$UT_MAPPE/resultat.csv"
-    --png-mappe "$UT_MAPPE/feilbilder"
-    --resultat-mappe "$UT_MAPPE"
+    --folder "$UTTREKK_DIR"
+    --yolo-weights "$MODEL"
+    --only-yolo
+    --csv --truth --only-error
+    --truth-csv "$TRUTH"
+    --csv-out "$OUT_DIR/resultat.csv"
+    --png-dir "$OUT_DIR/error_images"
+    --result-dir "$OUT_DIR"
 )
 
-if [[ -n "$LISTE_FIL" ]]; then
-    CMD+=(--velg-fra-fil "$LISTE_FIL")
+if [[ -n "$LIST_FILE" ]]; then
+    CMD+=(--select-from-file "$LIST_FILE")
 else
-    CMD+=(--antall alle)
+    CMD+=(--count all)
 fi
 
-# ── Kjør validering ──────────────────────────────────────────────
-"${CMD[@]}" ${EKSTRA_FLAGG[@]+"${EKSTRA_FLAGG[@]}"}
+"${CMD[@]}" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}

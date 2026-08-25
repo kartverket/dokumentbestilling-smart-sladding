@@ -1,3 +1,9 @@
+"""Recall and precision of the current solution, straight from a labels CSV.
+
+Run:
+    python utils/labels_recall.py --csv smartsladding_uttrekk_labels_2_29_06_26.csv
+"""
+
 import argparse
 import csv
 from collections import Counter
@@ -8,22 +14,22 @@ def main():
     p.add_argument("--csv", default="smartsladding_uttrekk_labels_2_29_06_26.csv")
     args = p.parse_args()
 
-    totalt = 0
+    total = 0
     tp = fp = fn = 0
-    uavklart = 0                     # ml_generated=true med tom/ukjent status
-    type_teller = {}                 # type -> [tp, fp, fn]
-    krysstabell = Counter()          # (ml_generated, status) -> antall
+    unresolved = 0                     # ml_generated=true with empty/unknown status
+    type_count = {}                 # type -> [tp, fp, fn]
+    cross_table = Counter()          # (ml_generated, status) -> count
 
     with open(args.csv, newline="", encoding="utf-8-sig") as f:
-        for rad in csv.DictReader(f):
-            totalt += 1
-            status = (rad.get("ml_status") or "").strip().upper()
-            typ = (rad.get("type") or "").strip()
-            ml = (rad.get("ml_generated") or "").strip().lower() == "true"
+        for row in csv.DictReader(f):
+            total += 1
+            status = (row.get("ml_status") or "").strip().upper()
+            typ = (row.get("type") or "").strip()
+            ml = (row.get("ml_generated") or "").strip().lower() == "true"
 
-            krysstabell[("true" if ml else "false", status or "(tom)")] += 1
+            cross_table[("true" if ml else "false", status or "(empty)")] += 1
 
-            t = type_teller.setdefault(typ, [0, 0, 0])
+            t = type_count.setdefault(typ, [0, 0, 0])
             if ml and status == "ACCEPTED":
                 tp += 1
                 t[0] += 1
@@ -34,29 +40,29 @@ def main():
                 fn += 1
                 t[2] += 1
             else:
-                uavklart += 1       
-    print(f"\n=== Totalt: {totalt} bokser ===")
+                unresolved += 1       
+    print(f"\n=== Total: {total} boxes ===")
     print(f"  TP (ml + ACCEPTED)    : {tp:>6}")
     print(f"  FP (ml + REJECTED)    : {fp:>6}")
-    print(f"  FN (manuelt lagt til) : {fn:>6}")
-    if uavklart:
-        print(f"  Uavklart (ml, annen status): {uavklart} - holdt utenfor tallene")
+    print(f"  FN (added by hand)    : {fn:>6}")
+    if unresolved:
+        print(f"  Unresolved (ml, other status): {unresolved} - left out of the numbers")
 
-    presisjon = tp / (tp + fp) if tp + fp else 0.0
+    precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
-    print(f"\n  Presisjon: {presisjon:.1%}")
+    print(f"\n  Precision: {precision:.1%}")
     print(f"  Recall   : {recall:.1%}")
 
-    print("\n=== Kryss: ml_generated x ml_status ===")
-    for (ml, status), n in sorted(krysstabell.items()):
+    print("\n=== Cross: ml_generated x ml_status ===")
+    for (ml, status), n in sorted(cross_table.items()):
         print(f"  ml_generated={ml:<5}  status={status:<10}  {n}")
 
     print("\n=== Per type ===")
-    for typ, (a, r, m) in sorted(type_teller.items()):
+    for typ, (a, r, m) in sorted(type_count.items()):
         pre = a / (a + r) if a + r else 0.0
         rec = a / (a + m) if a + m else 0.0
-        print(f"  {typ or '(tom)':<20}  TP: {a:>5}  FP: {r:>5}  FN: {m:>5}"
-              f"  presisjon: {pre:6.1%}  recall: {rec:6.1%}")
+        print(f"  {typ or '(empty)':<20}  TP: {a:>5}  FP: {r:>5}  FN: {m:>5}"
+              f"  precision: {pre:6.1%}  recall: {rec:6.1%}")
 
 
 if __name__ == "__main__":

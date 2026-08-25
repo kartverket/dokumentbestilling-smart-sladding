@@ -1,234 +1,212 @@
 #!/usr/bin/env bash
-# valider_full.sh — validering med full produksjonslogikk (OCR + YOLO + matching)
+# valider_full.sh: validation with full production logic (OCR + YOLO + matching).
 #
-# Bruk (eksplisitte navngitte parametere):
-#   ./valider_full.sh modell=$SLADD_PRODVEKTER uttrekk=5 liste=jou
-#   ./valider_full.sh modell=$SLADD_PRODVEKTER uttrekk=5           # alle dokumenter
-#   ./valider_full.sh modell=$SLADD_VEKTER/mitt-run/mitt-run.pt uttrekk=5 liste=jou navn=mitt-eksperiment
+#   ./valider_full.sh model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no]
+#                     [rules=no] [metadata=yes|PATH] [images=N] [processes=N]
 #
-# Parametere:
-#   modell   — sti til YOLO-vektfil (påkrevd)
-#   uttrekk  — uttrekk-nummer å validere på (påkrevd)
-#   liste    — navn på ID-listen (valgfri; uten = kjører alle dokumenter)
-#   navn     — egendefinert navn på utmappen (valgfri)
-#   precache — 'nei' for å hoppe over cache-fyllingen (default: ja)
-#   regler   — 'nei' for å hoppe over ALLE etterfiltrene (rå deteksjon;
-#              basislinjemåling av regelverkets totalbidrag)
-#   metadata — 'ja' for å sende rettsstiftelsestyper fra
-#              $SLADD_METADATA/uttrekk_N.csv (regelprofiler som i prod),
-#              eller en eksplisitt sti. Uten = global oppførsel.
-#   bilder   — 'nei'/0 for å hoppe over feilbildene, eller et tall N for å
-#              tegne maks N dokumenter (default: alle). Sammendrag og
-#              resultat.csv påvirkes ikke — de beregnes fra boksene alene.
-#   prosesser— antall arbeiderprosesser for cache-treff i valideringen
-#              (default: auto = min(8, kjerner); 1 = sekvensielt)
+#   model      path to the YOLO weights file (required)
+#   uttrekk    uttrekk number to validate against (required)
+#   list       name of the ID list (default: all documents)
+#   name       custom name for the output directory
+#   precache   'no' skips filling the cache (default: yes)
+#   rules      'no' skips ALL postfilters, giving raw detection for baselining the rules
+#   metadata   'yes' sends rettsstiftelse types from $SLADD_METADATA/uttrekk_N.csv
+#              (rule profiles as in prod), or an explicit path. Default: global behaviour
+#   images     'no'/0 skips the error images, or N draws at most N documents
+#              (default: all). Summary and resultat.csv are unaffected
+#   processes  worker processes for cache hits (default: auto = min(8, cores))
 #
-# Bruker OCR- og YOLO-cache ($SLADD_CACHE) for å unngå å kjøre OCR og YOLO på nytt.
-# YOLO-cachen er per vektfil. Treffer begge, hoppes også PDF-renderingen over,
-# så en ny kjøring av samme modell koster nesten ingenting.
-# Se også: valider_yolo.sh — kun YOLO (raskere, men uten OCR-matching)
-# Krever at server.env er sourcet (SLADD_-variablene må finnes).
+# Uses the OCR and YOLO caches ($SLADD_CACHE), so rerunning the same model is nearly free.
+# Requires server.env to be sourced (source activate.sh).
 
 set -euo pipefail
 
-# ── Sjekk at miljøvariabler er satt ──────────────────────────────
 if [[ -z "${SLADD_REPO:-}" ]]; then
-    echo "FEIL: SLADD_-variablene er ikke satt. Kjør først:"
+    echo "ERROR: the SLADD_ variables are not set. Run first:"
     echo "  source activate.sh"
     exit 1
 fi
 
-# ── Parse navngitte parametere ────────────────────────────────────
-MODELL=""
+# ── Parse named parameters ────────────────────────────────────────
+MODEL=""
 UTTREKK_NR=""
-LISTE=""
-NAVN=""
-PRECACHE="ja"
-BILDER="alle"
+LIST=""
+NAME=""
+PRECACHE="yes"
+IMAGES="all"
 METADATA=""
-REGLER="ja"
-PROSESSER=""
-EKSTRA_FLAGG=()
+RULES="yes"
+PROCESSES=""
+EXTRA_FLAGS=()
 
 for arg in "$@"; do
     case "$arg" in
-        modell=*)  MODELL="${arg#modell=}" ;;
+        model=*)  MODEL="${arg#model=}" ;;
         uttrekk=*) UTTREKK_NR="${arg#uttrekk=}" ;;
-        liste=*)   LISTE="${arg#liste=}" ;;
-        navn=*)    NAVN="${arg#navn=}" ;;
+        list=*)   LIST="${arg#list=}" ;;
+        name=*)    NAME="${arg#name=}" ;;
         precache=*) PRECACHE="${arg#precache=}" ;;
         metadata=*) METADATA="${arg#metadata=}" ;;
-        regler=*)   REGLER="${arg#regler=}" ;;
-        bilder=*)  BILDER="${arg#bilder=}" ;;
-        prosesser=*) PROSESSER="${arg#prosesser=}" ;;
-        -*)        EKSTRA_FLAGG+=("$arg") ;;
+        rules=*)   RULES="${arg#rules=}" ;;
+        images=*)  IMAGES="${arg#images=}" ;;
+        processes=*) PROCESSES="${arg#processes=}" ;;
+        -*)        EXTRA_FLAGS+=("$arg") ;;
         *)
-            echo "FEIL: Ukjent parameter: $arg"
-            echo "Gyldige: modell=STI uttrekk=N [liste=NAVN] [navn=ALIAS] [precache=nei] [bilder=N] [prosesser=N]"
+            echo "ERROR: Unknown parameter: $arg"
+            echo "Valid: model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
             exit 1
             ;;
     esac
 done
 
-# ── Validering ────────────────────────────────────────────────────
-if [[ -z "$MODELL" ]]; then
-    echo "FEIL: modell= er påkrevd"
-    echo "Eksempel: $0 modell=\$SLADD_PRODVEKTER uttrekk=5 liste=jou"
+if [[ -z "$MODEL" ]]; then
+    echo "ERROR: model= is required"
+    echo "Example: $0 model=\$SLADD_PRODWEIGHTS uttrekk=5 list=jou"
     exit 1
 fi
 
 if [[ -z "$UTTREKK_NR" ]]; then
-    echo "FEIL: uttrekk= er påkrevd"
-    echo "Eksempel: $0 modell=\$SLADD_PRODVEKTER uttrekk=5 liste=jou"
+    echo "ERROR: uttrekk= is required"
+    echo "Example: $0 model=\$SLADD_PRODWEIGHTS uttrekk=5 list=jou"
     exit 1
 fi
 
-# ── Utled modellnavn fra stien ───────────────────────────────────
-# Publiserte modeller heter <navn>/<navn>.pt og bærer navnet sitt selv.
-# Rå treningskjøringer heter <run>/weights/best.pt — da er navnet på
-# run-mappen det eneste navnet som finnes.
-utled_modellnavn() {
-    local navn
-    navn=$(basename "$1"); navn=${navn%.pt}
-    if [[ "$navn" == best || "$navn" == last ]]; then
-        navn=$(basename "$(dirname "$(dirname "$1")")")
+# Published models are <name>/<name>.pt; raw runs are <run>/weights/best.pt, where only the run dir names it.
+derive_model_name() {
+    local name
+    name=$(basename "$1"); name=${name%.pt}
+    if [[ "$name" == best || "$name" == last ]]; then
+        name=$(basename "$(dirname "$(dirname "$1")")")
     fi
-    echo "$navn"
+    echo "$name"
 }
 
-MODELL_NAVN=$(utled_modellnavn "$MODELL")
+MODEL_NAME=$(derive_model_name "$MODEL")
 
-# ── Bygg stier ───────────────────────────────────────────────────
-UTTREKK_MAPPE="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
-FASIT="$SLADD_LABELS/uttrekk_${UTTREKK_NR}.csv"
+# ── Build paths ──────────────────────────────────────────────────
+UTTREKK_DIR="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
+TRUTH="$SLADD_LABELS/uttrekk_${UTTREKK_NR}.csv"
 
-LISTE_FIL=""
-if [[ -n "$LISTE" ]]; then
-    LISTE_FIL="$SLADD_LISTER/uttrekk_${UTTREKK_NR}_${LISTE}.txt"
+LIST_FILE=""
+if [[ -n "$LIST" ]]; then
+    LIST_FILE="$SLADD_LISTS/uttrekk_${UTTREKK_NR}_${LIST}.txt"
 fi
 
-if [[ -n "$NAVN" ]]; then
-    UT_NAVN="$NAVN"
-elif [[ -n "$LISTE" ]]; then
-    UT_NAVN="full_${MODELL_NAVN}_validert_pa_uttrekk_${UTTREKK_NR}_${LISTE}"
+if [[ -n "$NAME" ]]; then
+    OUT_NAME="$NAME"
+elif [[ -n "$LIST" ]]; then
+    OUT_NAME="full_${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_${LIST}"
 else
-    UT_NAVN="full_${MODELL_NAVN}_validert_pa_uttrekk_${UTTREKK_NR}_alle"
+    OUT_NAME="full_${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_all"
 fi
-UT_MAPPE="$SLADD_VALIDERING/$UT_NAVN"
+OUT_DIR="$SLADD_VALIDATION/$OUT_NAME"
 
-# ── Sjekk at filer finnes ────────────────────────────────────────
-if [[ ! -f "$MODELL" ]]; then
-    echo "FEIL: Finner ikke modell: $MODELL"
+# ── Check that the files exist ───────────────────────────────────
+if [[ ! -f "$MODEL" ]]; then
+    echo "ERROR: Cannot find model: $MODEL"
     exit 1
 fi
 
-if [[ -n "$LISTE_FIL" && ! -f "$LISTE_FIL" ]]; then
-    echo "FEIL: Finner ikke: $LISTE_FIL"
+if [[ -n "$LIST_FILE" && ! -f "$LIST_FILE" ]]; then
+    echo "ERROR: Cannot find: $LIST_FILE"
     exit 1
 fi
 
-if [[ ! -f "$FASIT" ]]; then
-    echo "FEIL: Finner ikke: $FASIT"
+if [[ ! -f "$TRUTH" ]]; then
+    echo "ERROR: Cannot find: $TRUTH"
     exit 1
 fi
 
-if [[ ! -d "$UTTREKK_MAPPE" ]]; then
-    echo "FEIL: Uttrekk-mappe finnes ikke: $UTTREKK_MAPPE"
+if [[ ! -d "$UTTREKK_DIR" ]]; then
+    echo "ERROR: uttrekk directory does not exist: $UTTREKK_DIR"
     exit 1
 fi
 
-# Kjøringen omfatter ALLE dokumentene i mappa (uten liste=): labels-filen
-# dekker hele uttrekket, så et dokument uten rader der er gjennomgått med
-# null fnr — prediksjoner på det er ekte oversladdinger som skal telles.
-# Analyseverktøyene regner dem med (inkluder-ulabelte er default på).
+# Without list= all documents run: labels cover the whole uttrekk, so a document with no rows holds zero fnr.
 
-# ── Vis hva som kjøres ──────────────────────────────────────────
+# ── Show what is being run ───────────────────────────────────────
 echo "╭─────────────────────────────────────────────╮"
-echo "│ Full validering (OCR+YOLO): $UT_NAVN"
+echo "│ Full validation (OCR+YOLO): $OUT_NAME"
 echo "├─────────────────────────────────────────────┤"
-printf "│ modell:   %s\n" "$MODELL"
-printf "│ uttrekk:  %s\n" "$UTTREKK_MAPPE"
-if [[ -n "$LISTE_FIL" ]]; then
-    printf "│ liste:    %s\n" "$LISTE_FIL"
+printf "│ modell:   %s\n" "$MODEL"
+printf "│ uttrekk:  %s\n" "$UTTREKK_DIR"
+if [[ -n "$LIST_FILE" ]]; then
+    printf "│ liste:    %s\n" "$LIST_FILE"
 else
-    printf "│ liste:    (alle dokumenter)\n"
+    printf "│ liste:    (all documents)\n"
 fi
-printf "│ fasit:    %s\n" "$FASIT"
-printf "│ utmappe:  %s\n" "$UT_MAPPE"
+printf "│ truth:    %s\n" "$TRUTH"
+printf "│ out dir:  %s\n" "$OUT_DIR"
 printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/{ocr,yolo}"
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 
-# ── Fyll cachene først ───────────────────────────────────────────
-# run.py kjører ett dokument om gangen i én prosess. precache.py gjør
-# det samme arbeidet i parallelle prosesser mot samme GPU — målt 3,3×
-# på V100S — og legger det i cachen run.py leser. Etterpå er
-# valideringen nesten gratis. precache=nei hopper over steget.
-if [[ "$PRECACHE" == "ja" ]]; then
-    echo "── Fyller cache (precache.py) ──"
+# ── Fill the caches first ────────────────────────────────────────
+# precache.py does run.py's work in parallel processes against the same GPU, measured 3.3x on V100S.
+if [[ "$PRECACHE" == "yes" ]]; then
+    echo "── Filling cache (precache.py) ──"
     PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
-        --mappe "$UTTREKK_MAPPE"
-        --kun begge
-        --yolo-vekter "$MODELL"
+        --folder "$UTTREKK_DIR"
+        --only both
+        --yolo-weights "$MODEL"
     )
-    if [[ -n "$LISTE_FIL" ]]; then
-        PRECACHE_CMD+=(--velg-fra-fil "$LISTE_FIL")
+    if [[ -n "$LIST_FILE" ]]; then
+        PRECACHE_CMD+=(--select-from-file "$LIST_FILE")
     fi
     "${PRECACHE_CMD[@]}"
     echo ""
 fi
 
-# ── Bygg kommando ────────────────────────────────────────────────
+# ── Build the command ────────────────────────────────────────────
 CMD=(python -u "$SLADD_RUN"
-    --mappe "$UTTREKK_MAPPE"
-    --yolo-vekter "$MODELL"
-    --csv --fasit --kun-feil
-    --fasit-csv "$FASIT"
-    --csv-ut "$UT_MAPPE/resultat.csv"
-    --png-mappe "$UT_MAPPE/feilbilder"
-    --resultat-mappe "$UT_MAPPE"
-    --tid
+    --folder "$UTTREKK_DIR"
+    --yolo-weights "$MODEL"
+    --csv --truth --only-error
+    --truth-csv "$TRUTH"
+    --csv-out "$OUT_DIR/resultat.csv"
+    --png-dir "$OUT_DIR/error_images"
+    --result-dir "$OUT_DIR"
+    --time
 )
 
-if [[ -n "$LISTE_FIL" ]]; then
-    CMD+=(--velg-fra-fil "$LISTE_FIL")
+if [[ -n "$LIST_FILE" ]]; then
+    CMD+=(--select-from-file "$LIST_FILE")
 else
-    CMD+=(--antall alle)
+    CMD+=(--count all)
 fi
 
 if [[ -n "$METADATA" ]]; then
-    if [[ "$METADATA" == "ja" || "$METADATA" == "auto" ]]; then
+    if [[ "$METADATA" == "yes" || "$METADATA" == "auto" ]]; then
         METADATA="$SLADD_METADATA/uttrekk_${UTTREKK_NR}.csv"
     fi
     if [[ ! -f "$METADATA" ]]; then
-        echo "FEIL: Finner ikke metadata-CSV: $METADATA"
+        echo "ERROR: Cannot find metadata CSV: $METADATA"
         exit 1
     fi
     CMD+=(--metadata-csv "$METADATA")
 fi
 
-if [[ "$REGLER" == "nei" || "$REGLER" == "0" ]]; then
-    CMD+=(--uten-etterfilter)
+if [[ "$RULES" == "no" || "$RULES" == "0" ]]; then
+    CMD+=(--without-postfilter)
 fi
 
-if [[ "$BILDER" != "alle" ]]; then
-    if [[ "$BILDER" == "nei" ]]; then
-        BILDER=0
+if [[ "$IMAGES" != "all" ]]; then
+    if [[ "$IMAGES" == "no" ]]; then
+        IMAGES=0
     fi
-    if ! [[ "$BILDER" =~ ^[0-9]+$ ]]; then
-        echo "FEIL: bilder= må være 'alle', 'nei' eller et tall (fikk: $BILDER)"
+    if ! [[ "$IMAGES" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: images= must be 'all', 'no' or a number (got: $IMAGES)"
         exit 1
     fi
-    CMD+=(--maks-feilbilder "$BILDER")
+    CMD+=(--max-error-images "$IMAGES")
 fi
 
-if [[ -n "$PROSESSER" ]]; then
-    if ! [[ "$PROSESSER" =~ ^[0-9]+$ ]]; then
-        echo "FEIL: prosesser= må være et tall (fikk: $PROSESSER)"
+if [[ -n "$PROCESSES" ]]; then
+    if ! [[ "$PROCESSES" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: processes= must be a number (got: $PROCESSES)"
         exit 1
     fi
-    CMD+=(--prosesser "$PROSESSER")
+    CMD+=(--processes "$PROCESSES")
 fi
 
-# ── Kjør full validering (produksjonslogikk) ─────────────────────
-"${CMD[@]}" ${EKSTRA_FLAGG[@]+"${EKSTRA_FLAGG[@]}"}
+"${CMD[@]}" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}

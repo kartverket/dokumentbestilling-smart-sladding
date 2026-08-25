@@ -2,8 +2,8 @@
 set -e
 
 python run.py \
-  --mappe /data2/smartsladding-uttrekk/uttrekk_4/ \
-  --velg 16715849 \
+  --folder /data2/smartsladding-uttrekk/uttrekk_4/ \
+  --select 16715849 \
   17204292 \
   18611986 \
   20072873 \
@@ -5328,16 +5328,16 @@ python run.py \
   1001170240 \
   548859 \
   15800914 \
-  --yolo-vekter /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/app/weights/weights/yolo-random-shuffle-2000-docs.pt \
-  --csv --csv-ut fredag_randomshuffle2000_sladd.csv \
-  --sladd --sladd-mappe fredag_randomshuffle2000_sladd \
-  --fasit --fasit-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
-  --beskrivelse fredag_randomshuffle2000 \
-  --tid
+  --yolo-weights /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/app/weights/weights/yolo-random-shuffle-2000-docs.pt \
+  --csv --csv-out fredag_randomshuffle2000_sladd.csv \
+  --sladd --sladd-dir fredag_randomshuffle2000_sladd \
+  --truth --truth-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
+  --desc fredag_randomshuffle2000 \
+  --time
 
 python run.py \
-  --mappe /data2/smartsladding-uttrekk/uttrekk_4/ \
-  --velg 16715849 \
+  --folder /data2/smartsladding-uttrekk/uttrekk_4/ \
+  --select 16715849 \
   17204292 \
   18611986 \
   20072873 \
@@ -10662,9 +10662,9 @@ python run.py \
   1001170240 \
   548859 \
   15800914 \
-  --yolo-vekter /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/app/weights/weights/yolo-yearly-10000-docs.pt \
-  --csv --csv-ut fredag_yearly10000_sladd.csv \
-  --sladd --sladd-mappe fredag_yearly10000_sladd \
-  --fasit --fasit-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
-  --beskrivelse fredag_yearly10000 \
-  --tid
+  --yolo-weights /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/app/weights/weights/yolo-yearly-10000-docs.pt \
+  --csv --csv-out fredag_yearly10000_sladd.csv \
+  --sladd --sladd-dir fredag_yearly10000_sladd \
+  --truth --truth-csv /home/smartsladding/smartsladding-uttrekk-labels/uttrekk_4.csv \
+  --desc fredag_yearly10000 \
+  --time

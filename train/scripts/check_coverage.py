@@ -1,9 +1,9 @@
-"""
-Flag training pages that might have incomplete FNR coverage.
+"""Flag rendered training pages that carry suspiciously few labels.
 
-Checks for pages that were rendered (have an image) but have suspiciously
-few labels, which could indicate missed FNRs that would teach the model
-wrong negatives.
+An unlabeled fnr on a training page teaches the model to ignore real ones.
+
+Run:
+    python train/scripts/check_coverage.py --images dataset/images_all --labels dataset/labels_all
 """
 
 import argparse
@@ -39,7 +39,7 @@ def check(images_dir: str, labels_dir: str, min_boxes: int):
         print(f"\nReview these pages manually to ensure all FNRs are labeled.")
         print("Unlabeled FNRs on training pages teach the model to ignore real FNRs.")
     else:
-        print("All pages have at least {min_boxes} labeled box(es).")
+        print(f"All pages have at least {min_boxes} labeled box(es).")
 
 
 if __name__ == "__main__":

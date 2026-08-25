@@ -1,24 +1,27 @@
 # dokumentbestilling-smart-sladding
 
-## VIKTIG: For bruk i Kartverket
-Hvis du jobber med dette i Kartverket-sammenheng, så skal du være inneforstått med de relevante rutinene før du begynner med å arbeide. [Les rutinene på confluence her](https://kartverket.atlassian.net/wiki/x/F4Dwn)
+Automatic sladding of fødselsnummer and d-nummer in ordered tinglysing
+documents. A PDF goes in, a list of boxes to cover comes out.
 
-## Beskrivelse
-Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger.
+> **Working at Kartverket?** Read the routines before you start:
+> [Confluence](https://kartverket.atlassian.net/wiki/x/F4Dwn)
 
-Se [docs/TEKNISK.md](docs/TEKNISK.md) for teknisk beskrivelse av arkitektur og deteksjonspipeline med figurer.
+See [docs/TEKNISK.md](docs/TEKNISK.md) for how the detection actually works.
 
-## Repo-struktur
+## Repo layout
 
 ```
-app/       API og modell-kode (Flask + PaddleOCR + YOLO)
-utils/     Analyse- og testverktøy (run, tegn, statistikk)
+app/      the model API (Flask + PaddleOCR + YOLO); all the detection logic
+job/      the batch job that drives production; calls the API, no ML of its own
+train/    training pipeline for the YOLO model            (train/README.md)
+utils/    analysis and test tooling: run, draw, statistics
+config/   gunicorn config for the container
+docs/     technical description, server notes, diagrams   (docs/SERVER.md)
 ```
 
-## Forutsetninger
-- Python 3.12
+## Install
 
-## Installasjon
+Python 3.12.
 
 ```sh
 git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
@@ -29,432 +32,338 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### PaddleOCR — CPU vs GPU (må velges konsistent i hele systemet)
+`requirements.txt` pins `paddlepaddle==3.3.1`. Which build you get depends on
+the index you install from: plain PyPI gives the CPU wheel (Mac, laptops),
+while the `Dockerfile` adds `--extra-index-url
+https://www.paddlepaddle.org.cn/packages/stable/cu126/` to get the CUDA build
+for the GPU server. Do not mix the two in one environment.
 
-CPU- og GPU-bygget av Paddle er to forskjellige pakker. Du må velge **samme variant alle stedene under** 
+On the server, `source activate.sh` activates the venv, loads the `SLADD_*`
+paths from `server.env` and enables the repo git hooks in one go.
 
-| Sted | CPU (Mac / uten GPU) | GPU (Linux-server med CUDA) |
-|------|----------------------|------------------------------|
-| Manuell install | `pip install paddlepaddle paddleocr` | `pip install paddlepaddle-gpu paddleocr` |
-| `requirements.txt` | `paddlepaddle==3.3.1` | `paddlepaddle-gpu==3.3.1` |
-| `Dockerfile` (`--extra-index-url`) | `.../packages/stable/cpu/` | `.../packages/stable/cu126/` |
+## Models
 
-
-## Modeller
-
-YOLO-vektene ligger **ikke** i repoet. De bor i modellageret på serveren, `$SLADD_VEKTER` (se `server.env`), med én mappe per publisert modell:
+**YOLO weights are not in the repo.** They live in the model store on the
+server, `$SLADD_WEIGHTS` (see `server.env`), one directory per published model:
 
 ```
-$SLADD_VEKTER/yolo-yearly-10000-docs/
-  yolo-yearly-10000-docs.pt    ← vektene, navngitt etter modellen
-  modell.json                  ← hva den er trent på, med hvilke parametere
-  trening/                     ← results.csv, args.yaml, data.yaml, split_log.txt
+$SLADD_WEIGHTS/<name>/
+  <name>.pt        the weights, named after the model
+  modell.json      what it was trained on, with which parameters
+  trening/         results.csv, args.yaml, data.yaml, split_log.txt
 ```
 
-Mappene lages av `make -C $SLADD_TRAIN publiser` etter en treningskjøring — se [train/README.md](train/README.md). Vektfilen heter det samme som modellen, så navnet følger med uansett hvor filen kopieres, og `modell.json` gjør at man i ettertid kan se hva en modell faktisk er trent på.
+`make -C $SLADD_TRAIN publiser` creates them after a training run. See
+[train/README.md](train/README.md). `$SLADD_PRODWEIGHTS` points at the default
+model: the one `./deploy.sh build` bakes in, and the one `run.py` uses when
+`--yolo-weights` is omitted.
 
-`$SLADD_PRODVEKTER` peker på modellen som er standardvalget: den `./deploy.sh build` bygger inn, og den `run.py` bruker uten `--yolo-vekter`. Andre modeller velges per kjøring med `--yolo-vekter` (se run.py-flaggene under) eller per bygg med `vekter=` (se under).
-
-PaddleOCR-modellene er ferdig trente vekter fra PaddlePaddle sitt modellbibliotek og lastes ned manuelt (kjøres fra `app/`):
+**PaddleOCR models** are pretrained weights from PaddlePaddle and are
+downloaded by hand into `app/` (the code looks for them next to the source):
 
 ```sh
-# v6 (standard)
-curl -L -O https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_medium_det_infer.tar
-curl -L -O https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_medium_rec_infer.tar
-tar -xvf PP-OCRv6_medium_det_infer.tar
-tar -xvf PP-OCRv6_medium_rec_infer.tar
-
-# v5 (sett MODELL_SETT = "v5" i app/config.py)
-curl -L -O https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_det_infer.tar
-curl -L -O https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_rec_infer.tar
-tar -xvf PP-OCRv5_server_det_infer.tar
-tar -xvf PP-OCRv5_server_rec_infer.tar
-
-# Orienteringsmodell (felles for v5 og v6)
-curl -L -O https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-LCNet_x1_0_doc_ori_infer.tar
-tar -xvf PP-LCNet_x1_0_doc_ori_infer.tar
-```
-
-## Kjøre API lokalt
-
-```sh
-mkdir -p app/logs   # må opprettes første gang
 cd app
-python app.py
+for m in PP-OCRv6_medium_det_infer PP-OCRv6_medium_rec_infer PP-LCNet_x1_0_doc_ori_infer; do
+  curl -L -O "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/${m}.tar"
+  tar -xvf "${m}.tar"
+done
 ```
 
-Test i ny terminal:
+`PADDLE_MODEL_SET` in `app/config.py` selects the set (`"v6"` or `"v5"`). For
+`"v5"` download `PP-OCRv5_server_det_infer` and `PP-OCRv5_server_rec_infer`
+instead. The `Dockerfile` hardcodes the v6 downloads, so switching the config
+without editing the Dockerfile builds an image without the models the code
+asks for.
+
+## Run the API locally
+
+```sh
+cd app
+mkdir -p logs
+ML_LOG_DIR=logs python app.py
+```
+
+`ML_LOG_DIR` matters: without it `app.py` falls back to the container path
+`/data/ml_logs` and fails to start. Then, in another terminal:
+
 ```sh
 curl http://localhost:5070/health
 
 curl -X POST http://localhost:5070/model \
   -H "Content-Type: application/pdf" \
-  --data-binary "@/sti/til/dokument.pdf"
+  --data-binary "@/path/to/document.pdf"
 ```
 
-## Valideringskjøring med testdokument
-
-Et testdokument (`utils/testdokument.pdf`) følger med repoet. Bruk det for å verifisere at oppsettet fungerer:
+A test document ships with the repo. Use it to check the setup end to end:
 
 ```sh
 cd utils
-python run.py --mappe . --velg testdokument.pdf --csv --csv-ut test_ut.csv --png --png-mappe visning_test --fasit --tid
+python run.py --folder . --select testdokument.pdf --csv --csv-out test_ut.csv \
+  --png --png-dir visning_test --time
 ```
 
-PNG-resultat lagres i `utils/visning_test/`.
+The PNGs land in `utils/visning_test/`. Measuring recall (`--truth`) needs a
+labels CSV, which is not in the repo.
 
-## Produksjon (Docker)
-
-Produksjon kjøres som Docker-container på GPU-serveren. **Det som kjører på port 5071 er produksjon** — ingenting annet.
-
-Et image bygges én gang og får en uforanderlig tag (`<dato>-<commit>-<modell>`, f.eks. `20260820-6d7e6820-yolo-yearly-10000-docs`). Etter det flyttes bare *hvilken* tag som kjører hvor. Prod bygger aldri selv, så det som står på 5071 endrer seg ikke av at noen bygger noe nytt, og rollback er å peke tilbake på en tag som allerede har kjørt.
-
-Imagene lagres **bare lokalt på serveren** — ingen registry foreløpig. Det betyr at `docker image prune -a` sletter muligheten til å rulle tilbake, og at en ny maskin må bygge alt på nytt.
-
-| Rolle | Port | Container   | Tag styres av |
-|-------|------|-------------|---------------|
-| Prod  | 5071 | `smsl-prod` | `PROD_TAG`    |
-| Test  | 5072 | `smsl-test` | `TEST_TAG`    |
-
-`deploy.sh` gjør alt arbeidet. Første gang på en ny maskin:
-
-```sh
-cp .env.example .env
-source activate.sh                        # laster server.env, som peker på modellageret
-ls $SLADD_VEKTER                          # modellene som kan bygges inn
-```
-
-### Normal flyt: build → test → promote
-
-```sh
-./deploy.sh build                         # modell fra $SLADD_PRODVEKTER
-./deploy.sh test 20260820-6d7e6820-yolo-yearly-10000-docs
-```
-
-En annen modell inn i imaget — samme kode, nye vekter:
-
-```sh
-./deploy.sh build vekter=$SLADD_VEKTER/uttrekk_4_jou/uttrekk_4_jou.pt
-```
-
-Verifiser mot testporten før du promoterer:
-
-```sh
-curl http://localhost:5072/health
-curl -X POST http://localhost:5072/model \
-  -H "Content-Type: application/pdf" \
-  --data-binary "@/sti/til/dokument.pdf"
-```
-
-Når den ser bra ut, settes *samme tag* i prod — ingen ny bygging, altså samme bits som ble testet:
-
-```sh
-./deploy.sh promote 20260820-6d7e6820-yolo-yearly-10000-docs
-./deploy.sh stop test                   # frigi GPU-minnet testcontaineren holder
-```
-
-`promote` krever at du oppgir taggen eksplisitt, ber om bekreftelse, og **ruller automatisk tilbake** til forrige tag hvis `/health` ikke svarer.
-
-### Øvrige kommandoer
-
-```sh
-./deploy.sh status            # hva kjører hvor, og er det friskt
-./deploy.sh versions          # lokalt bygde tagger med modell, nyest først
-./deploy.sh rollback          # tilbake til forrige tag i prod
-./deploy.sh stop prod|test    # ta ned en container
-./deploy.sh start prod|test   # opp igjen med taggen som står i .env
-./deploy.sh logs prod|test    # følg loggen
-./deploy.sh prune             # slett gamle images (kan ikke angres)
-```
-
-`start` og `stop` bytter aldri versjon — de tar bare ned og opp den taggen som allerede står i `.env`. Skal du bytte versjon, er det `promote` (prod) eller `test <tag>` (test). `stop prod` ber om bekreftelse, siden det tar ned produksjon; `stop test` gjør ikke.
-
-`stop` stopper containeren uten å slette den, så `start` henter opp nøyaktig samme oppsett. GPU-minnet frigis uansett, siden prosessen dør, og `restart: unless-stopped` tar den ikke opp av seg selv etter en eksplisitt stopp.
-
-Deploy-historikken ligger i `.deploy-historikk` (tid, ny tag, forrige tag) og er det `rollback` leser.
-
-`prune` er den ene kommandoen som ikke kan angres, siden imagene bare finnes her. Den verner de 5 nyeste, taggen i prod, taggen i test og alt som står i deploy-historikken — men sletter du noe eldre, er eneste vei tilbake å bygge på nytt fra commiten taggen navngir.
-
-### Imaget
-
-| | |
-|---|---|
-| Navn | `smart-sladding:<dato>-<commit>` |
-| Lagring | bare lokalt på serveren |
-| Størrelse | ~10–15 GB |
-| Ny versjon koster | ~64 kB ved en ren kodeendring (lagene deles) |
-
-Imaget inneholder alle modellene det trenger:
-
-```
-/app/
-  PP-OCRv6_medium_det_infer/     59 MB   ← curl i Dockerfile
-  PP-OCRv6_medium_rec_infer/     73 MB   ← curl i Dockerfile
-  PP-LCNet_x1_0_doc_ori_infer/  6,6 MB   ← curl i Dockerfile
-  weights/modell.pt              51 MB   ← modellen ./deploy.sh build valgte
-  weights/modell.json                    ← hva den modellen er trent på
-  *.py                           64 kB   ← COPY app/*.py
-```
-
-Merk at `Dockerfile` hardkoder nedlasting av **v6**-modellene, mens `app/config.py` velger settet med `MODELL_SETT`. Bytter du til `"v5"` må Dockerfile endres tilsvarende, ellers bygges et image uten de modellene koden ber om.
-
-Vektene ligger i et eget lag fra koden. Det gjør at ti versjoner av samme modell koster 51 MB vekter til sammen og ikke 51 MB hver, og at et rebuild etter en kodeendring gjenbruker alt det tunge.
-
-Docker kan bare kopiere fra byggekonteksten, og vektene ligger utenfor repoet. `./deploy.sh build` legger derfor den valgte modellen i `.byggvekter/` rett før bygget og fjerner mappen etterpå. Derfor bygger heller ikke `docker build .` direkte lenger — bygg går gjennom `deploy.sh`.
-
-### Logger
-
-Tre strømmer, alle gjennom samme roterende handler: de zippes ved døgnskiftet og eldste zip slettes når historikken er full.
-
-| Logg | Fil i loggmappa | Kilde |
-|------|-----------------|-------|
-| Applikasjon | `app.log` | `app/app.py` |
-| Access | `gunicorn_access_prod.log` | `config/gunicorn_config_prod.py` |
-| Gunicorn-feil | `gunicorn_error_prod.log` | samme |
-
-Etter rotasjon: `app.log.2026-08-19.zip` — datoen er **døgnet zipen dekker**. Skjer det et ekstra rollover i samme døgn (nedetid over midnatt, eller flere workers), får den et løpenummer (`.2.zip`) i stedet for å overskrive.
-
-Hvor de havner defineres i `server.env`:
-
-```sh
-export SLADD_LOGS=/data/docker       # loggrot på verten
-export SLADD_LOGG_DAGER=30           # døgn historikk per fil
-```
-
-`deploy.sh` leser dem og sender dem videre til compose som `LOG_ROOT` og `LOG_BACKUP_DAYS`. Under loggroten lages:
-
-```
-$SLADD_LOGS/
-  gunicorn_logs/        ← prod: access + error
-  ml_logs/              ← prod: app.log
-  gunicorn_logs_test/   ← test, holdt for seg
-  ml_logs_test/
-```
-
-Test skriver til egne mapper med vilje. Delte de prods, ville to rotasjons-handlere kappet om samme fil ved midnatt, og testtrafikk havnet i prods access-logg. Mappene opprettes av Docker ved første kjøring.
-
-Inne i containeren ligger stiene på `/data/gunicorn_logs` og `/data/ml_logs` uansett, satt med `GUNICORN_LOG_DIR` og `ML_LOG_DIR`. `./deploy.sh status` viser hvilken loggrot og retensjon som gjelder.
-
-`_prod`-suffikset i filnavnene er historisk — det finnes bare én gunicorn-config nå. Navnene er beholdt så eksisterende logghistorikk på serveren ikke splittes i to serier. Test skriver samme filnavn, men i sine egne mapper.
-
-Gunicorns error-logg går også til stdout, så `./deploy.sh logs prod` fortsatt viser oppstart og feil. Stray stdout/stderr havner i dockers egen loggfil, som compose kapper på 50 MB × 5.
-
-### Verdt å vite
-
-- Prod og test deler GPU-en. Kjører du en testcontainer ved siden av prod, konkurrerer de om samme kort — kjør `./deploy.sh stop test` når du er ferdig.
-- Hvilken modell som bygges inn er et eksplisitt valg. `./deploy.sh build` uten argumenter tar `$SLADD_PRODVEKTER`; `./deploy.sh build vekter=$SLADD_VEKTER/<modell>/<modell>.pt` tar en annen. Uten en modell nekter den å bygge, siden et image uten vekter starter fint og feiler først ved første `/model`-kall.
-- Modellnavnet står i taggen (`20260820-eb6f64dd-yolo-yearly-10000-docs`), og modellnavn + sha256 av vektfilen ligger som merkelapper på imaget. Vektene ligger utenfor repoet, så commiten alene sier ikke hva imaget inneholder — uten navnet i taggen ville samme kode med to modeller fått samme tag, og `rollback` ville rullet tilbake koden uten modellen. `./deploy.sh status` og `versions` viser modellen per tag.
-- En tag bygget på ucommittede endringer får suffikset `-dirty` og blir avvist av `./deploy.sh promote`. Commit først.
-- Modellene lastes først ved første `/model`-kall, så `/health` svarer lenge før containeren er varm.
-- Bekreft at GPU-en faktisk brukes:
-
-```sh
-./deploy.sh logs prod | grep -i "GPU tilgjengelig"   # -> True hvis du kjører på gpu
-```
-
----
-
-## run.py for testing — kjøre modellen mot fasit
-
-Kjøres fra `utils/`-mappa. Pek på PDF-mappen din med `--mappe` (standard er `../uttrekk_3/`).
-
-```sh
-cd utils
-python run.py [flagg]
-```
-
-| Flagg                    | Standard                                      | Beskrivelse                                      |
-|--------------------------|-----------------------------------------------|--------------------------------------------------|
-| `--mappe STI`            | `../uttrekk_3`                                | Mappe med PDF-er                                 |
-| `--velg FIL [FIL ...]`   | —                                             | Kjør bare disse filene (filnavn/delstreng)       |
-| `--antall N`             | `20`                                          | Antall filer når `--velg` er tom (`alle` = alle) |
-| `--yolo-vekter FIL`      | `$SLADD_PRODVEKTER`                           | Path til YOLO-vektfil (for å teste andre vekter) |
-| `--csv`                  | av                                            | Skriv funne bokser til CSV                       |
-| `--csv-ut FIL`           | `sladd_koordinater.csv`                       | Filnavn for boks-CSV                             |
-| `--fasit`                | av                                            | Mål recall mot fasit-CSV                         |
-| `--fasit-csv FIL`        | `smartsladding_uttrekk_labels_3_07_07_26.csv` | Fasit-CSV                                        |
-| `--terskel FLOAT`        | `0.32`                                        | Andel fasit-areal som kreves for TRUFFET         |
-| `--y-origin topp\|bunn`  | `topp`                                        | Y-origo i fasit-CSV                              |
-| `--png`                  | av                                            | Tegn funne + fasit-bokser til PNG                |
-| `--png-mappe STI`        | `visning`                                     | Mappe for PNG-ene                                |
-| `--sladd`                | av                                            | Lag faktisk sladdede PDF-er                      |
-| `--sladd-mappe STI`      | `sladdet`                                     | Mappe for sladdede PDF-er                        |
-| `--ocr-logg`             | av                                            | Skriv OCR-tekst linje for linje til fil          |
-| `--ocr-logg-fil FIL`     | `ocr_linjer.txt`                              | Filnavn for OCR-loggen                           |
-| `--tid`                  | av                                            | Skriv timing per dokument                        |
-| `--beskrivelse TEKST`    | —                                             | Suffiks i result-mappenavnet                     |
-
-```sh
-python run.py --velg 10000676.pdf --csv --fasit --tid
-python run.py --antall alle --fasit --csv --png
-python run.py --velg 10000676.pdf --yolo-vekter $SLADD_VEKTER/yolo-yearly-10000-docs/yolo-yearly-10000-docs.pt --fasit --tid
-```
-
----
-
-## tegn.py — visualisere sladde-bokser som PNG
-
-Brukes for manuell gjennomgang av hva modellen har funnet. Tegner sladde-boksene oppå PDF-sidene og lagrer som PNG-bilder — slik kan man raskt bla gjennom og se om boksene treffer riktig. Bruker da sladd_koordinater laget av en run.py kjøring.
-
-```sh
-cd utils
-python tegn.py --csv sladd_koordinater.csv --png-mappe visning
-```
-
-Åpne bildene i `utils/visning/` for å se resultatet. Med `--fasit` tegnes også fasit-boksene i grønt for sammenligning.
-
-```sh
-python tegn.py [flagg]
-```
-
-| Flagg                   | Standard                                      | Beskrivelse                                      |
-|-------------------------|-----------------------------------------------|--------------------------------------------------|
-| `--csv FIL`             | `res.csv`                                     | Koordinat-CSV (fra `run.py --csv`)               |
-| `--mappe STI`           | `../uttrekk_3`                                | Mappe med original-PDF-ene                       |
-| `--png-mappe STI`       | `visning`                                     | Mappe for PNG-ene                                |
-| `--fasit-csv FIL`       | `smartsladding_uttrekk_labels_3_07_07_26.csv` | Fasit-CSV (tegnes som grønne rammer)             |
-| `--velg FIL [FIL ...]`  | —                                             | Begrens til disse filene                         |
-| `--fasit`               | av                                            | Mål recall mot fasit og skriv ut i terminal      |
-| `--terskel FLOAT`       | `0.32`                                        | Overlapp-terskel for TRUFFET                     |
-| `--yolo`                | av                                            | Kjør YOLO og vis treff som røde rammer           |
-| `--kun-oversladd`       | av                                            | Tegn kun sider med over-sladding                 |
-| `--kun-bom`             | av                                            | Tegn kun sider med minst én MANGLER (+ `--fasit`)|
-| `--y-origin topp\|bunn` | `topp`                                        | Y-origo i fasit-CSV                              |
-
-```sh
-python tegn.py --csv sladd_koordinater.csv --fasit --velg 10000676.pdf
-python tegn.py --csv t.csv --fasit --kun-bom
-python tegn.py --csv t.csv --kun-oversladd
-```
-
----
-
-## statistikk.py — samlet rapport for en kjøring
-
-```sh
-python statistikk.py [mappe] [flagg]
-```
-
-| Argument/flagg  | Standard | Beskrivelse                                            |
-|-----------------|----------|--------------------------------------------------------|
-| `mappe`         | —        | Result-mappe fra `run.py --fasit` (valgfri)            |
-| `--labels FIL`  | —        | Labels-CSV for sammenligning med nåværende løsning     |
-| `--ingen-graf`  | av       | Dropp statistikk.png                                   |
-
-```sh
-python statistikk.py result-2026-07-14T08-15-20 --labels smartsladding_uttrekk_labels_3_07_07_26.csv
-
-python statistikk.py --labels smartsladding_uttrekk_labels_3_07_07_26.csv
-```
-
-Lager `statistikk.txt` og `statistikk.png` i result-mappa.
-
-## API-kontrakt
+## API contract
 
 ### `GET /health`
 
-Returnerer `{"health": "healthy"}` med status 200 når tjenesten kjører.
-Merk: modellene lastes først ved første kall til `/model`, så første
-forespørsel etter oppstart tar vesentlig lengre tid enn de påfølgende.
+Returns `{"health": "healthy"}` with status 200. The models load lazily on the
+first `/model` call, so `/health` answers long before the service is warm.
 
 ### `POST /model`
 
-Tar imot en PDF som rå bytes i request-body (`Content-Type: application/pdf`)
-og returnerer funne sladde-bokser som JSON.
+Takes a PDF as raw bytes in the request body (`Content-Type: application/pdf`)
+and returns the sladd boxes as JSON.
 
-200        | OK, respons som beskrevet under            
-400        | Tom request-body                           
-500        | Intern feil, `{"error": "<beskrivelse>"}` 
+| Status | Body |
+|--------|------|
+| 200 | the list described below |
+| 400 | empty request body |
+| 500 | `{"error": "<description>"}` |
 
-#### Responsformat
+Optional query parameters: `elektronisk_tinglyst=true` skips YOLO entirely,
+and `rettsstiftelsestyper=SR_JOU,SE_SEK` (comma-separated grunnbok codes)
+enables the per-document-type rule profiles.
+
+#### Response format
+
+A **flat list of boxes**, not grouped by page. Pages with no findings simply
+contribute no entries, and an empty document returns `[]`.
 
 ```json
-{
-  "sider": [
-    {
-      "side": 1,
-      "bilde_bredde": 2480,
-      "bilde_hoyde": 3510,
-      "bokser": [
-        { "x0": 856, "y0": 1203, "x1": 998, "y1": 1240, "kilde": "begge", "conf": 0.871 }
-      ]
-    }
-  ]
-}
+[
+  {
+    "page": 1,
+    "x": 205.61, "y": 288.74, "width": 34.12, "height": 8.93,
+    "kilde": "begge",
+    "yolo_conf": 0.871,
+    "paddle_rec_score": 0.99412
+  },
+  {
+    "page": 3,
+    "x": 118.2, "y": 512.44, "width": 31.7, "height": 9.41,
+    "kilde": "yolo",
+    "yolo_conf": 0.53,
+    "trekk": { "har_tokens": 1, "n_siffer": 11, "n_bokstaver": 0 }
+  }
+]
 ```
 
-| Felt                        | Beskrivelse                                                                 |
-|-----------------------------|-----------------------------------------------------------------------------|
-| `sider`                     | Én oppføring per side i PDF-en, også sider uten funn (`bokser` er da tom)  |
-| `side`                      | Sidenummer, 1-basert                                                        |
-| `bilde_bredde`/`bilde_hoyde`| Sidens størrelse i piksler                                                  |
-| `x0, y0`                    | Øvre venstre hjørne av sladde-boksen (origo øverst til venstre)             |
-| `x1, y1`                    | Nedre høyre hjørne av sladde-boksen                                         |
-| `kilde`                     | `paddle`, `yolo`, `begge` eller `yolo_vertikal`                             |
-| `conf`                      | YOLO-konfidens (0–1). Finnes bare når YOLO var involvert, rene Paddle-treff har ikke feltet |
+| Field | Description |
+|-------|-------------|
+| `page` | page number, 1-based |
+| `x`, `y` | top-left corner of the box, in PDF points, origin top-left |
+| `width`, `height` | box size in PDF points |
+| `kilde` | `paddle`, `yolo`, `begge` or `yolo_vertikal` |
+| `yolo_conf` | YOLO detection confidence (0-1). Only when YOLO was involved |
+| `paddle_rec_score` | how confidently the OCR read the characters. Only when Paddle was involved |
+| `trekk` | what the OCR saw in and around the box. Only for `kilde: "yolo"` |
 
-Koordinatene refererer til sidens opprinnelige orientering, eventuell
-rotasjon under analysen er allerede regnet tilbake.
+`yolo_conf` and `paddle_rec_score` are deliberately two fields. They measure
+different things: a confident *read* says nothing about detection certainty,
+and merging them would let a well-read Paddle box skip the geometry filters.
+`trekk` does not affect the sladding; it exists so stricter filter variants can
+be swept offline. See `app/box_features.py` for the full field list.
 
----
+Coordinates refer to the page's original orientation; any rotation applied
+during analysis has already been undone.
 
-## Konfigurasjon
+## Test tooling
 
-| Fil                     | Innhold                                              |
-|-------------------------|------------------------------------------------------|
-| `app/config.py`         | PDF-DPI, YOLO-terskel, OCR-parametere, orientering   |
-| `utils/utils_config.py` | Stier, evalueringsterskler, visualiseringsfarger      |
+All three run from `utils/`. Only the flags you need day to day are listed.
+`--help` has the rest.
 
----
+### `run.py`: run the model over a folder of PDFs
 
-## CSV-formater
+Same code path as a POST: bytes in, `run_model_on_pdf_bytes` out.
 
-### Boks-CSV (`run.py --csv`, leses av `tegn.py`)
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--folder PATH` | `../uttrekk_3` | folder of PDFs |
+| `--select FILE [FILE ...]` | none | only these files (filename/substring) |
+| `--select-from-file FILE` | none | read IDs from a text file, one per line |
+| `--count N` | `20` | number of files when `--select` is empty (`alle` = all) |
+| `--yolo-weights FILE` | `$SLADD_PRODWEIGHTS` | weights to test |
+| `--csv` / `--csv-out FILE` | off / `sladd_koordinater.csv` | write found boxes to CSV |
+| `--truth` / `--truth-csv FILE` | off | measure recall against a labels CSV |
+| `--png` / `--png-dir PATH` | off / `visning` | draw found + truth boxes to PNG |
+| `--only-error` | off | PNGs only for pages with a miss or oversladding |
+| `--result-dir PATH` | `.` | where the `result-*` directory is created |
+| `--metadata-csv FILE` | none | rettsstiftelse types per document; enables rule profiles |
+| `--without-postfilter` | off | skip all postfilters; baseline of what the rules contribute |
+| `--time` | off | timing per document |
 
-| Kolonne        | Beskrivelse                                      |
-|----------------|--------------------------------------------------|
-| `navn`         | Filnavn (PDF)                                    |
-| `side`         | Sidenummer (1-basert)                            |
-| `bilde_bredde` | Bildebredde i piksler                            |
-| `bilde_hoyde`  | Bildehøyde i piksler                             |
-| `x0, y0`       | Øvre venstre hjørne av sladde-boks (piksler)     |
-| `x1, y1`       | Nedre høyre hjørne av sladde-boks (piksler)      |
-| `kilde`        | `paddle`, `yolo`, `begge` eller `yolo_vertikal`  |
-| `conf`         | YOLO-konfidensverdi (tom for rene Paddle-treff)  |
+Output directories that already exist abort the run; use `--proceed` to resume
+or `--overwrite` to start over. OCR and YOLO results are cached per document
+under `$SLADD_CACHE`, so rerunning the same model is nearly free.
 
-### Fasit-CSV (labels fra eksisterende løsning)
+```sh
+python run.py --select 10000676.pdf --csv --truth --time
+python run.py --count alle --truth --csv --png
+```
 
-| Kolonne           | Beskrivelse                                        |
-|-------------------|----------------------------------------------------|
-| `fil_revisjon_id` | Dokument-ID (tilsvarer tall i PDF-filnavnet)       |
-| `sidetall`        | Sidenummer (1-basert)                              |
-| `x, y`            | Øvre venstre hjørne i PDF-punkter                  |
-| `width, height`   | Størrelse i PDF-punkter                            |
-| `type`            | Kategori (f.eks. `PERSONNUMMER`)                   |
-| `ml_generated`    | `true` hvis modellen fant den, `false` = manuell   |
-| `ml_status`       | `ACCEPTED` / `REJECTED`                            |
+On the server, `valider_full.sh` and `valider_yolo.sh` wrap this with the
+standard paths. Start there rather than assembling flags by hand.
 
-### Detaljer-CSV (`run.py --fasit`, leses av `statistikk.py`)
+### `draw_from_csv.py`: visualise boxes as PNG
 
-| Kolonne                      | Beskrivelse                              |
-|------------------------------|------------------------------------------|
-| `fil`                        | Filnavn (PDF)                            |
-| `side`                       | Sidenummer                               |
-| `fasit_nr`                   | Løpenummer for fasit-boks på siden       |
-| `type`                       | Kategori fra fasit                       |
-| `dekning_pst`                | Andel av fasit-boks dekket (%)           |
-| `resultat`                   | `TRUFFET` eller `MANGLER`                |
-| `kilde`                      | Hvilken modell som traff                 |
-| `conf`                       | Konfidensverdi                           |
-| `fasit_x0/y0/x1/y1`          | Fasit-boks i normaliserte koordinater    |
+Draws the boxes from a finished CSV onto the PDF pages, without running the
+model. Use it to flip through what was found. With `--truth` the labels are
+drawn as green frames; `--only-oversladd` and `--only-miss` narrow it down to
+the pages worth looking at.
 
----
+```sh
+python draw_from_csv.py --csv sladd_koordinater.csv --png-dir visning
+python draw_from_csv.py --csv sladd_koordinater.csv --truth --only-miss
+```
 
-## Lisens
+### `run_stats.py`: combined report for one run
+
+```sh
+python run_stats.py result-2026-07-14T08-15-20 --labels labels.csv
+```
+
+Writes `statistikk.txt` and `statistikk.png` into the result directory.
+
+## Configuration
+
+| File | Contents |
+|------|----------|
+| `app/config.py` | PDF DPI, YOLO thresholds, OCR parameters, filter rules, orientation |
+| `utils/utils_config.py` | paths, evaluation threshold, visualisation colours |
+| `server.env` | `SLADD_*` paths on the GPU server |
+| `.env` | deploy state for one machine, which tag runs where (see `.env.example`) |
+
+## CSV formats
+
+### Box CSV (`run.py --csv`, read back by `draw_from_csv.py`)
+
+`navn, side, bilde_bredde, bilde_hoyde, x0, y0, x1, y1, kilde, yolo_conf,
+paddle_rec_score` followed by one column per feature in `FEATURE_FIELDS`
+(`app/config.py`). Coordinates are pixels here, not points. Feature columns are
+empty for every `kilde` other than `yolo`.
+
+### Labels CSV (fasit from the existing solution)
+
+Column names come from the database export and are not ours to rename:
+`fil_revisjon_id` (the number in the PDF filename), `sidetall`, `x`, `y`,
+`width`, `height` (PDF points), `type`, `ml_generated`, `ml_status`
+(`ACCEPTED`/`REJECTED`; rejected rows are skipped).
+
+A labels file covers a whole uttrekk, so a document with no rows has been
+reviewed and found to contain no fnr. Predictions on it are real oversladdinger.
+
+### Details CSV (`run.py --truth`, read by `run_stats.py`)
+
+One row per truth box, written to `detaljer.csv` in the result directory:
+`fil, side, fasit_nr, type, dekning_pst, resultat` (`TRUFFET`/`MANGLER`),
+`kilde, conf, fasit_x0/y0/x1/y1`. Alongside it, `sammendrag.csv` holds the
+overall recall and the per-type breakdown.
+
+## Production (Docker)
+
+Production is a Docker container on the GPU server. **Port 5071 is production**,
+and nothing else is.
+
+An image is built once and gets an immutable tag
+(`<date>-<commit>-<model>`, e.g. `20260820-6d7e6820-yolo-yearly-10000-docs`).
+After that only *which* tag runs where moves. Prod never builds, so rollback is
+pointing back at a tag that has already run.
+
+Images are stored **only locally on the server**. There is no registry. So
+`docker image prune -a` destroys the ability to roll back, and a new machine
+has to rebuild everything.
+
+| Role | Port | Container | Tag from |
+|------|------|-----------|----------|
+| Prod | 5071 | `smsl-prod` | `PROD_TAG` |
+| Test | 5072 | `smsl-test` | `TEST_TAG` |
+
+`deploy.sh` does all the work. First time on a new machine:
+
+```sh
+cp .env.example .env
+source activate.sh          # loads server.env, which points at the model store
+ls $SLADD_WEIGHTS           # models available to build in
+```
+
+### build → test → promote
+
+```sh
+./deploy.sh build                                            # model from $SLADD_PRODWEIGHTS
+./deploy.sh build weights=$SLADD_WEIGHTS/uttrekk_4_jou/uttrekk_4_jou.pt   # another model
+
+./deploy.sh test 20260820-6d7e6820-yolo-yearly-10000-docs
+curl http://localhost:5072/health
+
+./deploy.sh promote 20260820-6d7e6820-yolo-yearly-10000-docs # same bits that were tested
+./deploy.sh stop test                                        # release the GPU memory
+```
+
+`promote` requires the tag explicitly, asks for confirmation, and **rolls back
+automatically** if `/health` does not answer. A tag built on uncommitted changes
+gets a `-dirty` suffix and is refused.
+
+### Other commands
+
+```sh
+./deploy.sh status            # what runs where, and is it healthy
+./deploy.sh versions          # locally built tags with model, newest first
+./deploy.sh rollback          # back to the previous prod tag
+./deploy.sh start|stop prod|test
+./deploy.sh logs prod|test
+./deploy.sh prune             # delete old images, cannot be undone
+```
+
+`start` and `stop` never change version; they bring the tag already in `.env`
+down and up. Deploy history lives in `.deploy-historikk` and is what `rollback`
+reads.
+
+### Worth knowing
+
+- Prod and test share the GPU. Run `./deploy.sh stop test` when you are done.
+- Which model is baked in is always an explicit choice. Without one, `build`
+  refuses. An image without weights starts fine and fails at the first
+  `/model` call.
+- The weights live outside the repo, so the commit alone does not say what an
+  image contains. That is why the model name is in the tag, and model name +
+  sha256 are labels on the image.
+- `deploy.sh build` stages the chosen model in `.byggvekter/` because Docker
+  can only copy from the build context. `docker build .` directly no longer
+  works; go through `deploy.sh`.
+- Confirm the GPU is actually in use:
+
+```sh
+./deploy.sh logs prod | grep -i "GPU available"   # -> True on gpu
+```
+
+### Logs
+
+Three streams through the same rotating handler: zipped at midnight, oldest zip
+dropped when the history is full.
+
+| Log | File | Source |
+|-----|------|--------|
+| Application | `app.log` | `app/app.py` |
+| Access | `gunicorn_access_prod.log` | `config/gunicorn_config_prod.py` |
+| Gunicorn errors | `gunicorn_error_prod.log` | same |
+
+`server.env` sets `SLADD_LOGS` (log root on the host) and `SLADD_LOG_DAYS`
+(days of history); `deploy.sh` passes them to compose as `LOG_ROOT` and
+`LOG_BACKUP_DAYS`. Under the log root: `gunicorn_logs/` and `ml_logs/` for
+prod, `gunicorn_logs_test/` and `ml_logs_test/` for test. Test writes to its own
+directories on purpose. Sharing them would have two rotation handlers fighting
+over the same file at midnight. The `_prod` suffix in the filenames is
+historical; it is kept so the existing log history on the server does not split
+into two series.
+
+## License
+
 [MIT](LICENSE)
 
-## Bidrag
-Se [CONTRIBUTING.md](CONTRIBUTING.md).
+## Contributing
 
-## Sikkerhet
-Se [SECURITY.md](.github/SECURITY.md) for rapportering av sårbarheter.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities via
+[SECURITY.md](.github/SECURITY.md), not in a public issue.

@@ -5,81 +5,80 @@ import re
 import numpy as np
 
 from config import (
-    YOLO_CONF, VERTIKAL_FAKTOR, YOLO_IMGSZ, MIN_SIFFER, MAKS_BOKSTAVER,
-    MIN_BOKS_AREAL, MIN_ELONGATION, MAKS_ELONGATION, MIN_KORTSIDE_PT,
-    MIN_KORTSIDE_YOLO_PT, MIN_LANGSIDE_YOLO_PT,
-    MIN_KORTSIDE_PADDLE_PT, MIN_LANGSIDE_PADDLE_PT, MAKS_ELONGATION_PADDLE,
-    PDF_DPI, standard_vekter)
+    YOLO_CONF, VERTICAL_FACTOR, YOLO_IMGSZ, MIN_DIGITS, MAX_LETTERS,
+    MIN_BOX_AREA, MIN_ELONGATION, MAX_ELONGATION, MIN_SHORT_SIDE_PT,
+    MIN_SHORT_SIDE_YOLO_PT, MIN_LONG_SIDE_YOLO_PT,
+    MIN_SHORT_SIDE_PADDLE_PT, MIN_LONG_SIDE_PADDLE_PT, MAX_ELONGATION_PADDLE,
+    PDF_DPI, default_weights)
 
-YOLO_VEKTER = standard_vekter()
-MIN_KORTSIDE_PX = MIN_KORTSIDE_PT * PDF_DPI / 72.0
-MIN_KORTSIDE_YOLO_PX = MIN_KORTSIDE_YOLO_PT * PDF_DPI / 72.0
-MIN_LANGSIDE_YOLO_PX = MIN_LANGSIDE_YOLO_PT * PDF_DPI / 72.0
-MIN_KORTSIDE_PADDLE_PX = MIN_KORTSIDE_PADDLE_PT * PDF_DPI / 72.0
-MIN_LANGSIDE_PADDLE_PX = MIN_LANGSIDE_PADDLE_PT * PDF_DPI / 72.0
+YOLO_WEIGHTS = default_weights()
+MIN_SHORT_SIDE_PX = MIN_SHORT_SIDE_PT * PDF_DPI / 72.0
+MIN_SHORT_SIDE_YOLO_PX = MIN_SHORT_SIDE_YOLO_PT * PDF_DPI / 72.0
+MIN_LONG_SIDE_YOLO_PX = MIN_LONG_SIDE_YOLO_PT * PDF_DPI / 72.0
+MIN_SHORT_SIDE_PADDLE_PX = MIN_SHORT_SIDE_PADDLE_PT * PDF_DPI / 72.0
+MIN_LONG_SIDE_PADDLE_PX = MIN_LONG_SIDE_PADDLE_PT * PDF_DPI / 72.0
 
-_modell = None
-_vekter_sti = YOLO_VEKTER
-
-
-def sett_vekter(sti):
-    global _vekter_sti, _modell
-    if sti:
-        _vekter_sti = sti
-        _modell = None          # tving ny lasting hvis modellen alt er lastet
+_model = None
+_weights_path = YOLO_WEIGHTS
 
 
-def aktive_vekter():
-    return _vekter_sti
+def set_weights(path):
+    global _weights_path, _model
+    if path:
+        _weights_path = path
+        _model = None          # force a reload if a model is already loaded
 
 
-def modell_info():
-    """Metadataen som ble publisert sammen med vektene, hvis den finnes.
+def active_weights():
+    return _weights_path
 
-    modell.json ligger ved siden av vektfilen (i vektlageret, og bygget inn
-    i imaget av ./deploy.sh). Mangler den, er modellen kopiert på egen hånd
-    og vi vet ikke hva den er trent på.
+
+def model_info():
+    """Metadata published alongside the weights, if present.
+
+    modell.json sits next to the weight file. If it is missing, the model was
+    copied by hand and we do not know what it was trained on.
     """
-    sti = os.path.join(os.path.dirname(os.path.abspath(_vekter_sti)), "modell.json")
+    path = os.path.join(os.path.dirname(os.path.abspath(_weights_path)), "modell.json")
     try:
-        with open(sti, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
 
 
-def _hent_modell():
-    global _modell
-    if _modell is None:
-        # Importen ligger her, ikke på toppen: cache-lesere bruker bare
-        # geometrifunksjonene og skal slippe å betale ultralytics-importen.
+def _fetch_model():
+    global _model
+    if _model is None:
+        # Imported here, not at the top: cache readers use only the geometry
+        # functions and should not pay for the ultralytics import.
         from ultralytics import YOLO
 
-        if not os.path.isfile(_vekter_sti):
-            raise FileNotFoundError(f"Fant ikke YOLO-vekter: {_vekter_sti}")
-        info = modell_info()
-        navn = info.get("navn")
-        print(f"Laster YOLO-vekter fra: {_vekter_sti}"
-              + (f"  (modell: {navn}, trent {info.get('trent', {}).get('dato', 'ukjent dato')})"
-                 if navn else "  (ingen modell.json — ukjent opphav)"))
-        _modell = YOLO(_vekter_sti)
-    return _modell
+        if not os.path.isfile(_weights_path):
+            raise FileNotFoundError(f"YOLO weights not found: {_weights_path}")
+        info = model_info()
+        name = info.get("name")
+        print(f"Loading YOLO weights from: {_weights_path}"
+              + (f"  (model: {name}, trained {info.get('trained', {}).get('date', 'unknown date')})"
+                 if name else "  (no modell.json, unknown origin)"))
+        _model = YOLO(_weights_path)
+    return _model
 
 
-def finn_yolo_bokser(bilde, conf=None):
-    """Kjør YOLO paa ett bilde. conf=None gir predict-terskelen YOLO_CONF."""
-    bgr = np.ascontiguousarray(bilde[:, :, ::-1])    # RGB (PyMuPDF) -> BGR (ultralytics)
-    res = _hent_modell().predict(bgr, conf=YOLO_CONF if conf is None else conf,
+def find_yolo_boxes(image, conf=None):
+    """Run YOLO on one image. conf=None uses the YOLO_CONF threshold."""
+    bgr = np.ascontiguousarray(image[:, :, ::-1])    # RGB (PyMuPDF) -> BGR (ultralytics)
+    res = _fetch_model().predict(bgr, conf=YOLO_CONF if conf is None else conf,
                                  imgsz=YOLO_IMGSZ, verbose=False)
     ut = []
-    for boks in res[0].boxes:
-        x0, y0, x1, y1 = boks.xyxy[0].tolist()
-        ut.append((x0, y0, x1, y1, boks.conf[0].item()))
+    for box in res[0].boxes:
+        x0, y0, x1, y1 = box.xyxy[0].tolist()
+        ut.append((x0, y0, x1, y1, box.conf[0].item()))
     return ut
 
 
-def _overlapp_andel(t, boks):
-    bx0, by0, bx1, by1 = boks
+def _overlap_share(t, box):
+    bx0, by0, bx1, by1 = box
     ix0, iy0 = max(t.x0, bx0), max(t.y0, by0)
     ix1, iy1 = min(t.x1, bx1), min(t.y1, by1)
     if ix1 <= ix0 or iy1 <= iy0:
@@ -88,106 +87,102 @@ def _overlapp_andel(t, boks):
     return ((ix1 - ix0) * (iy1 - iy0)) / ta if ta else 0.0
 
 
-def tokens_i_boks(tokens, boks, terskel=0.3):
-    return [t for t in tokens if _overlapp_andel(t, boks) > terskel]
+def tokens_in_box(tokens, box, threshold=0.3):
+    return [t for t in tokens if _overlap_share(t, box) > threshold]
 
 
-def tell_siffer_bokstaver(tokens):
-    """(siffer, bokstaver) i tokens som inneholder minst ett siffer.
+def count_digits_and_letters(tokens):
+    """(digits, letters) in tokens that contain at least one digit.
 
-    Rene ord-tokens hoppes over helt, slik at en etikett ved siden av tallet
-    ikke teller som bokstaver. Skilt ut fra snill_sjekk fordi boks_trekk
-    skriver de samme to tallene til resultat-CSV-en: deler de kode, kan
-    tallene i sweepen ikke komme i utakt med regelen i produksjon.
+    Pure word tokens are skipped so a label next to the number does not count
+    as letters. Shared with box_features, which writes the same two numbers to
+    the result CSV: sharing the code keeps the sweep in step with the rule
+    running in production.
     """
-    n_siffer = 0
-    bokstaver = 0
+    n_digits = 0
+    letters = 0
     for token in tokens:
-        if not any(ch.isdigit() for ch in token.tekst):
+        if not any(ch.isdigit() for ch in token.text):
             continue
-        n_siffer += sum(ch.isdigit() for ch in token.tekst)
-        bokstaver += sum(ch.isalpha() for ch in token.tekst)
-    return n_siffer, bokstaver
+        n_digits += sum(ch.isdigit() for ch in token.text)
+        letters += sum(ch.isalpha() for ch in token.text)
+    return n_digits, letters
 
 
-def snill_sjekk(tokens, boks):
-    n_siffer, bokstaver = tell_siffer_bokstaver(tokens_i_boks(tokens, boks))
-    return n_siffer >= MIN_SIFFER and bokstaver <= MAKS_BOKSTAVER
+def lenient_check(tokens, box):
+    n_digits, letters = count_digits_and_letters(tokens_in_box(tokens, box))
+    return n_digits >= MIN_DIGITS and letters <= MAX_LETTERS
 
 
-def er_vertikal(boks):
-    x0, y0, x1, y1 = boks[:4]
-    return (y1 - y0) > VERTIKAL_FAKTOR * (x1 - x0)
+def is_vertical(box):
+    x0, y0, x1, y1 = box[:4]
+    return (y1 - y0) > VERTICAL_FACTOR * (x1 - x0)
 
 
-def er_for_liten(boks):
-    x0, y0, x1, y1 = boks[:4]
-    return (x1 - x0) * (y1 - y0) < MIN_BOKS_AREAL
+def is_too_small(box):
+    x0, y0, x1, y1 = box[:4]
+    return (x1 - x0) * (y1 - y0) < MIN_BOX_AREA
 
 
-def har_feil_ratio(boks):
-    """Forkaster bokser som er for kvadratiske eller for langstrakte.
+def has_wrong_ratio(box):
+    """Reject boxes that are too square or too elongated.
 
-    En sladding av 5 sifre har et smalt formområde. Under MIN_ELONGATION er
-    boksen nesten kvadratisk (typisk falsk positiv); over MAKS_ELONGATION er
-    den 3-4x bredere enn selve feltet og sladder unødvendig mye.
-    Orienteringsuavhengig, så stående sladdinger behandles likt.
+    Below MIN_ELONGATION the box is nearly square (typical false positive);
+    above MAX_ELONGATION it is 3-4x wider than the field and sladder far more
+    than needed. Orientation-free, so vertical sladdinger are treated alike.
     """
-    x0, y0, x1, y1 = boks[:4]
+    x0, y0, x1, y1 = box[:4]
     w, h = x1 - x0, y1 - y0
     if w <= 0 or h <= 0:
         return True
     elongation = max(w / h, h / w)
-    return not (MIN_ELONGATION <= elongation <= MAKS_ELONGATION)
+    return not (MIN_ELONGATION <= elongation <= MAX_ELONGATION)
 
 
-def er_for_tynn(boks):
-    """Forkaster bokser der korteste side er for smal til å være tekst.
+def is_too_thin(box):
+    """Reject boxes whose shortest side is too thin to be text.
 
-    Måler korteste side, ikke høyden, slik at stående sladdinger ikke rammes.
+    Measures the shortest side, not the height, so vertical sladdinger survive.
     """
-    x0, y0, x1, y1 = boks[:4]
-    return min(x1 - x0, y1 - y0) < MIN_KORTSIDE_PX
+    x0, y0, x1, y1 = box[:4]
+    return min(x1 - x0, y1 - y0) < MIN_SHORT_SIDE_PX
 
 
-def er_for_smal_yolo(boks):
-    """Kortside under MIN_KORTSIDE_YOLO_PT — støy uansett konfidens.
+def is_too_narrow_yolo(box):
+    """Short side below MIN_SHORT_SIDE_YOLO_PT is noise at any confidence."""
+    x0, y0, x1, y1 = box[:4]
+    return min(x1 - x0, y1 - y0) < MIN_SHORT_SIDE_YOLO_PX
 
-    Orienteringsuavhengig som er_for_tynn: kortside, ikke høyde.
+
+def is_too_short_yolo(box):
+    """Long side below MIN_LONG_SIDE_YOLO_PT is too short for 5 digits.
+
+    High confidence exempts (see _hopp_over_geometrifilter), unlike the short
+    side limit above.
     """
-    x0, y0, x1, y1 = boks[:4]
-    return min(x1 - x0, y1 - y0) < MIN_KORTSIDE_YOLO_PX
+    x0, y0, x1, y1 = box[:4]
+    return max(x1 - x0, y1 - y0) < MIN_LONG_SIDE_YOLO_PX
 
 
-def er_for_kort_yolo(boks):
-    """Langside under MIN_LANGSIDE_YOLO_PT — for kort til å romme 5 sifre.
+def has_paddle_noise_shape(box):
+    """Stricter shape for paddle boxes. See MIN_*_PADDLE_* in config.
 
-    Høy konfidens fritar (se _hopp_over_geometrifilter), i motsetning til
-    kortsidekravet over.
+    Paddle is never exempted by confidence, so all three limits always apply.
     """
-    x0, y0, x1, y1 = boks[:4]
-    return max(x1 - x0, y1 - y0) < MIN_LANGSIDE_YOLO_PX
-
-
-def har_paddle_stoyform(boks):
-    """Strengere formkrav for paddle-bokser — se MIN_*_PADDLE_* i config.
-
-    Paddle fritas aldri av konfidens, så alle tre kravene gjelder alltid.
-    """
-    x0, y0, x1, y1 = boks[:4]
-    kort, lang = sorted((x1 - x0, y1 - y0))
-    if kort <= 0:
+    x0, y0, x1, y1 = box[:4]
+    short, long = sorted((x1 - x0, y1 - y0))
+    if short <= 0:
         return True
-    return (kort < MIN_KORTSIDE_PADDLE_PX or lang < MIN_LANGSIDE_PADDLE_PX
-            or lang / kort > MAKS_ELONGATION_PADDLE)
+    return (short < MIN_SHORT_SIDE_PADDLE_PX or long < MIN_LONG_SIDE_PADDLE_PX
+            or long / short > MAX_ELONGATION_PADDLE)
 
 
 
-def overlapp_andel_boks(a, b):
+def overlap_share_box(a, b):
     ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
     ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
     if ix1 <= ix0 or iy1 <= iy0:
         return 0.0
     ov = (ix1 - ix0) * (iy1 - iy0)
-    minst = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-    return ov / minst if minst else 0.0
+    least = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return ov / least if least else 0.0

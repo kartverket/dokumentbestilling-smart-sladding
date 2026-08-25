@@ -1,5 +1,5 @@
-# Ugyldige labels — rader i labels-CSV-en som er feil
-# Gjerne legg inn kommentar på hva som er feil med dem
+# Invalid labels — rows in the labels CSV that are wrong
+# Please note what is wrong with each one
 
 72704437-82d6-4099-92f7-57e3eb0abce3
 5e9b6b42-3cf5-456f-bcfd-8b664d8ed418

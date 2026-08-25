@@ -1,15 +1,15 @@
 import os
 import sys
 
-# Config-filen leses før gunicorn legger app-mappen på sys.path, og
-# logconfig_dict under refererer handler-klassen med punktnotasjon.
+# This file is read before gunicorn puts the app folder on sys.path, and
+# logconfig_dict below refers to the handler class by dotted name.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Hvor loggene havner. Settes av compose; defaulten er containerstien.
+# Where the logs go. Set by compose; the default is the container path.
 log_dir = os.getenv("GUNICORN_LOG_DIR", "/data/gunicorn_logs")
 os.makedirs(log_dir, exist_ok=True)
 
-# Antall døgn historikk å beholde per loggfil.
+# Days of history to keep per log file.
 backup_days = int(os.getenv("LOG_BACKUP_DAYS", "30"))
 
 # Worker configuration
@@ -20,27 +20,26 @@ timeout = 600
 # Logging configuration
 loglevel = os.getenv("GUNICORN_LOGLEVEL", "debug")
 
-# Må være satt til noe for at gunicorn i det hele tatt skal logge
-# tilgang. logconfig_dict under bytter ut handleren, så ingenting av
-# dette havner faktisk på stdout.
+# Must be set to something for gunicorn to log access at all. logconfig_dict
+# below swaps out the handler, so none of this actually reaches stdout.
 accesslog = "-"
 errorlog = "-"
 
-# Het «accesslogformat» før. Det er ikke et gunicorn-navn, så formatet
-# ble stille ignorert og defaulten brukt. Riktig navn er dette.
+# Was named "accesslogformat", which is not a gunicorn setting, so the format
+# was silently ignored and the default used. This is the correct name.
 access_log_format = "%(h)s %(l)s %(u)s %(t)s %(r)s %(s)s %(b)s %(f)s %(a)s"
 
-# capture_output dup2'er fd 1 og 2 til errorlog-filen på kernel-nivå.
-# Det omgår rotasjonen vi setter opp under, og filen ville vokst uten
-# tak. Av: stray stdout går til docker-loggen, som compose roterer.
+# capture_output dup2's fd 1 and 2 to the errorlog file at kernel level,
+# bypassing the rotation set up below so the file would grow unbounded. Off:
+# stray stdout goes to the docker log, which compose rotates.
 capture_output = False
 
-# Access- og error-loggen gjennom samme roterende zip-handler som
-# applikasjonsloggen. Uten dette roterer gunicorn ingenting, og
-# gunicorn_access_prod.log vokser til disken er full.
+# Access and error logs through the same rotating zip handler as the
+# application log. Without this gunicorn rotates nothing and
+# gunicorn_access_prod.log grows until the disk is full.
 logconfig_dict = {
     "version": 1,
-    # Gunicorn sine egne loggere må ikke slås av av dictConfig.
+    # dictConfig must not disable gunicorn's own loggers.
     "disable_existing_loggers": False,
     "formatters": {
         "rå": {"format": "%(message)s"},
@@ -73,8 +72,8 @@ logconfig_dict = {
             "level": "INFO",
             "propagate": False,
         },
-        # Error-loggen går også til stdout, så «./deploy.sh logs prod»
-        # fortsatt viser oppstart og feil.
+        # The error log also goes to stdout so "./deploy.sh logs prod" still
+        # shows startup and errors.
         "gunicorn.error": {
             "handlers": ["error_fil", "stdout"],
             "level": loglevel.upper(),
