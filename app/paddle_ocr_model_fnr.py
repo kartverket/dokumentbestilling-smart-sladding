@@ -54,13 +54,13 @@ def _fetch_reader():
         print(f"GPU available: {gpu}")
 
         kwargs = dict(
-            long="en",
+            lang="en",
             device="gpu" if gpu else "cpu",
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
             text_det_limit_type="max",
-            text_det_limit_page_len=DET_PAGE_LEN,
+            text_det_limit_side_len=DET_PAGE_LEN,
             # A larger rec batch on GPU gives better throughput.
             # SLADD_REC_BATCH can lower it when several processes share the
             # card; batch size affects memory and speed, not the result.
