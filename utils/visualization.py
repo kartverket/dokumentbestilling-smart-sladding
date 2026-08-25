@@ -7,7 +7,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI
 from utils_config import (
-    MISSED_TRUTH_COLOR, CORRECT_PADDLE_COLOR, CORRECT_YOLO_COLOR, CORRECT_BOTH_COLOR,
+    MISSED_TRUTH_COLOR, COVERED_TRUTH_COLOR,
+    CORRECT_PADDLE_COLOR, CORRECT_YOLO_COLOR, CORRECT_BOTH_COLOR,
     OVERSLADD_PADDLE_COLOR, OVERSLADD_YOLO_COLOR, OVERSLADD_BOTH_COLOR, UNKNOWN_COLOR
 )
 
@@ -157,13 +158,15 @@ def draw_and_save(sladd_boxes, ground_truth, folder, out_dir, y_origin="top",
                     _draw_conf(drawer, r, box[4] if len(box) > 4 else None,
                                CORRECT_YOLO_COLOR)
 
-            # 3) Truth: only the missed boxes (red)
+            # 3) Truth: every label, the missed ones in red and the rest
+            # faint, so an oversladd page still shows what the fasit holds.
             if ground_truth:
                 for fi, (x, y, w, h, _t) in enumerate(ground_truth.get((nr, si), [])):
-                    if miss_indices is None or (nr, si, fi) in miss_indices:
-                        drawer.rectangle(
-                            _fasit_pixels((x, y, w, h), image.height, y_origin),
-                            outline=MISSED_TRUTH_COLOR, width=3)
+                    missed = miss_indices is None or (nr, si, fi) in miss_indices
+                    drawer.rectangle(
+                        _fasit_pixels((x, y, w, h), image.height, y_origin),
+                        outline=MISSED_TRUTH_COLOR if missed else COVERED_TRUTH_COLOR,
+                        width=3)
 
             image = Image.alpha_composite(base, overlay).convert("RGB")
 

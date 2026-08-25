@@ -23,3 +23,5 @@ OVERSLADD_PADDLE_COLOR = (255, 140, 0, 204)     # orange = over-sladding from Pa
 OVERSLADD_YOLO_COLOR   = (255, 180, 0, 204)     # amber = over-sladding from YOLO
 OVERSLADD_BOTH_COLOR  = (180, 180, 0, 204)     # dark yellow-green = over-sladding from both
 UNKNOWN_COLOR           = (110, 110, 110, 204)   # gray = source unknown (prod CSV)
+# Half opacity so the covered labels sit behind the errors they explain.
+COVERED_TRUTH_COLOR    = (190, 60, 230, 128)     # magenta at 0.5 = truth box that WAS covered
