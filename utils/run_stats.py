@@ -103,8 +103,11 @@ def paddle_stats(details, summary):
     s["sider"] = len({(r["fil"], r["side"]) for r in details})
 
     s["pred"] = int(summary.get("pred", 0))
-    s["surplus"] = int(summary.get("surplus", 0))
-    s["oversladding"] = s["surplus"] / s["pred"] if s["pred"] else 0.0
+    # old result dirs: "overflod" (pre-translation) or "surplus" (aug 2026)
+    s["oversladd"] = int(summary.get("oversladd")
+                         or summary.get("surplus")
+                         or summary.get("overflod") or 0)
+    s["oversladding"] = s["oversladd"] / s["pred"] if s["pred"] else 0.0
     s["precision"] = 1.0 - s["oversladding"] if s["pred"] else 0.0
     s["total_overlap"] = summary.get("total_overlap_pct", 0.0) / 100
     s["threshold"] = summary.get("threshold_pct", 0.0) / 100
@@ -187,7 +190,7 @@ def make_report(folder, p, n, labels_path, log_info):
     L.append(f"Recall:                       {pct(p['recall'])}")
     L.append(f"Sladd boxes drawn:            {p['pred']}")
     L.append(f"OVER-SLADDING:                {pct(p['oversladding'])}   "
-             f"({p['surplus']} of {p['pred']} boxes with no truth hit)")
+             f"({p['oversladd']} of {p['pred']} boxes with no truth hit)")
     L.append(f"Precision:                    {pct(p['precision'])}")
     L.append(f"Total overlap (area):         {pct(p['total_overlap'])}")
     L.append(f"Coverage mean / median:       {p['dekning_snitt']:.1f} % / {p['dekning_median']:.1f} %")

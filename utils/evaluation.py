@@ -61,11 +61,11 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
         write("No truth labels, skipping measurement.")
         return None
 
-    total_truth = total_hit = total_pred = total_surplus = 0
+    total_truth = total_hit = total_pred = total_oversladd = 0
     total_ov_area = total_fa_area = 0.0
     pr_type = defaultdict(lambda: [0, 0])
     miss_files = defaultdict(lambda: [0, 0])
-    surplus_files = defaultdict(int)
+    oversladd_files = defaultdict(int)
     oversladd_boxes = {}   # (navn, si) -> (iw, ih, [(x0,y0,x1,y1)])
     details = []
 
@@ -134,10 +134,10 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
                 miss_files[(name, si)][0] += 1
             write(f"   truth#{fi + 1} {t:<22} coverage={best_cov:5.0%}  IoU={best_iou:5.0%}  "
                   f"-> {'HIT' if hit else 'MISSING'}")
-        n_surplus = len(pred) - len(hit_pred)
-        total_surplus += n_surplus
-        if n_surplus > 0:
-            surplus_files[(name, si)] += n_surplus
+        n_oversladd = len(pred) - len(hit_pred)
+        total_oversladd += n_oversladd
+        if n_oversladd > 0:
+            oversladd_files[(name, si)] += n_oversladd
             over_boxes = [raw[i] for i in range(len(raw)) if i not in hit_pred]
             oversladd_boxes[(name, si)] = (iw, ih, over_boxes)
 
@@ -146,7 +146,7 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
     write(f"Recall (hits / truth):        {total_hit}/{total_truth} = {rec:.0%}")
     write(f"Total overlap (area):         {(total_ov_area / total_fa_area if total_fa_area else 0):.0%}")
     write(f"Sladd boxes in total:         {total_pred}")
-    write(f"Oversladding (no truth hit):  {total_surplus}")
+    write(f"Oversladding (no truth hit):  {total_oversladd}")
     write(f"Hit threshold:                {threshold:.0%} of the truth box area")
 
     eval_doc_nos = {_doc_no(n) for (n, _) in sladd_boxes}
@@ -191,7 +191,7 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
 
     return {
         "recall": rec, "hit": total_hit, "fasit": total_truth,
-        "pred": total_pred, "surplus": total_surplus,
+        "pred": total_pred, "oversladd": total_oversladd,
         "total_overlap": total_ov_area / total_fa_area if total_fa_area else 0.0,
         "threshold": threshold,
         "pr_type": {t: tuple(v) for t, v in pr_type.items()},
@@ -201,9 +201,9 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
             for (name, si), (b, tot) in sorted(miss_files.items()) if b > 0
         ],
         "oversladd_boxes": oversladd_boxes,
-        "surplus_files": [
+        "oversladd_files": [
             {"fil": name, "side": si, "oversladd": n}
-            for (name, si), n in sorted(surplus_files.items())
+            for (name, si), n in sorted(oversladd_files.items())
         ],
     }
 

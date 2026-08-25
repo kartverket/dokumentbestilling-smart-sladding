@@ -23,13 +23,13 @@ def write_result_files(result, folder=".", description=None, log=None):
 
         w.writerow(["## Overall"])
         w.writerow(["recall_pct", "hit", "fasit", "pred",
-                    "surplus", "total_overlap_pct", "threshold_pct"])
+                    "oversladd", "total_overlap_pct", "threshold_pct"])
         w.writerow([
             round(result["recall"] * 100, 1),
             result["hit"],
             result["fasit"],
             result["pred"],
-            result["surplus"],
+            result["oversladd"],
             round(result.get("total_overlap", 0.0) * 100, 1),
             round(result.get("threshold", 0.0) * 100, 1),
         ])

@@ -177,7 +177,7 @@ def _evaluate_and_draw_error(sladd_doc, csv_doc, truth, folder, png_dir,
         return
 
     has_miss = bool(doc_eval.get("miss_files"))
-    has_over = bool(doc_eval.get("surplus_files"))
+    has_over = bool(doc_eval.get("oversladd_files"))
     if not has_miss and not has_over:
         return
     if budget is not None and not budget.ta():
@@ -191,7 +191,7 @@ def _evaluate_and_draw_error(sladd_doc, csv_doc, truth, folder, png_dir,
     oversladd = doc_eval.get("oversladd_boxes", None)
 
     miss_pages = {(bf["fil"], bf["side"]) for bf in doc_eval.get("miss_files", [])}
-    over_pages = {(of["fil"], of["side"]) for of in doc_eval.get("surplus_files", [])}
+    over_pages = {(of["fil"], of["side"]) for of in doc_eval.get("oversladd_files", [])}
 
     if miss_pages:
         miss_dir = os.path.join(png_dir, "bom")
@@ -654,7 +654,7 @@ def main():
         }
         oversladd = eval_result.get("oversladd_boxes", None)
         miss_pages = {(bf["fil"], bf["side"]) for bf in eval_result.get("miss_files", [])}
-        over_pages = {(of["fil"], of["side"]) for of in eval_result.get("surplus_files", [])}
+        over_pages = {(of["fil"], of["side"]) for of in eval_result.get("oversladd_files", [])}
         every_error_pages = miss_pages | over_pages
         print(f"\n--only-error: drawing {len(every_error_pages)} page(s) with errors (bom/ and oversladd/)")
 

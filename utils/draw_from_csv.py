@@ -131,8 +131,8 @@ def _write_before_after(before, after, filter_name):
                            after["hit"] - before["hit"]),
         ("Sladd boxes",    str(before["pred"]), str(after["pred"]),
                            after["pred"] - before["pred"]),
-        ("Over-sladding",  str(before["surplus"]), str(after["surplus"]),
-                           after["surplus"] - before["surplus"]),
+        ("Over-sladding",  str(before["oversladd"]), str(after["oversladd"]),
+                           after["oversladd"] - before["oversladd"]),
         ("Total overlap",  f"{before['total_overlap']:.0%}",
                             f"{after['total_overlap']:.0%}", None),
     ]
@@ -225,7 +225,7 @@ def main():
     if args.only_oversladd:
         eval_res = _quiet_eval(sladd_boxes, truth, args.folder, args.threshold, args.y_origin)
         _write_before_after(before_res, eval_res, filter_name)
-        oversladd_pages = {(r["fil"], r["side"]) for r in (eval_res or {}).get("surplus_files", [])}
+        oversladd_pages = {(r["fil"], r["side"]) for r in (eval_res or {}).get("oversladd_files", [])}
         if not oversladd_pages:
             print("No over-sladding found.")
             return
