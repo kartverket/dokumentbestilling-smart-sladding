@@ -8,6 +8,12 @@ Resuming is the DEFAULT: finished rows in an existing judgement CSV are
 skipped and only the failed ones retried. Use --restart to judge everything
 again.
 
+Judgements are also cached on disk (see vlm_cache.py): with the same prompt,
+config and model, a box already judged anywhere is answered from the cache
+instead of the GPU — across runs, manifests and export names. The prompt
+version (the cache fingerprint) is printed at startup. --no-cache turns the
+cache off; --restart alone rewrites the CSV but still reuses cached answers.
+
 Three modes: --mode bilde (the crop as an image), tekst (ocr_tekst/ocr_linje
 from the manifest, needs an export run with --ocr-cache) and begge. Having
 both measures whether sight is worth the cost: where PaddleOCR read
@@ -37,6 +43,8 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+import vlm_cache
 
 STD_URL = "http://localhost:8000/v1"
 STD_TIMEOUT = 120
@@ -328,25 +336,18 @@ def parse_answer(text):
 
 # ── Calls ─────────────────────────────────────────────────────
 
-def _build_melding(row, folder, prompt, mode):
-    """One chat message for one manifest row."""
+def _build_melding(prompt, mode, ocr, image_b64):
+    """One chat message for one crop, from the inputs judge_one loaded."""
     text = prompt
-    ocr = {"ocr_tekst": row.get("ocr_tekst", "") or "(ingenting)",
-           "ocr_linje": (row.get("ocr_blokk") or row.get("ocr_linje") or
-                         "(ingenting)")}
     if mode == "text":
         return [{"role": "user",
                  "content": text + "\n\n" + TEXT_ONLY_MEASURE.format(**ocr)}]
     if mode == "both":
         text += "\n" + TEXT_MEASURE.format(**ocr)
-
-    path = os.path.join(folder, row["utsnitt"])
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("ascii")
     return [{"role": "user", "content": [
         {"type": "text", "text": text},
         {"type": "image_url",
-         "image_url": {"url": f"data:image/png;base64,{b64}"}},
+         "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
     ]}]
 
 
@@ -395,9 +396,44 @@ def call_model(url, model, messages, api_key=None, timeout=STD_TIMEOUT,
     return content
 
 
-def judge_one(row, a, folder, prompt):
-    """Judges one box. Never raises — errors land in the «feil» column."""
+def judge_one(row, a, folder, prompt, cache_dir=None):
+    """Judges one box. Never raises — errors land in the «feil» column.
+
+    With cache_dir set, a box already judged with the same prompt, config
+    and model is answered from the cache, and a fresh answer that parses is
+    written back. The extra «_cache» key marks a hit and is dropped before
+    the CSV.
+    """
     t0 = time.monotonic()
+
+    ocr = None
+    if a.mode in ("text", "both"):
+        ocr = {"ocr_tekst": row.get("ocr_tekst", "") or "(ingenting)",
+               "ocr_linje": (row.get("ocr_blokk") or row.get("ocr_linje") or
+                             "(ingenting)")}
+    image_b64 = None
+    if a.mode in ("image", "both"):
+        try:
+            with open(os.path.join(folder, row["utsnitt"]), "rb") as f:
+                image_b64 = base64.b64encode(f.read()).decode("ascii")
+        except OSError as e:
+            return {"svar": "usikker", "sikkerhet": "", "tall": "",
+                    "begrunnelse": "",
+                    "sekunder": round(time.monotonic() - t0, 2),
+                    "feil": f"{type(e).__name__}: {e}"[:200], "raatekst": ""}
+
+    key = vlm_cache.item_key(image_b64, ocr) if cache_dir else None
+    if key:
+        cached = vlm_cache.read_cache(cache_dir, key)
+        if cached is not None:
+            answer, confidence, number, rationale, parse_error, check = \
+                parse_answer(cached)
+            if not parse_error:
+                return {"svar": answer, "sikkerhet": confidence,
+                        "tall": number, "begrunnelse": rationale, **check,
+                        "sekunder": round(time.monotonic() - t0, 2),
+                        "feil": "", "raatekst": "", "_cache": True}
+
     error = ""
     raw = ""
     urler = a.url if isinstance(a.url, list) else [a.url]
@@ -407,7 +443,7 @@ def judge_one(row, a, folder, prompt):
         i_url = 0
     for attempt in range(1, a.attempt + 1):
         try:
-            messages = _build_melding(row, folder, prompt, a.mode)
+            messages = _build_melding(prompt, a.mode, ocr, image_b64)
             # A retry goes to the next backend, so one dead instance does not
             # cost the row.
             url = urler[(i_url + attempt - 1) % len(urler)]
@@ -439,6 +475,8 @@ def judge_one(row, a, folder, prompt):
                 "begrunnelse": "", "sekunder": round(sec, 2), "feil": error,
                 "raatekst": ""}
     answer, confidence, number, rationale, parse_error, check = parse_answer(raw)
+    if key and not parse_error:
+        vlm_cache.write_cache(cache_dir, key, row.get("utsnitt", ""), raw, sec)
     return {"svar": answer, "sikkerhet": confidence, "tall": number,
             "begrunnelse": rationale, **check,
             "sekunder": round(sec, 2), "feil": parse_error,
@@ -456,6 +494,21 @@ def run(a):
     if a.prompt_file:
         with open(a.prompt_file, encoding="utf-8") as f:
             prompt = f.read().strip()
+
+    cache_dir = None
+    if a.cache:
+        templates = {"image": "", "both": TEXT_MEASURE,
+                     "text": TEXT_ONLY_MEASURE}[a.mode]
+        fp = vlm_cache.fingerprint(prompt, templates, a.model, a.mode,
+                                   a.temperature, a.max_tokens,
+                                   _THINKING["value"])
+        cache_dir = os.path.join(a.cache, fp)
+        vlm_cache.write_meta(cache_dir, {
+            "model": a.model, "mode": a.mode, "temperature": a.temperature,
+            "max_tokens": a.max_tokens, "thinking": _THINKING["value"],
+            "prompt_file": a.prompt_file or "(built-in)",
+            "templates": templates, "prompt": prompt})
+        print(f"  Prompt version {fp}  (cache: {cache_dir})")
 
     if a.mode in ("text", "both") and not any(
             r.get("ocr_linje") for r in rows):
@@ -540,12 +593,13 @@ def run(a):
     writer_ui = csv.DictWriter(f_ui, fieldnames=WITHOUT_CONTENT_FIELD,
                                 extrasaction="ignore")
     laas = threading.Lock()
-    tally = {"n": 0, "feil": 0}
+    tally = {"n": 0, "feil": 0, "cache": 0}
     timings = []
     t_start = time.monotonic()
 
     def work(row):
-        res = judge_one(row, a, folder, prompt)
+        res = judge_one(row, a, folder, prompt, cache_dir)
+        from_cache = res.pop("_cache", False)
         row_out = {k: row.get(k, "") for k in
                   ("nr", "utsnitt", "klasse", "kilde", "label_id")}
         row_out.update(res)
@@ -563,12 +617,16 @@ def run(a):
             tally["n"] += 1
             if res["feil"]:
                 tally["feil"] += 1
-            timings.append(res["sekunder"])
+            if from_cache:
+                tally["cache"] += 1
+            else:
+                timings.append(res["sekunder"])
             if tally["n"] % 25 == 0 or tally["n"] == len(left):
                 gone = time.monotonic() - t_start
                 print(f"    {tally['n']:>6}/{len(left)}  "
                       f"{gone:6.0f}s  {gone / tally['n']:5.2f} s/box  "
-                      f"{tally['feil']} errors", flush=True)
+                      f"{tally['feil']} errors  "
+                      f"{tally['cache']} from cache", flush=True)
 
     try:
         with ThreadPoolExecutor(max_workers=a.concurrent) as pool:
@@ -584,6 +642,9 @@ def run(a):
     print(f"\n  Done: {tally['n']} judgements in {gone:.0f}s "
           f"({gone / max(tally['n'], 1):.2f} s/box wall clock, "
           f"{a.concurrent} concurrent)")
+    if cache_dir:
+        print(f"  Cache: {tally['cache']} of {tally['n']} answers reused "
+              f"({cache_dir})")
     if timings:
         print(f"  Latency per call: median {timings[len(timings) // 2]:.2f}s, "
               f"p90 {timings[int(len(timings) * 0.9)]:.2f}s, "
@@ -655,6 +716,14 @@ def main():
                    help="OVERWRITE the judgement CSV and judge everything "
                         "again. A finished run is data, and overwriting it by "
                         "accident costs GPU hours.")
+    p.add_argument("--cache", default=None, metavar="DIR",
+                   help="Judgement cache directory (default $SLADD_CACHE/vlm "
+                        "when SLADD_CACHE is set). Same prompt, config and "
+                        "model reuse earlier answers; a change in any of "
+                        "them gets a fresh cache folder.")
+    p.add_argument("--no-cache", action="store_true",
+                   help="Judge without reading or writing the cache. "
+                        "--restart alone still reuses cached answers.")
     p.add_argument("--prompt-file", default=None, metavar="FIL",
                    help="Read the prompt from a file instead of the built-in")
     p.add_argument("--write-prompt", action="store_true",
@@ -665,6 +734,10 @@ def main():
         print(STD_PROMPT)
         return
     _THINKING["value"] = None if a.thinking == "auto" else a.thinking
+    if a.no_cache:
+        a.cache = None
+    elif a.cache is None and os.environ.get("SLADD_CACHE"):
+        a.cache = os.path.join(os.environ["SLADD_CACHE"], "vlm")
     for flag in ("manifest", "model"):
         if not getattr(a, flag):
             p.error(f"--{flag} is required")
