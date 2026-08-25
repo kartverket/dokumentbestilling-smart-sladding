@@ -8,6 +8,8 @@ import argparse
 import csv
 from collections import Counter
 
+from filter_common import iter_label_rows
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -20,28 +22,32 @@ def main():
     type_count = {}                 # type -> [tp, fp, fn]
     cross_table = Counter()          # (ml_generated, status) -> count
 
-    with open(args.csv, newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            total += 1
-            status = (row.get("ml_status") or "").strip().upper()
-            typ = (row.get("type") or "").strip()
-            ml = (row.get("ml_generated") or "").strip().lower() == "true"
+    info = {}
+    for row in iter_label_rows(args.csv, exclude_status=(), info=info):
+        total += 1
+        status = (row.get("ml_status") or "").strip().upper()
+        typ = (row.get("type") or "").strip()
+        ml = (row.get("ml_generated") or "").strip().lower() == "true"
 
-            cross_table[("true" if ml else "false", status or "(empty)")] += 1
+        cross_table[("true" if ml else "false", status or "(empty)")] += 1
 
-            t = type_count.setdefault(typ, [0, 0, 0])
-            if ml and status == "ACCEPTED":
-                tp += 1
-                t[0] += 1
-            elif ml and status == "REJECTED":
-                fp += 1
-                t[1] += 1
-            elif not ml:
-                fn += 1
-                t[2] += 1
-            else:
-                unresolved += 1       
+        t = type_count.setdefault(typ, [0, 0, 0])
+        if ml and status == "ACCEPTED":
+            tp += 1
+            t[0] += 1
+        elif ml and status == "REJECTED":
+            fp += 1
+            t[1] += 1
+        elif not ml:
+            fn += 1
+            t[2] += 1
+        else:
+            unresolved += 1
+    invalid_skipped = info["discarded"]["(ugyldig-listet)"]
+
     print(f"\n=== Total: {total} boxes ===")
+    if invalid_skipped:
+        print(f"  ({invalid_skipped} boxes in ugyldige_labels.txt excluded)")
     print(f"  TP (ml + ACCEPTED)    : {tp:>6}")
     print(f"  FP (ml + REJECTED)    : {fp:>6}")
     print(f"  FN (added by hand)    : {fn:>6}")

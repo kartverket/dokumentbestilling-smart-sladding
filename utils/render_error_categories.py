@@ -20,6 +20,8 @@ from collections import defaultdict
 import fitz
 from PIL import Image, ImageDraw
 
+from filter_common import iter_label_rows
+
 PDF_DPI = 300
 SCALE = PDF_DPI / 72.0  # PDF points -> pixels
 
@@ -34,33 +36,37 @@ def _doc_no(name):
 
 
 def read_labels_csv(path):
-    """Returns {(doc_no, page): [label, ...]}."""
+    """Returns {(doc_no, page): [label, ...]}.
+    Rows listed in ugyldige_labels.txt are excluded — they are not fasit."""
     per_page = defaultdict(list)
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            try:
-                doc_no = int(r["fil_revisjon_id"])
-                page = int(r["sidetall"])
-                x, y = float(r["x"]), float(r["y"])
-                w, h = float(r["width"]), float(r["height"])
-            except (TypeError, ValueError, KeyError):
-                continue
+    info = {}
+    for r in iter_label_rows(path, exclude_status=(), info=info):
+        try:
+            doc_no = int(r["fil_revisjon_id"])
+            page = int(r["sidetall"])
+            x, y = float(r["x"]), float(r["y"])
+            w, h = float(r["width"]), float(r["height"])
+        except (TypeError, ValueError, KeyError):
+            continue
 
-            ml = (r.get("ml_generated") or "").strip().lower() == "true"
-            status = (r.get("ml_status") or "").strip().upper()
+        ml = (r.get("ml_generated") or "").strip().lower() == "true"
+        status = (r.get("ml_status") or "").strip().upper()
 
-            if ml and status == "ACCEPTED":
-                category = "accepted"
-            elif ml and status == "REJECTED":
-                category = "rejected"
-            else:
-                category = "manual"
+        if ml and status == "ACCEPTED":
+            category = "accepted"
+        elif ml and status == "REJECTED":
+            category = "rejected"
+        else:
+            category = "manual"
 
-            per_page[(doc_no, page)].append({
-                "x": x, "y": y, "w": w, "h": h,
-                "type": (r.get("type") or "").strip(),
-                "category": category,
-            })
+        per_page[(doc_no, page)].append({
+            "x": x, "y": y, "w": w, "h": h,
+            "type": (r.get("type") or "").strip(),
+            "category": category,
+        })
+    skipped = info["discarded"]["(ugyldig-listet)"]
+    if skipped:
+        print(f"  {skipped} boxes in ugyldige_labels.txt excluded")
     return per_page
 
 

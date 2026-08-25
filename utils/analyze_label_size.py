@@ -9,23 +9,28 @@ import argparse
 import csv
 import statistics
 
+from filter_common import iter_label_rows
+
 SCALE = 300 / 72.0  # PDF points -> pixels at 300 DPI
 
 
 def read_labels(path):
+    info = {}
     boxes = []
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            try:
-                w = float(r["width"])
-                h = float(r["height"])
-                ml = (r.get("ml_generated") or "").strip().lower() == "true"
-                status = (r.get("ml_status") or "").strip().upper()
-            except (TypeError, ValueError, KeyError):
-                continue
-            boxes.append({"w": w, "h": h, "ml": ml, "status": status,
-                           "area": abs(w * h), "ratio": w / h if h != 0 else 0,
-                           "kilde": "ml" if ml else "manual"})
+    for r in iter_label_rows(path, exclude_status=(), info=info):
+        try:
+            w = float(r["width"])
+            h = float(r["height"])
+            ml = (r.get("ml_generated") or "").strip().lower() == "true"
+            status = (r.get("ml_status") or "").strip().upper()
+        except (TypeError, ValueError, KeyError):
+            continue
+        boxes.append({"w": w, "h": h, "ml": ml, "status": status,
+                       "area": abs(w * h), "ratio": w / h if h != 0 else 0,
+                       "kilde": "ml" if ml else "manual"})
+    skipped = info["discarded"]["(ugyldig-listet)"]
+    if skipped:
+        print(f"  {skipped} boxes in ugyldige_labels.txt excluded")
     return boxes
 
 

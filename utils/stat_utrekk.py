@@ -14,26 +14,31 @@ from collections import Counter, defaultdict
 import matplotlib
 import matplotlib.pyplot as plt
 
+from filter_common import iter_label_rows
+
 COLOR = "#7396bf"              
 EDGE = "#2b2b2b"
 
 
 def read_labels(path):
+    info = {}
     rows = []
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            try:
-                rows.append({
-                    "dok": int(r["fil_revisjon_id"]),
-                    "side": int(r["sidetall"]),
-                    "type": (r.get("type") or "").strip() or "(empty)",
-                    "w": float(r["width"]), "h": float(r["height"]),
-                    "x": float(r["x"]), "y": float(r["y"]),
-                    "ml": (r.get("ml_generated") or "").strip().lower() == "true",
-                    "status": (r.get("ml_status") or "").strip().upper(),
-                })
-            except (TypeError, ValueError, KeyError):
-                continue
+    for r in iter_label_rows(path, exclude_status=(), info=info):
+        try:
+            rows.append({
+                "dok": int(r["fil_revisjon_id"]),
+                "side": int(r["sidetall"]),
+                "type": (r.get("type") or "").strip() or "(empty)",
+                "w": float(r["width"]), "h": float(r["height"]),
+                "x": float(r["x"]), "y": float(r["y"]),
+                "ml": (r.get("ml_generated") or "").strip().lower() == "true",
+                "status": (r.get("ml_status") or "").strip().upper(),
+            })
+        except (TypeError, ValueError, KeyError):
+            continue
+    skipped = info["discarded"]["(ugyldig-listet)"]
+    if skipped:
+        print(f"  {skipped} boxes in ugyldige_labels.txt excluded")
     return rows
 
 

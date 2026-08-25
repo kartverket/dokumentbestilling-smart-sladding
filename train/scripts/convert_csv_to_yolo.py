@@ -12,12 +12,19 @@ Run:
 
 import argparse
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import fitz
 import numpy as np
 import pandas as pd
+
+# ugyldige_labels.txt lives at the repo root; reuse the reader in utils/.
+_UTILS = str(Path(__file__).resolve().parents[2] / "utils")
+if _UTILS not in sys.path:
+    sys.path.insert(0, _UTILS)
+from filter_common import read_invalid_label_ids
 
 
 DPI = 300
@@ -107,6 +114,16 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
     if only_ids:
         df = df[df["fil_revisjon_id"].astype(str).isin(only_ids)]
         print(f"Filtered to {df['fil_revisjon_id'].nunique()} documents matching --ids")
+
+    invalid = read_invalid_label_ids()
+    if invalid and "id" in df.columns:
+        listed = df["id"].astype(str).str.strip().isin(invalid)
+        if listed.any():
+            print(f"Excluded {int(listed.sum())} boxes listed in ugyldige_labels.txt")
+            df = df[~listed]
+    elif invalid:
+        print(f"WARNING: ugyldige_labels.txt has {len(invalid)} ids, but the "
+              f"labels CSV has no id column - nothing excluded.")
 
     df["ml_status"] = df["ml_status"].astype(str).str.strip().str.upper()
     df["ml_generated"] = (

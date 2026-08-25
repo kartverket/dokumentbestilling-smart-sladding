@@ -120,8 +120,9 @@ RECOMMENDED_THRESHOLDS = {"area": 0.32, "short_side": 0.60, "iou": 0.20, "center
 
 # ── Loading ──────────────────────────────────────────────────
 
-# Label rows judged to be truth noise in manual review. read_truth* skips them, so
-# the labels file needs no cleaning and a re-export resets nothing.
+# Label rows judged to be truth noise in manual review. iter_label_rows (and
+# with it every read_truth*) skips them, so the labels file needs no cleaning
+# and a re-export resets nothing.
 INVALID_LABELS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "ugyldige_labels.txt")
 
@@ -139,6 +140,27 @@ def read_invalid_label_ids(path=None):
     return ids
 
 
+def reclassify_invalid_covering(rows):
+    """Covering rows (klasse != BOM) whose fasit labels are ALL listed in
+    ugyldige_labels.txt become BOM: the box covers only noise. label_id is
+    «;»-joined, as vlm_export writes it. Runs at read time so a grown
+    ugyldige_labels.txt applies to old manifests without a re-export.
+    Returns the number of rows changed."""
+    invalid = read_invalid_label_ids()
+    if not invalid:
+        return 0
+    n = 0
+    for r in rows:
+        if r.get("klasse") == "BOM":
+            continue
+        ids = [i.strip() for i in (r.get("label_id") or "").split(";")
+               if i.strip()]
+        if ids and all(i in invalid for i in ids):
+            r["klasse"] = "BOM"
+            n += 1
+    return n
+
+
 _WARNED_WITHOUT_ID = False
 
 
@@ -151,31 +173,56 @@ def _warn_missing_id_column(invalid, columns):
               f"Include id in the next export.")
 
 
+def iter_label_rows(path, exclude_status=("REJECTED",), info=None):
+    """Yields rows from a labels CSV with the fasit policy applied.
+
+    The one place that decides what counts as fasit input: rows listed in
+    ugyldige_labels.txt are ALWAYS skipped (with the one-time warning when
+    the CSV has no id column); statuses in exclude_status are skipped — pass
+    () to keep REJECTED, as the stats tools do to measure prod's false
+    positives.
+
+    `info`, if given, is a dict that receives "columns" (the CSV header) and
+    "discarded" (a per-reason tally, incl. «(ugyldig-listet)»). Both are set
+    once iteration starts, so read them after the loop.
+    """
+    exclude = {str(e).strip().upper() for e in exclude_status}
+    invalid = read_invalid_label_ids()
+    tally = defaultdict(int)
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        leser = csv.DictReader(f)
+        _warn_missing_id_column(invalid, leser.fieldnames)
+        if info is not None:
+            info["columns"] = leser.fieldnames or []
+            info["discarded"] = tally
+        for r in leser:
+            status = (r.get("ml_status") or "").strip().upper()
+            if status in exclude:
+                tally[status or "(empty)"] += 1
+                continue
+            label_id = (r.get("id") or "").strip()
+            if label_id and label_id in invalid:
+                tally["(ugyldig-listet)"] += 1
+                continue
+            yield r
+
+
 def read_truth_boxes(path):
     """Truth labels (ACCEPTED + manual; REJECTED and ugyldige_labels.txt skipped)
     as (doc_no, side) -> [(x0, y0, x1, y1, label_id), ...] in PDF points.
     """
-    invalid = read_invalid_label_ids()
     truth = defaultdict(list)
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        leser = csv.DictReader(f)
-        _warn_missing_id_column(invalid, leser.fieldnames)
-        for r in leser:
-            if (r.get("ml_status") or "").strip().upper() == "REJECTED":
-                continue
-            label_id = (r.get("id") or "").strip()
-            if label_id and label_id in invalid:
-                continue
-            try:
-                nr = int(r["fil_revisjon_id"])
-                page = int(r["sidetall"])
-                x, y = float(r["x"]), float(r["y"])
-                w, h = float(r["width"]), float(r["height"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            x0, x1 = sorted((x, x + w))
-            y0, y1 = sorted((y, y + h))
-            truth[(nr, page)].append((x0, y0, x1, y1, label_id))
+    for r in iter_label_rows(path):
+        try:
+            nr = int(r["fil_revisjon_id"])
+            page = int(r["sidetall"])
+            x, y = float(r["x"]), float(r["y"])
+            w, h = float(r["width"]), float(r["height"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        x0, x1 = sorted((x, x + w))
+        y0, y1 = sorted((y, y + h))
+        truth[(nr, page)].append((x0, y0, x1, y1, (r.get("id") or "").strip()))
     return truth
 
 
@@ -268,51 +315,39 @@ def read_truth_rows(path, exclude=("REJECTED",)):
     boxes have no conf, so the conf gate never fires: the test shows what the
     geometry rules alone would have rejected.
     """
-    rows, discarded = [], defaultdict(int)
-    exclude = {e.strip().upper() for e in exclude}
-    invalid = read_invalid_label_ids()
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        leser = csv.DictReader(f)
-        columns = leser.fieldnames or []
-        _warn_missing_id_column(invalid, columns)
-        for r in leser:
-            status = (r.get("ml_status") or "").strip().upper()
-            if status in exclude:
-                discarded[status or "(empty)"] += 1
-                continue
-            label_id = (r.get("id") or "").strip()
-            if label_id and label_id in invalid:
-                discarded["(ugyldig-listet)"] += 1
-                continue
-            try:
-                nr = int(r["fil_revisjon_id"])
-                page = int(r["sidetall"])
-                x, y = float(r["x"]), float(r["y"])
-                w, h = float(r["width"]), float(r["height"])
-            except (TypeError, ValueError, KeyError):
-                discarded["(ugyldig rad)"] += 1
-                continue
-            x0, x1 = sorted((x, x + w))
-            y0, y1 = sorted((y, y + h))
-            bw, bh = x1 - x0, y1 - y0
-            if bw <= 0 or bh <= 0:
-                discarded["(null areal)"] += 1
-                continue
-            ratio = bw / bh
-            rows.append({
-                "doc_no": nr, "side": page,
-                "box": (x0, y0, x1, y1),
-                "w": bw, "h": bh,
-                "short_side": min(bw, bh), "long_side": max(bw, bh),
-                "elongation": max(ratio, 1 / ratio),
-                "area": bw * bh,
-                "areal_px": bw * bh * SCALE * SCALE,
-                "conf": None,
-                "ml_status": status or "(empty)",
-                "type": (r.get("type") or "").strip() or "(empty)",
-                "row": r,
-            })
-    return rows, dict(discarded), columns
+    rows = []
+    info = {}
+    for r in iter_label_rows(path, exclude_status=exclude, info=info):
+        status = (r.get("ml_status") or "").strip().upper()
+        try:
+            nr = int(r["fil_revisjon_id"])
+            page = int(r["sidetall"])
+            x, y = float(r["x"]), float(r["y"])
+            w, h = float(r["width"]), float(r["height"])
+        except (TypeError, ValueError, KeyError):
+            info["discarded"]["(ugyldig rad)"] += 1
+            continue
+        x0, x1 = sorted((x, x + w))
+        y0, y1 = sorted((y, y + h))
+        bw, bh = x1 - x0, y1 - y0
+        if bw <= 0 or bh <= 0:
+            info["discarded"]["(null areal)"] += 1
+            continue
+        ratio = bw / bh
+        rows.append({
+            "doc_no": nr, "side": page,
+            "box": (x0, y0, x1, y1),
+            "w": bw, "h": bh,
+            "short_side": min(bw, bh), "long_side": max(bw, bh),
+            "elongation": max(ratio, 1 / ratio),
+            "area": bw * bh,
+            "areal_px": bw * bh * SCALE * SCALE,
+            "conf": None,
+            "ml_status": status or "(empty)",
+            "type": (r.get("type") or "").strip() or "(empty)",
+            "row": r,
+        })
+    return rows, dict(info.get("discarded", {})), info.get("columns", [])
 
 
 # ── Dataset with truth-centric index ─────────────────────────

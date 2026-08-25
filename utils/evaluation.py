@@ -212,27 +212,18 @@ from collections import defaultdict
 
 
 def read_truth_xywh(csv_path):
-    from filter_common import read_invalid_label_ids, _warn_missing_id_column
-    invalid = read_invalid_label_ids()
+    from filter_common import iter_label_rows
     truth = defaultdict(list)
     try:
-        with open(csv_path, newline="", encoding="utf-8-sig") as f:
-            leser = csv.DictReader(f)
-            _warn_missing_id_column(invalid, leser.fieldnames)
-            for r in leser:
-                if (r.get("ml_status") or "").strip().upper() == "REJECTED":
-                    continue
-                rid = (r.get("id") or "").strip()
-                if rid and rid in invalid:
-                    continue
-                try:
-                    nr = int(r["fil_revisjon_id"])
-                    page = int(r["sidetall"])
-                    x, y = float(r["x"]), float(r["y"])
-                    w, h = float(r["width"]), float(r["height"])
-                except (TypeError, ValueError, KeyError):
-                    continue
-                truth[(nr, page)].append((x, y, w, h, (r.get("type") or "").strip()))
+        for r in iter_label_rows(csv_path):
+            try:
+                nr = int(r["fil_revisjon_id"])
+                page = int(r["sidetall"])
+                x, y = float(r["x"]), float(r["y"])
+                w, h = float(r["width"]), float(r["height"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            truth[(nr, page)].append((x, y, w, h, (r.get("type") or "").strip()))
     except FileNotFoundError:
         print(f"!! CSV not found: {csv_path}, truth is not drawn and hits are not measured.")
         return None

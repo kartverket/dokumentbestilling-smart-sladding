@@ -45,6 +45,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import vlm_cache
+from filter_common import reclassify_invalid_covering
 
 STD_URL = "http://localhost:8000/v1"
 STD_TIMEOUT = 120
@@ -488,6 +489,10 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
 def run(a):
     with open(a.manifest, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
+    reclassified = reclassify_invalid_covering(rows)
+    if reclassified:
+        print(f"  {reclassified} covering rows treated as BOM — their labels "
+              f"are listed in ugyldige_labels.txt")
     folder = a.crop_dir or os.path.join(
         os.path.dirname(os.path.abspath(a.manifest)), "utsnitt")
     prompt = STD_PROMPT

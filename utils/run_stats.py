@@ -7,6 +7,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from filter_common import iter_label_rows
+
 
 
 def _doc_no(name):
@@ -73,19 +75,22 @@ def find_labels_csv(log_info):
 
 
 def read_labels(path):
+    info = {}
     rows = []
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            try:
-                doc_no = int(r["fil_revisjon_id"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            rows.append({
-                "doc_no": doc_no,
-                "type": (r.get("type") or "").strip(),
-                "ml": (r.get("ml_generated") or "").strip().lower() == "true",
-                "status": (r.get("ml_status") or "").strip().upper(),
-            })
+    for r in iter_label_rows(path, exclude_status=(), info=info):
+        try:
+            doc_no = int(r["fil_revisjon_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        rows.append({
+            "doc_no": doc_no,
+            "type": (r.get("type") or "").strip(),
+            "ml": (r.get("ml_generated") or "").strip().lower() == "true",
+            "status": (r.get("ml_status") or "").strip().upper(),
+        })
+    skipped = info["discarded"]["(ugyldig-listet)"]
+    if skipped:
+        print(f"  {skipped} boxes in ugyldige_labels.txt excluded")
     return rows
 
 def paddle_stats(details, summary):

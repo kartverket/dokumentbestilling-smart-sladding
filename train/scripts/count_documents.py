@@ -11,8 +11,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+# ugyldige_labels.txt lives at the repo root; reuse the reader in utils/.
+_UTILS = str(Path(__file__).resolve().parents[2] / "utils")
+if _UTILS not in sys.path:
+    sys.path.insert(0, _UTILS)
+from filter_common import iter_label_rows
 
 
 def _has_doc_type(rettsstiftelsestyper: str, doc_type: str) -> bool:
@@ -89,13 +96,18 @@ def count(metadata_csv: str, labels_csv: str | None, strategy: str,
                 print(f"  {year}: {year_counts[year]} documents")
 
     if labels_csv and Path(labels_csv).exists():
-        label_rows = _read_csv(labels_csv)
+        info = {}
+        label_rows = list(iter_label_rows(labels_csv, exclude_status=(),
+                                          info=info))
+        n_invalid = info["discarded"]["(ugyldig-listet)"]
         matched_labels = [r for r in label_rows if str(r["fil_revisjon_id"]) in matched_ids]
         docs_with_labels = {r["fil_revisjon_id"] for r in matched_labels}
         total_boxes = len(matched_labels)
         total_pages = len({(r["fil_revisjon_id"], r["sidetall"]) for r in matched_labels})
 
         print(f"\nLabels ({Path(labels_csv).name}):")
+        if n_invalid:
+            print(f"  Excluded (ugyldige_labels.txt): {n_invalid}")
         print(f"  Documents with annotations: {len(docs_with_labels)} of {len(matched_ids)}")
         print(f"  Annotated pages: {total_pages}")
         print(f"  Total bounding boxes: {total_boxes}")
