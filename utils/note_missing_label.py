@@ -94,6 +94,20 @@ def _labels_on_page(truth_csv, doc, side):
         return [r for r in csv.DictReader(f) if _label_key(r) == (doc, side)]
 
 
+def _doc_in_labels(truth_csv, doc):
+    """Pages the document has labels on, for telling «wrong uttrekk» apart
+    from «no label here». The result CSV and the labels CSV are chosen
+    separately, so pointing at the wrong uttrekk is easy and looks identical
+    to a page the caseworker left alone."""
+    pages = set()
+    with open(truth_csv, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            key = _label_key(r)
+            if key and key[0] == doc:
+                pages.add(key[1])
+    return pages
+
+
 def _covering_label(truth_csv, doc, side, box):
     """The fasit label `box` belongs to, scored by overlap, not containment.
 
@@ -240,6 +254,14 @@ def main():
             sys.exit("--erstatt needs --truth-csv to find the label to retract.")
         one, alle = _covering_label(a.truth_csv, a.doc, a.side, _label_box(ny))
         if not alle:
+            pages = _doc_in_labels(a.truth_csv, a.doc)
+            if not pages:
+                sys.exit(f"Document {a.doc} has no labels at all in "
+                         f"{a.truth_csv}. Wrong uttrekk? The result CSV and the "
+                         f"labels CSV are picked separately.")
+            if a.side not in pages:
+                sys.exit(f"Document {a.doc} has labels on page(s) "
+                         f"{sorted(pages)}, none on page {a.side}.")
             sys.exit(f"No fasit label covers this box on doc {a.doc} page "
                      f"{a.side}. Then it is a plain missing label, drop --erstatt.")
         if one is None:
