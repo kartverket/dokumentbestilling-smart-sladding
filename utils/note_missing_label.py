@@ -47,8 +47,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from filter_common import (INVALID_LABELS_FILE, MISSING_LABELS_FILE,
                            MISSING_LABEL_FIELD, doc_no, label_row_from_prediction,
                            missing_label_id, read_invalid_label_ids,
-                           read_missing_label_rows, _label_box, _label_key,
-                           _same_box)
+                           read_missing_label_rows, area, overlap,
+                           _label_box, _label_key)
+
+# Of the box you picked. A hand-drawn sladding rarely lines up with the digits,
+# so containment is the wrong test; below this it is a stray touch. Two labels
+# above it is ambiguous, and ambiguous stops rather than guesses.
+MIN_COVER = 0.10
 
 
 def _from_png(path):
@@ -90,31 +95,64 @@ def _labels_on_page(truth_csv, doc, side):
 
 
 def _covering_label(truth_csv, doc, side, box):
-    """The fasit label that swallows `box`, when a caseworker drew one
-    sladding over two numbers. Returns (row, [all candidates])."""
-    hits = [r for r in _labels_on_page(truth_csv, doc, side)
-            if (_label_box(r) or None) and _same_box(box, _label_box(r))]
-    return (hits[0] if len(hits) == 1 else None), hits
+    """The fasit label `box` belongs to, scored by overlap, not containment.
 
-
-def _retract(label_id, comment, path=INVALID_LABELS_FILE):
-    """Adds a label id to ugyldige_labels.txt. Already listed is not an error.
-
-    The file has historically ended without a newline, and appending to that
-    glues the new id onto the last one, where neither parses.
+    Labels are kept when they cover at least MIN_COVER of the box. Exactly one
+    survivor is the answer; anything else is for a human to sort out.
+    Returns (row or None, [(cover, row), ...] best first).
     """
-    if label_id in read_invalid_label_ids(path):
-        return False
-    ends_clean = True
-    if os.path.isfile(path) and os.path.getsize(path):
-        with open(path, "rb") as f:
-            f.seek(-1, os.SEEK_END)
-            ends_clean = f.read(1) == b"\n"
-    with open(path, "a", encoding="utf-8") as f:
-        if not ends_clean:
-            f.write("\n")
-        f.write(f"{label_id}\t# {comment}\n" if comment else f"{label_id}\n")
-    return True
+    own = area(box) or 1.0
+    scored = []
+    for r in _labels_on_page(truth_csv, doc, side):
+        fb = _label_box(r)
+        if not fb:
+            continue
+        cover = overlap(box, fb) / own
+        if cover >= MIN_COVER:
+            scored.append((cover, r))
+    scored.sort(key=lambda t: -t[0])
+    if len(scored) != 1:
+        return None, scored
+    return scored[0][1], scored
+
+
+def _retract(label_id, comment, replaced_by, path=INVALID_LABELS_FILE):
+    """Lists a label id in ugyldige_labels.txt, or extends the line already there.
+
+    One sladding over several numbers is retracted once and replaced by one
+    added row per number, so the ids that replaced it collect in the comment:
+
+        felles-1    # én sladding over to numre (mangler-ab12, mangler-cd34)
+
+    An existing comment is kept as it stands; only the parentheses grow.
+    Returns "ny", "utvidet" or "uendret".
+    """
+    lines = []
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+    for i, line in enumerate(lines):
+        head, sep, tail = line.partition("#")
+        if head.strip() != label_id:
+            continue
+        m = re.search(r"\(([^)]*)\)\s*$", tail)
+        ids = [p.strip() for p in m.group(1).split(",") if p.strip()] if m else []
+        if replaced_by in ids:
+            return "uendret"
+        ids.append(replaced_by)
+        base = (tail[:m.start()] if m else tail).strip() or comment
+        lines[i] = f"{label_id}    # {base} ({', '.join(ids)})".rstrip()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return "utvidet"
+
+    # The file has historically ended without a newline, and appending to that
+    # glues the new id onto the last one, where neither parses.
+    lines.append(f"{label_id}    # {comment} ({replaced_by})".rstrip())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return "ny"
 
 
 def _rows_on_page(res_csv, doc, side):
@@ -205,16 +243,19 @@ def main():
             sys.exit(f"No fasit label covers this box on doc {a.doc} page "
                      f"{a.side}. Then it is a plain missing label, drop --erstatt.")
         if one is None:
-            print(f"  {len(alle)} labels cover this box, expected one:")
-            for r in alle:
-                print(f"    {r.get('id')}  x={r['x']} y={r['y']} "
-                      f"w={r['width']} h={r['height']}")
-            sys.exit("  Retract the right one by hand in ugyldige_labels.txt.")
-        why = a.kommentar or f"én sladding over flere numre, erstattet av {label_id}"
-        if _retract(one["id"], why, a.ugyldige_fil):
-            print(f"  Retracted {one['id']} in {a.ugyldige_fil}")
-        else:
-            print(f"  {one['id']} was already retracted")
+            print(f"  {len(alle)} labels overlap this box:")
+            for cover, r in alle:
+                print(f"    {r.get('id')}  covers {cover:.0%}  x={r['x']} "
+                      f"y={r['y']} w={r['width']} h={r['height']}")
+            sys.exit("  Ambiguous. Retract the right one by hand in "
+                     "ugyldige_labels.txt and rerun without --erstatt.")
+        why = a.kommentar or "én sladding over flere numre"
+        print(f"  {one['id']} covers {alle[0][0]:.0%} of the box")
+        result = _retract(one["id"], why, label_id, a.ugyldige_fil)
+        print({"ny": f"  Retracted {one['id']} in {a.ugyldige_fil}",
+               "utvidet": f"  {one['id']} was already retracted, "
+                          f"added {label_id} to its comment",
+               "uendret": f"  {one['id']} already names {label_id}"}[result])
 
     if any(r["id"] == label_id for r in read_missing_label_rows(a.fil)):
         print(f"  Already recorded: {label_id}")
