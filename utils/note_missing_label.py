@@ -16,10 +16,21 @@ PDF_DPI and the result CSV stores the same space, so what a picture viewer
 shows you is what this wants. A tight box matters, because HIT_THRESHOLD
 measures coverage of the truth area.
 
+One sladding drawn over two numbers is the same job twice. The oversized
+label covers neither number well enough for HIT_THRESHOLD, so it counts as a
+miss while both correct predictions count as oversladding. --erstatt retracts
+that label and puts this box in its place; run it once per number.
+
 Kjør:
     python utils/note_missing_label.py --png <run>/error_images/oversladd/0104822_rev3_side3.png
     python utils/note_missing_label.py --png <same>.png --box 2 \
         --coords 640 1210 960 1252 --kommentar "fnr i tabellkolonne, ingen label"
+
+    # én fasit-sladding over to numre: kjør én gang per boks
+    python utils/note_missing_label.py --png <same>.png --box 2 --erstatt \
+        --truth-csv $SLADD_LABELS/uttrekk_4.csv
+    python utils/note_missing_label.py --png <same>.png --box 3 --erstatt \
+        --truth-csv $SLADD_LABELS/uttrekk_4.csv
 
     # uten bildet, om du har tallene fra før
     python utils/note_missing_label.py --res-csv <run>/resultat.csv --doc 104822 --side 3
@@ -33,9 +44,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from filter_common import (MISSING_LABELS_FILE, MISSING_LABEL_FIELD, doc_no,
-                           label_row_from_prediction, missing_label_id,
-                           read_missing_label_rows)
+from filter_common import (INVALID_LABELS_FILE, MISSING_LABELS_FILE,
+                           MISSING_LABEL_FIELD, doc_no, label_row_from_prediction,
+                           missing_label_id, read_invalid_label_ids,
+                           read_missing_label_rows, _label_box, _label_key,
+                           _same_box)
 
 
 def _from_png(path):
@@ -68,6 +81,40 @@ def _find_res_csv(png_path):
             break
         d = parent
     return None
+
+
+def _labels_on_page(truth_csv, doc, side):
+    """Raw label rows for one page, ids included, nothing filtered away."""
+    with open(truth_csv, newline="", encoding="utf-8-sig") as f:
+        return [r for r in csv.DictReader(f) if _label_key(r) == (doc, side)]
+
+
+def _covering_label(truth_csv, doc, side, box):
+    """The fasit label that swallows `box`, when a caseworker drew one
+    sladding over two numbers. Returns (row, [all candidates])."""
+    hits = [r for r in _labels_on_page(truth_csv, doc, side)
+            if (_label_box(r) or None) and _same_box(box, _label_box(r))]
+    return (hits[0] if len(hits) == 1 else None), hits
+
+
+def _retract(label_id, comment, path=INVALID_LABELS_FILE):
+    """Adds a label id to ugyldige_labels.txt. Already listed is not an error.
+
+    The file has historically ended without a newline, and appending to that
+    glues the new id onto the last one, where neither parses.
+    """
+    if label_id in read_invalid_label_ids(path):
+        return False
+    ends_clean = True
+    if os.path.isfile(path) and os.path.getsize(path):
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            ends_clean = f.read(1) == b"\n"
+    with open(path, "a", encoding="utf-8") as f:
+        if not ends_clean:
+            f.write("\n")
+        f.write(f"{label_id}\t# {comment}\n" if comment else f"{label_id}\n")
+    return True
 
 
 def _rows_on_page(res_csv, doc, side):
@@ -111,8 +158,18 @@ def main():
                         "replacing the detection box's padding")
     p.add_argument("--type", default="", help="truth type, if the labels use one")
     p.add_argument("--kommentar", default="", help="why this row was added")
+    p.add_argument("--truth-csv", default=None, metavar="STI",
+                   help="labels CSV, needed by --erstatt")
+    p.add_argument("--erstatt", action="store_true",
+                   help="the fasit has ONE sladding over this number and a "
+                        "neighbour, so it scores as both a miss and an "
+                        "oversladding. Retracts that label into "
+                        "ugyldige_labels.txt and records this box instead. "
+                        "Run once per number in the shared box.")
     p.add_argument("--fil", default=MISSING_LABELS_FILE,
                    help=f"where to append (default {MISSING_LABELS_FILE})")
+    p.add_argument("--ugyldige-fil", default=INVALID_LABELS_FILE,
+                   help="where --erstatt retracts (default ugyldige_labels.txt)")
     a = p.parse_args()
 
     if a.png:
@@ -139,6 +196,25 @@ def main():
     ny["type"] = a.type
     ny["kommentar"] = a.kommentar
     label_id = missing_label_id(ny)
+
+    if a.erstatt:
+        if not a.truth_csv:
+            sys.exit("--erstatt needs --truth-csv to find the label to retract.")
+        one, alle = _covering_label(a.truth_csv, a.doc, a.side, _label_box(ny))
+        if not alle:
+            sys.exit(f"No fasit label covers this box on doc {a.doc} page "
+                     f"{a.side}. Then it is a plain missing label, drop --erstatt.")
+        if one is None:
+            print(f"  {len(alle)} labels cover this box, expected one:")
+            for r in alle:
+                print(f"    {r.get('id')}  x={r['x']} y={r['y']} "
+                      f"w={r['width']} h={r['height']}")
+            sys.exit("  Retract the right one by hand in ugyldige_labels.txt.")
+        why = a.kommentar or f"én sladding over flere numre, erstattet av {label_id}"
+        if _retract(one["id"], why, a.ugyldige_fil):
+            print(f"  Retracted {one['id']} in {a.ugyldige_fil}")
+        else:
+            print(f"  {one['id']} was already retracted")
 
     if any(r["id"] == label_id for r in read_missing_label_rows(a.fil)):
         print(f"  Already recorded: {label_id}")
