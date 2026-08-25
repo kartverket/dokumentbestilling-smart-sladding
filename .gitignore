@@ -35,6 +35,8 @@ PP-OCRv6_medium_rec_infer.tar
 PP-LCNet_x1_0_doc_ori_infer/
 PP-LCNet_x1_0_doc_ori_infer.tar
 *.csv
+# Fasit metadata, not data: geometry only, never a number.
+!manglende_labels.csv
 runs/
 .deploy-historikk
 

@@ -1,0 +1,18 @@
+# Missing labels — fødselsnumre that ARE on the document but have no row in
+# the labels CSV. The mirror image of ugyldige_labels.txt, which removes rows.
+#
+# Geometry is the labels CSV's own format: PDF points, x/y/width/height, and
+# the origin Y_ORIGIN names. utils/note_missing_label.py converts from a
+# result CSV and appends here, so the units are handled in one place.
+#
+# Record a box around the DIGITS, not the padded detection box: HIT_THRESHOLD
+# asks for 0.32 of the truth area, so an oversized row makes a later model
+# that finds the number with a tight box score as a MISS.
+#
+# NEVER write the fødselsnummer itself in kommentar. This file is
+# versioned in a public repo; it holds geometry, nothing readable.
+#
+# A row the labels CSV later catches up with is dropped automatically.
+# One that turns out to be wrong is retracted by putting its «mangler-...» id
+# in ugyldige_labels.txt.
+fil_revisjon_id,sidetall,x,y,width,height,type,kommentar

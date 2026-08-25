@@ -31,6 +31,12 @@ def _draw_conf(drawer, r, conf, color):
                 fill=color, font=_conf_font())
 
 
+def _draw_index(drawer, r, i, color):
+    """The box's position in the result CSV, so note_missing_label.py --box N
+    can be read straight off the picture."""
+    drawer.text((r[0] + 2, r[3] + 2), f"#{i}", fill=color, font=_conf_font())
+
+
 def _doc_no(name):
     m = re.match(r"0*(\d+)", os.path.basename(name))
     return int(m.group(1)) if m else None
@@ -135,7 +141,7 @@ def draw_and_save(sladd_boxes, ground_truth, folder, out_dir, y_origin="top",
             # 1) Prediction boxes, outline only
             if sources and (name, si) in sources:
                 _, _, with_source = sources[(name, si)]
-                for box in with_source:
+                for i, box in enumerate(with_source):
                     x0, y0, x1, y1 = box[:4]
                     source_choice = box[4] if len(box) > 4 else "paddle"
                     conf = box[5] if len(box) > 5 else None
@@ -144,6 +150,7 @@ def draw_and_save(sladd_boxes, ground_truth, folder, out_dir, y_origin="top",
                     er_over = _is_oversladd(box, over_names) if over_names else False
                     color = _select_color(source_choice, er_over)
                     drawer.rectangle(r, outline=color, width=3)
+                    _draw_index(drawer, r, i, color)
                     if source_choice in ("yolo", "begge"):
                         _draw_conf(drawer, r, conf, color)
 

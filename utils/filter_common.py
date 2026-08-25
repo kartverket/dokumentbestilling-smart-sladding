@@ -15,6 +15,7 @@ including them inflates every oversladding number with never-labelled documents.
 """
 
 import csv
+import hashlib
 import os
 import re
 import sys
@@ -33,6 +34,11 @@ except ImportError:  # running outside the repo
                   "har_fnr_kandidat", "har_desimal_naer",
                   "har_00_run", "har_orgnr", "har_org_ord", "lang_run",
                   "maks_luke", "har_desimal_luke")
+
+try:
+    from utils_config import Y_ORIGIN
+except ImportError:      # running outside the repo
+    Y_ORIGIN = "top"
 
 SCALE = PDF_DPI / 72.0   # PDF points -> pixels
 
@@ -140,6 +146,107 @@ def read_invalid_label_ids(path=None):
     return ids
 
 
+# The other half of ugyldige_labels.txt: fødselsnumre the fasit does NOT have.
+# A missing label has no id to point at, so the file carries the geometry
+# itself, in the labels CSV's own columns, units and origin.
+MISSING_LABELS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "manglende_labels.csv")
+
+MISSING_LABEL_FIELD = ["fil_revisjon_id", "sidetall", "x", "y", "width",
+                       "height", "type", "kommentar"]
+
+
+def missing_label_id(row):
+    """Stable id for an added row, derived from what identifies it.
+
+    Gives code that groups by id something to hold, and lets a row that turns
+    out to be wrong be retracted through ugyldige_labels.txt like any other.
+    """
+    parts = [str(int(float(row["fil_revisjon_id"]))),
+             str(int(float(row["sidetall"])))]
+    parts += [f"{float(row[k]):.2f}" for k in ("x", "y", "width", "height")]
+    key = "|".join(parts).encode("utf-8")
+    return "mangler-" + hashlib.sha256(key).hexdigest()[:12]
+
+
+def read_missing_label_rows(path=None):
+    """manglende_labels.csv as rows shaped like labels-CSV rows.
+
+    Lines starting with «#» are comments. The file is global, like
+    ugyldige_labels.txt: fil_revisjon_id names a document revision, so a row
+    for a document outside the current run is never looked up.
+    """
+    path = path or MISSING_LABELS_FILE
+    if not os.path.isfile(path):
+        return []
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        lines = (ln for ln in f
+                 if ln.strip() and not ln.lstrip().startswith("#"))
+        for r in csv.DictReader(lines):
+            try:
+                out = {"fil_revisjon_id": str(int(float(r["fil_revisjon_id"]))),
+                       "sidetall": str(int(float(r["sidetall"]))),
+                       "x": f'{float(r["x"]):.2f}',
+                       "y": f'{float(r["y"]):.2f}',
+                       "width": f'{float(r["width"]):.2f}',
+                       "height": f'{float(r["height"]):.2f}'}
+            except (TypeError, ValueError, KeyError):
+                continue
+            out["type"] = (r.get("type") or "").strip()
+            out["ml_status"] = "MANUAL"
+            out["id"] = missing_label_id(out)
+            rows.append(out)
+    return rows
+
+
+def label_row_from_prediction(row, y_origin=None):
+    """A resultat.csv row -> a manglende_labels.csv row.
+
+    Result coordinates are pixels at PDF_DPI with the origin at the top; the
+    labels CSV is PDF points with the origin Y_ORIGIN names. The page height
+    needed for a «bottom» origin comes from bilde_hoyde in the same row.
+    """
+    x0, x1 = sorted((float(row["x0"]) / SCALE, float(row["x1"]) / SCALE))
+    y0, y1 = sorted((float(row["y0"]) / SCALE, float(row["y1"]) / SCALE))
+    if (y_origin or Y_ORIGIN) == "bottom":
+        page_h = float(row["bilde_hoyde"]) / SCALE
+        y0, y1 = page_h - y1, page_h - y0
+    return {"fil_revisjon_id": str(doc_no(row["navn"])),
+            "sidetall": str(int(row["side"])),
+            "x": f"{x0:.2f}", "y": f"{y0:.2f}",
+            "width": f"{x1 - x0:.2f}", "height": f"{y1 - y0:.2f}"}
+
+
+def _label_box(row):
+    """(x0, y0, x1, y1) from a labels row, or None if the geometry is unusable."""
+    try:
+        x, y = float(row["x"]), float(row["y"])
+        w, h = float(row["width"]), float(row["height"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    x0, x1 = sorted((x, x + w))
+    y0, y1 = sorted((y, y + h))
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def _label_key(row):
+    """(doc, page) normalised, so a CSV «104822» and an added «104822.0» meet."""
+    try:
+        return (int(float(row["fil_revisjon_id"])), int(float(row["sidetall"])))
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _same_box(a, b):
+    """Whether either box's centre falls inside the other."""
+    for one, other in ((a, b), (b, a)):
+        cx, cy = (one[0] + one[2]) / 2.0, (one[1] + one[3]) / 2.0
+        if other[0] <= cx <= other[2] and other[1] <= cy <= other[3]:
+            return True
+    return False
+
+
 def reclassify_invalid_covering(rows):
     """Covering rows (klasse != BOM) whose fasit labels are ALL listed in
     ugyldige_labels.txt become BOM: the box covers only noise. label_id is
@@ -182,19 +289,27 @@ def iter_label_rows(path, exclude_status=("REJECTED",), info=None):
     () to keep REJECTED, as the stats tools do to measure prod's false
     positives.
 
-    `info`, if given, is a dict that receives "columns" (the CSV header) and
-    "discarded" (a per-reason tally, incl. «(ugyldig-listet)»). Both are set
-    once iteration starts, so read them after the loop.
+    Rows from manglende_labels.csv are yielded after the file's own, as fasit
+    the labelling never got. One that the CSV has since caught up with is
+    dropped, so the file retires itself rather than double-counting.
+
+    `info`, if given, is a dict that receives "columns" (the CSV header),
+    "discarded" (a per-reason tally, incl. «(ugyldig-listet)») and "added"
+    (rows from manglende_labels.csv). All are set once iteration starts, so
+    read them after the loop.
     """
     exclude = {str(e).strip().upper() for e in exclude_status}
     invalid = read_invalid_label_ids()
     tally = defaultdict(int)
+    added = defaultdict(int)
+    seen = defaultdict(list)
     with open(path, newline="", encoding="utf-8-sig") as f:
         leser = csv.DictReader(f)
         _warn_missing_id_column(invalid, leser.fieldnames)
         if info is not None:
             info["columns"] = leser.fieldnames or []
             info["discarded"] = tally
+            info["added"] = added
         for r in leser:
             status = (r.get("ml_status") or "").strip().upper()
             if status in exclude:
@@ -204,7 +319,21 @@ def iter_label_rows(path, exclude_status=("REJECTED",), info=None):
             if label_id and label_id in invalid:
                 tally["(ugyldig-listet)"] += 1
                 continue
+            box, key = _label_box(r), _label_key(r)
+            if box and key:
+                seen[key].append(box)
             yield r
+
+    for r in read_missing_label_rows():
+        if r["id"] in invalid:
+            tally["(ugyldig-listet)"] += 1
+            continue
+        box, key = _label_box(r), _label_key(r)
+        if box and any(_same_box(box, o) for o in seen.get(key, [])):
+            tally["(allerede i fasit)"] += 1
+            continue
+        added["manglende_labels"] += 1
+        yield r
 
 
 def read_truth_boxes(path):
