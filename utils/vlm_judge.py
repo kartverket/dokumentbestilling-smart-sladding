@@ -661,7 +661,7 @@ def run(a):
     f_ui = open(ui_path, "a", newline="", encoding="utf-8")
     writer_ui = csv.DictWriter(f_ui, fieldnames=WITHOUT_CONTENT_FIELD,
                                 extrasaction="ignore")
-    laas = threading.Lock()
+    lock = threading.Lock()
     tally = {"n": 0, "feil": 0, "cache": 0, "judged": 0}
     timings = []
     t_start = time.monotonic()
@@ -676,7 +676,7 @@ def run(a):
         row_out.update(res)
         row_out["riktig"] = _correct(row_out.get("klasse", ""),
                                    (row_out.get("svar") or "").strip().lower())
-        with laas:
+        with lock:
             writer.writerow(row_out)
             f_out.flush()
             writer_ui.writerow(_without_content_row(row_out))

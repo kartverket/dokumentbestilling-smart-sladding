@@ -2,7 +2,7 @@
 Features describing what Paddle read in and around a YOLO box.
 
 They exist so stricter variants of lenient_check can be swept in the result
-CSV instead of rerunning the pipeline. That is valid because _godta_yolo_boks
+CSV instead of rerunning the pipeline. That is valid because _accept_yolo_box
 runs only for YOLO boxes with no overlapping Paddle box, and
 MIN_DIGITS=1 / MAX_LETTERS=1 is the loosest possible setting, so anything a
 stricter variant would keep is already in the CSV.

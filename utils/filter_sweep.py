@@ -819,17 +819,17 @@ def main():
         _sweep_one_param(ds, "MIN_ELONGATION max(w/h, h/w)",
                         [1.1, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0],
                         lambda v: {"min_elongation": v}, args.cost)
-        _sweep_one_param(ds, "MAKS_BOKS_HOYDE_PT",
+        _sweep_one_param(ds, "MAX_BOX_HEIGHT_PT",
                         [25, 30, 35, 40, 45, 50, 60, 80, 100],
                         lambda v: {"max_height": v}, args.cost)
-        _sweep_one_param(ds, "MAKS_BOKS_BREDDE_PT",
+        _sweep_one_param(ds, "MAX_BOX_WIDTH_PT",
                         [60, 80, 100, 120, 150, 200, 250],
                         lambda v: {"max_width": v}, args.cost)
 
         has_conf = any(x["conf"] is not None for x in ds.pred)
         if has_conf:
             _sweep_one_param(
-                ds, "CONF_TERSKEL (conf≥V kept regardless of geometry; "
+                ds, "CONF_THRESHOLD (conf≥V kept regardless of geometry; "
                     "combined with e=1.5/h=50/b=120)",
                 [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
                 lambda v: {"min_elongation": 1.5, "max_height": 50,
@@ -843,7 +843,7 @@ def main():
                             "(orientation independent: upright boxes are safe)",
                         [3, 4, 5, 6, 7, 8, 10],
                         lambda v: {"min_short_side": v}, args.cost)
-        _sweep_one_param(ds, "MIN_LANGSIDE_PT: too short to hold 5 digits",
+        _sweep_one_param(ds, "MIN_LONG_SIDE_PT: too short to hold 5 digits",
                         [10, 15, 20, 25, 30, 40, 50],
                         lambda v: {"min_long_side": v}, args.cost)
         _sweep_one_param(ds, "MAX_ELONGATION: thin, long strokes",
@@ -851,7 +851,7 @@ def main():
                         lambda v: {"max_elongation": v}, args.cost)
 
         # ── OCR features: stricter variants of lenient_check ────────
-        # Only kilde «yolo» with text in the box is affected. See _ocr_grunn
+        # Only kilde «yolo» with text in the box is affected. See _ocr_reason
         # in filter_common. Everything else is untouched.
         n_features = sum(1 for x in ds.pred if x.get("har_tokens"))
         if not n_features:
@@ -870,54 +870,54 @@ def main():
             _sweep_one_param(ds, "MAX_LETTERS in the box (current: 1)",
                             [0, 1, 2, 3],
                             lambda v: {"max_letters": v}, args.cost)
-            _sweep_one_param(ds, "MIN_SIFFER_RUN: longest digit run "
+            _sweep_one_param(ds, "MIN_DIGITS_RUN: longest digit run "
                                 "overlapping the box (a coordinate = 5-7)",
                             [6, 7, 8, 9, 10, 11],
                             lambda v: {"min_digits_run": v}, args.cost)
-            _sweep_one_param(ds, "REC_VETO: min_siffer=2 applies only where "
+            _sweep_one_param(ds, "REC_VETO: min_digits=2 applies only where "
                                 "Paddle read the box confidently",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"min_digits": 2, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "KREV_FNR_KANDIDAT: 11-digit fnr shape on "
+            _sweep_one_param(ds, "REQUIRE_FNR_CANDIDATE: 11-digit fnr shape on "
                                 "the line, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"require_fnr_candidate": 1, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_DESIMAL: decimal separator in the "
+            _sweep_one_param(ds, "REJECT_DECIMAL: decimal separator in the "
                                 "number, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"reject_decimal": 1, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_DESIMAL + CONF EXEMPTION: the decimal "
+            _sweep_one_param(ds, "REJECT_DECIMAL + CONF EXEMPTION: the decimal "
                                 "rule (rec_veto 0.98) yields at detection "
                                 "conf ≥ V",
                             [None, 0.40, 0.45, 0.50, 0.60, 0.70],
                             lambda v: {"reject_decimal": 1, "rec_veto": 0.98,
                                        "ocr_conf_exempt": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_00_RUN: a 10-12 digit run starts with "
+            _sweep_one_param(ds, "REJECT_00_RUN: a 10-12 digit run starts with "
                                 "00 (orgnr padded to fnr width), with a "
                                 "rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"reject_00_run": 1, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_ORGNR: valid orgnr mod11 in the box, "
+            _sweep_one_param(ds, "REJECT_ORGNR: valid orgnr mod11 in the box, "
                                 "with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"reject_orgnr": 1, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_ORG_ORD=1: org word near the box, "
+            _sweep_one_param(ds, "REJECT_ORG_ORD=1: org word near the box, "
                                 "with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"reject_org_ord": 1, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_ORG_ORD=2: org word near the box AND "
+            _sweep_one_param(ds, "REJECT_ORG_ORD=2: org word near the box AND "
                                 "no fnr candidate, with a rec_veto gate",
                             [None, 0.80, 0.90, 0.95, 0.98],
                             lambda v: {"reject_org_ord": 2, "rec_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "KREV_FNR_KANDIDAT + LINJE_VETO: as "
+            _sweep_one_param(ds, "REQUIRE_FNR_CANDIDATE + LINE_VETO: as "
                                 "fnr candidate (rec_veto 0.98), but the rule "
                                 "applies only once the WHOLE line is read with "
                                 "rec_min_linje ≥ V (thresholds above 0.999 "
@@ -926,20 +926,20 @@ def main():
                             lambda v: {"require_fnr_candidate": 1,
                                        "rec_veto": 0.98, "line_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_RUN_BAND: upper limit on run length "
+            _sweep_one_param(ds, "REJECT_RUN_BAND: upper limit on run length "
                                 "(6..V) with rec 0.98/line 0.99; 10-runs are "
                                 "often fnr with a single-digit day/month",
                             [None, 8, 9, 10],
                             lambda v: {"reject_run_6_10": v,
                                        "rec_veto": 0.98, "line_veto": 0.99},
                             args.cost)
-            _sweep_one_param(ds, "AVVIS_RUN_6_9 + LINJE_VETO: band 6-9, with "
-                                "rec_veto 0.98 and linje_veto ≥ V",
+            _sweep_one_param(ds, "REJECT_RUN_6_9 + LINE_VETO: band 6-9, with "
+                                "rec_veto 0.98 and line_veto ≥ V",
                             [None, 0.98, 0.99, 0.995, 0.999, 0.9999],
                             lambda v: {"reject_run_6_10": 9,
                                        "rec_veto": 0.98, "line_veto": v},
                             args.cost)
-            _sweep_one_param(ds, "UTEN_TEKST_CONF: boxes without OCR text "
+            _sweep_one_param(ds, "WITHOUT_TEXT_CONF: boxes without OCR text "
                                 "require conf ≥ V (prod: 0.40; hits the "
                                 "graphics/map detections the text rules never "
                                 "see)",
@@ -958,7 +958,7 @@ def main():
             print(f"  {n_window} paddle/begge boxes with window features are "
                   f"in play; everything else is untouched")
             print(f"{'═' * 145}")
-            _sweep_one_param(ds, "MAKS_LUKE (GLOBAL, incl. begge loss, see the "
+            _sweep_one_param(ds, "MAX_GAP (GLOBAL, incl. begge loss, see the "
                                 "per-kilde grid for the decision), largest "
                                 "physical gap in the window, in digit widths. "
                                 "Coordinate stitching («6626630.58 549810.29») "
@@ -966,11 +966,11 @@ def main():
                                 "fnr sits edge to edge",
                             [1.5, 2, 3, 4, 6, 8, 12],
                             lambda v: {"max_gap": v}, args.cost)
-            _sweep_one_param(ds, "AVVIS_DESIMAL_LUKE: a gap in the window "
+            _sweep_one_param(ds, "REJECT_DECIMAL_GAP: a gap in the window "
                                 "contains a decimal separator (. or ,)",
                             [1],
                             lambda v: {"reject_decimal_gap": v}, args.cost)
-            _sweep_one_param(ds, "DESIMAL_LUKE + MAKS_LUKE combined",
+            _sweep_one_param(ds, "DECIMAL_GAP + MAX_GAP combined",
                             [None, 1.5, 2, 3, 4, 6],
                             lambda v: {"reject_decimal_gap": 1,
                                        "max_gap": v}, args.cost)
@@ -998,7 +998,7 @@ def main():
         # shared Pareto front so they compete against the geometry limits.
         ocr_rows = []
         if n_features:
-            # avvis_desimal is in BOTH grids on purpose: find_fnr accepts "."
+            # reject_decimal is in BOTH grids on purpose: find_fnr accepts "."
             # and "," as a gap between digit pieces, which is right for an fnr
             # the OCR split up, but on a coordinate line it stitches two
             # neighbouring numbers into a valid-looking 11-digit run
@@ -1022,7 +1022,7 @@ def main():
                 title="OCR FEATURES COMBINED: fnr candidate "
                        "(hits only «yolo» with text)",
                 label_prefix="ocr-fnr ", **common)
-            # cfritak and line veto made the run rule prod-ready; min_siffer
+            # cfritak and line veto made the run rule prod-ready; min_digits
             # got a tenfold ov/lost in the new regime without the same gates.
             ocr_rows += _sweep_combinations(
                 ds, [None, 4, 5, 6], [None, 0.95, 0.98], [None, 0.99],

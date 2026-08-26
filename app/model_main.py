@@ -50,7 +50,8 @@ def _skip_over_geometry_filter(conf, source):
 def _decimal_rule_discards(features, conf):
     """Decimal separator in confidently read text -> coordinate, not fnr.
 
-    Mirrors _ocr_grunn in utils/filter_common.py (des=1, rveto, cfritak).
+    Mirrors _ocr_reason in utils/filter_common.py (reject_decimal=1,
+    rec_veto, ocr_conf_exempt).
     Called on the FINAL kilde after dedup, so a box that became "begge" is
     spared. See config.
     """
@@ -70,8 +71,8 @@ def _decimal_rule_discards(features, conf):
 def _line_evidence_discards(features, conf):
     """A confidently read line proves the number cannot be an fnr.
 
-    Mirrors _ocr_grunn in utils/filter_common.py (avvis_run_6_10, avvis_orgnr,
-    linje_veto, ocr_conf_fritak). Final kilde after dedup. See config.
+    Mirrors _ocr_reason in utils/filter_common.py (reject_run_6_10,
+    reject_orgnr, line_veto, ocr_conf_exempt). Final kilde after dedup. See config.
     """
     if not features or not features.get("har_tokens"):
         return False
@@ -101,7 +102,7 @@ def _seksjonering_geometry_discards(box):
 def _seksjonering_yolo_discards(box, features, conf):
     """Seksjonering document: table cell, not an fnr sladd.
 
-    Mirrors er_filtrert in utils/filter_common.py, per-kilde spec
+    Mirrors is_filtered in utils/filter_common.py, per-kilde spec
     "yolo:kmaks=40,lmaks=80,smin=6,rveto=0.98,cfritak=0.5". Geometry always
     applies; the digit requirement only on confidently read text.
     """
@@ -131,8 +132,8 @@ def _seksjonering_paddle_discards(box):
 def _koordfam_discards(features, conf):
     """Coordinate document: a number without fnr evidence is a coordinate.
 
-    Mirrors _ocr_grunn in utils/filter_common.py (krev_fnr_kandidat,
-    avvis_desimal, uten_tekst_conf). Only when the document's
+    Mirrors _ocr_reason in utils/filter_common.py (require_fnr_candidate,
+    reject_decimal, without_text_conf). Only when the document's
     rettsstiftelsestyper hit KOORDFAM_CODES. Globally the same rules cost
     hundreds of real fnr. Token-less boxes are map graphics with no text
     evidence, so they need detection conf instead.
@@ -152,8 +153,8 @@ def _koordfam_discards(features, conf):
 def _paddle_window_discards(features):
     """The 11-digit window the box was built from is a seam, not an fnr.
 
-    Mirrors _ocr_grunn in utils/filter_common.py (avvis_desimal_luke,
-    maks_luke). Final kilde after dedup: boxes that became "begge" are
+    Mirrors _ocr_reason in utils/filter_common.py (reject_decimal_gap,
+    max_gap). Final kilde after dedup: boxes that became "begge" are
     YOLO-confirmed and spared. The features are already position-aware from
     _window_features. Gaps after digit 2/4/6 do not count. See config.
     """

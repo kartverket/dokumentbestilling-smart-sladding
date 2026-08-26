@@ -8,7 +8,7 @@ if _APP not in sys.path:
 
 from config import FEATURE_FIELDS
 
-# Two columns on purpose: merged into one "conf", filter_common.er_filtrert would
+# Two columns on purpose: merged into one "conf", filter_common.is_filtered would
 # read a well-read paddle box as a high-confidence detection and let it skip the
 # geometry filters, against the config.py rule that paddle boxes are always filtered.
 BASE_FIELD = ["navn", "side", "bilde_bredde", "bilde_hoyde", "x0", "y0", "x1", "y1",

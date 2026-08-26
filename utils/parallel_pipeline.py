@@ -22,7 +22,7 @@ Run from a tool:
 
         def handle(group, pages_at_a_time=None):
             # group: [(name, [images]), ...]
-            # return one dict per document: {"navn", "sider", "tekst"}
+            # return one dict per document: {"navn", "sider", "text"}
             ...
         return handle
 
@@ -313,19 +313,19 @@ class WorkDistributor:
     def __init__(self, files, ctx):
         self._files = files
         self.total = len(files)
-        self._neste = ctx.Value("i", 0)
+        self._next = ctx.Value("i", 0)
 
     def fetch(self):
         """Next file path, or None once every file has been handed out."""
-        with self._neste.get_lock():
-            i = self._neste.value
+        with self._next.get_lock():
+            i = self._next.value
             if i >= self.total:
                 return None
-            self._neste.value = i + 1
+            self._next.value = i + 1
         return self._files[i]
 
-    def tom(self):
-        return self._neste.value >= self.total
+    def empty(self):
+        return self._next.value >= self.total
 
 
 # ── Error messages ───────────────────────────────────────────────
@@ -342,7 +342,7 @@ def short_error(e, max_items=200):
     return (line_text or repr(e))[:max_items]
 
 
-def er_memory_error(e):
+def is_memory_error(e):
     line_text = str(e)
     return ("Out of memory" in line_text or "ResourceExhausted" in line_text
             or "OutOfMemory" in line_text or "CUDA out of memory" in line_text
@@ -447,7 +447,7 @@ def _pipeline(task):
     while True:
         _fill_queue()
         if not prefetch_queue:
-            if not distributor.tom():
+            if not distributor.empty():
                 time.sleep(2)  # RAM cap reached, wait for free RAM
                 _fill_queue()
                 if not prefetch_queue:
@@ -488,7 +488,7 @@ def _pipeline(task):
                 results = handle(group)
             except Exception as e:
                 free_gpu_cache()
-                memory_error = er_memory_error(e)
+                memory_error = is_memory_error(e)
                 if memory_error and adaptive:
                     adaptive.oom()
                 if memory_error and len(group) > 1:
@@ -523,7 +523,7 @@ def _pipeline(task):
                         break
                     except Exception as e2:
                         last = e2
-                        if not er_memory_error(e2):
+                        if not is_memory_error(e2):
                             break
                 if results is None:
                     queue.put(("feil", wid, group[0][0], 0, short_error(last)))
@@ -695,20 +695,20 @@ def _write_status(worker_stats, elapsed, done, pages, with_profile, n_profile=12
               f"{100 * d['vente'] / (total_phase + d['vente']):.0f}% | {parts}")
     if not with_profile:
         return
-    samlet = {}
+    combined = {}
     for d in worker_stats.values():
         for name, cnt in (d.get("profile") or {}).items():
-            samlet[name] = samlet.get(name, 0) + cnt
-    total = sum(samlet.values())
+            combined[name] = combined.get(name, 0) + cnt
+    total = sum(combined.values())
     if not total:
         return
     print(f"     Profile (all processes), {total} samples:")
-    for name, cnt in sorted(samlet.items(), key=lambda kv: -kv[1])[:n_profile]:
+    for name, cnt in sorted(combined.items(), key=lambda kv: -kv[1])[:n_profile]:
         print(f"       {100 * cnt / total:5.1f}%  {name}")
 
 
 def run(files, make_handler, opts):
-    """Run the handler from `lag_behandler` over `files` in parallel processes.
+    """Run the handler from `make_handler` over `files` in parallel processes.
 
     Returns (done, total_pages, failed) where failed is [(name, error), ...].
     """

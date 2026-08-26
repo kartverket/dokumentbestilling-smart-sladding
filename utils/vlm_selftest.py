@@ -157,7 +157,7 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
                     fall back to a ja/nei/usikker round-robin.
     """
     counter = {"n": 0, "reasoning": [], "avvist": 0}
-    laas = threading.Lock()
+    lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -166,13 +166,13 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
             requirement = json.loads(self.rfile.read(n).decode("utf-8"))
-            with laas:
+            with lock:
                 counter["n"] += 1
                 i = counter["n"]
                 counter["reasoning"].append(requirement.get("reasoning_effort"))
 
             if reject_reasoning and "reasoning_effort" in requirement:
-                with laas:
+                with lock:
                     counter["avvist"] += 1
                 self.send_error(400, "unknown field reasoning_effort")
                 return
@@ -197,11 +197,11 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
                 answer = svar_bilde or ("ja", "nei", "usikker")[i % 3]
                 content = json.dumps({"svar": answer,
                                       "tall": "", "begrunnelse": "stub"})
-            melding = {"role": "assistant", "content": content}
+            message = {"role": "assistant", "content": content}
             if thinks and requirement.get("reasoning_effort") != "none":
-                melding = {"role": "assistant", "content": "",
+                message = {"role": "assistant", "content": "",
                            "reasoning": "Hmm, la meg tenke grundig ..."}
-            body = json.dumps({"choices": [{"message": melding}]}).encode("utf-8")
+            body = json.dumps({"choices": [{"message": message}]}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -230,13 +230,13 @@ def read(path):
         return list(csv.DictReader(f))
 
 
-def cross(condition, melding):
+def check(condition, message):
     if not condition:
-        raise SystemExit(f"ERROR: {melding}")
-    print(f"  ok  {melding}")
+        raise SystemExit(f"ERROR: {message}")
+    print(f"  ok  {message}")
 
 
-def hoved(keep):
+def main(keep):
     rot = tempfile.mkdtemp(prefix="vlm_selftest_")
     try:
         print(f"Work directory: {rot}")
@@ -247,70 +247,70 @@ def hoved(keep):
         print("\n[0] the prompt asks for the fields we parse")
         from vlm_judge import STD_PROMPT
         for field in ("svar", "tall", "holdepunkt"):
-            cross(f'"{field}"' in STD_PROMPT,
+            check(f'"{field}"' in STD_PROMPT,
                   f"the JSON template asks for «{field}»")
         # Autoregressive: what the model writes before «svar» is computation
         # the verdict can build on, what comes after is rationalisation.
         for field in ("tall", "holdepunkt"):
-            cross(STD_PROMPT.index(f'"{field}"') < STD_PROMPT.index('"svar"'),
+            check(STD_PROMPT.index(f'"{field}"') < STD_PROMPT.index('"svar"'),
                   f"«{field}» comes before «svar» in the JSON template")
-        cross("usikker" in STD_PROMPT.lower(),
+        check("usikker" in STD_PROMPT.lower(),
               "the prompt offers «usikker» as a way out")
-        cross("tjue ganger" in STD_PROMPT,
+        check("tjue ganger" in STD_PROMPT,
               "the prompt states the 20x cost asymmetry")
         # The main gain: 00-padded orgnr can never be a fødselsnummer.
-        cross("starte med 00" in STD_PROMPT,
+        check("starte med 00" in STD_PROMPT,
               "the prompt keeps the 00-prefix orgnr rule")
 
         print("\n[1] parse_answer")
-        cross(parse_answer('{"svar":"nei","tall":"66266","begrunnelse":"koordinat"}')
+        check(parse_answer('{"svar":"nei","tall":"66266","begrunnelse":"koordinat"}')
               [:1] == ("nei",), "plain JSON is read")
-        cross(parse_answer('```json\n{"svar": "ja"}\n```')[0] == "ja",
+        check(parse_answer('```json\n{"svar": "ja"}\n```')[0] == "ja",
               "JSON in a code block is read")
-        cross(parse_answer("Jeg mener dette er nei, en koordinat.")[0] == "nei",
+        check(parse_answer("Jeg mener dette er nei, en koordinat.")[0] == "nei",
               "prose falls back on keywords")
-        cross(parse_answer("")[0] == "usikker", "an empty answer becomes usikker")
-        cross(parse_answer("^^^")[0] == "usikker", "junk becomes usikker")
+        check(parse_answer("")[0] == "usikker", "an empty answer becomes usikker")
+        check(parse_answer("^^^")[0] == "usikker", "junk becomes usikker")
         # The most expensive failure so far: full checklist, no «svar».
         without = parse_answer('{"linjen":"Dagboknr. 1234/1980","holdepunkt":"dagboknr",'
                          '"tall":"1234/1980"}')
-        cross(without[0] == "usikker" and "omitted the «svar»" in without[3],
+        check(without[0] == "usikker" and "omitted the «svar»" in without[3],
               f"a missing «svar» is named precisely ({without[3]!r})")
-        cross(all(parse_answer(t)[0] != "nei" for t in ("", "^^^", "{}")),
+        check(all(parse_answer(t)[0] != "nei" for t in ("", "^^^", "{}")),
               "no failure state can become «nei»")
 
         print("\n[1b] fnr candidates with the pipeline's digit confusion")
         from vlm_evaluate import _fnr_candidate
         from vlm_evaluate import _has_fnr_caption
-        cross(_fnr_candidate("loo190-00000"),
+        check(_fnr_candidate("loo190-00000"),
               "«loo190-00000» is recognised, o→0 and l→1")
         # This cost us a real box: strip the spaces and the run glues to
         # «1f1g» from «Iflg», and the boundary check fails.
-        cross(_fnr_candidate("030392S0000 Iflg fullmakt"),
+        check(_fnr_candidate("030392S0000 Iflg fullmakt"),
               "«030392S0000 Iflg fullmakt» is recognised despite neighbours")
         # The date of birth is in another form than DDMMYY, so there is no
         # eleven-digit run to find.
         for line in ("f ø dt : 1.2.1950 Personnummer : . 00000",
                       "0la Nordmann , f . 12 / 3-1950 , pers . nr . 00000 ,"):
-            cross(_has_fnr_caption(line) and not _fnr_candidate(line),
+            check(_has_fnr_caption(line) and not _fnr_candidate(line),
                   f"ledetekst protects «{line[:28]}…»")
         for line in ("Dagboknr. 1234/1980", "Takstnr. 11,12,13,14.",
                       "N 6626630.58 632412.066"):
-            cross(not _has_fnr_caption(line),
+            check(not _has_fnr_caption(line),
                   f"the ledetekst guard leaves «{line[:24]}…» alone")
-        cross(_fnr_candidate("02029100000") and _fnr_candidate("020291 00000"),
+        check(_fnr_candidate("02029100000") and _fnr_candidate("020291 00000"),
               "plain and grouped fødselsnumre are recognised")
-        cross(not _fnr_candidate("N 6626630.58"),
+        check(not _fnr_candidate("N 6626630.58"),
               "a coordinate is NOT recognised as fnr")
-        cross(not _fnr_candidate("Personnummer: 00000"),
+        check(not _fnr_candidate("Personnummer: 00000"),
               "five digits alone are not recognised")
-        cross(not _fnr_candidate("99999999999"),
+        check(not _fnr_candidate("99999999999"),
               "eleven digits without a valid date are not recognised")
 
         print("\n[2] poisson_upper")
-        cross(abs(poisson_upper_bound(0) - 3.0) < 0.01,
+        check(abs(poisson_upper_bound(0) - 3.0) < 0.01,
               f"zero observed gives the rule of three ({poisson_upper_bound(0):.2f})")
-        cross(poisson_upper_bound(1) > 4.7 and poisson_upper_bound(1) < 4.8,
+        check(poisson_upper_bound(1) > 4.7 and poisson_upper_bound(1) < 4.8,
               f"one observed gives ~4.74 ({poisson_upper_bound(1):.2f})")
 
         # ── Export ───────────────────────────────────────────
@@ -324,31 +324,31 @@ def hoved(keep):
         with open(os.path.join(ut, "utvalg.json"), encoding="utf-8") as f:
             sample = json.load(f)
 
-        cross(sample["n_bom_total"] == 4, f"4 BOM found ({sample['n_bom_total']})")
-        cross(sample["n_covering_total"] == 3,
+        check(sample["n_bom_total"] == 4, f"4 BOM found ({sample['n_bom_total']})")
+        check(sample["n_covering_total"] == 3,
               f"3 covering found ({sample['n_covering_total']})")
-        cross(sample["n_covering_exported"] == 2, "the sample became 2 covering")
-        cross(abs(sample["hit_factor"] - 1.5) < 1e-9,
+        check(sample["n_covering_exported"] == 2, "the sample became 2 covering")
+        check(abs(sample["hit_factor"] - 1.5) < 1e-9,
               f"treff_faktor = 1.5 ({sample['hit_factor']})")
-        cross(len(manifest) == 6, f"6 manifest rows ({len(manifest)})")
-        cross(all(os.path.getsize(os.path.join(ut, "utsnitt", r["utsnitt"])) > 500
+        check(len(manifest) == 6, f"6 manifest rows ({len(manifest)})")
+        check(all(os.path.getsize(os.path.join(ut, "utsnitt", r["utsnitt"])) > 500
                   for r in manifest), "every crop written and not empty")
         for r in manifest:
             b = Image.open(os.path.join(ut, "utsnitt", r["utsnitt"]))
-            cross(b.size == (int(r["utsnitt_bredde"]), int(r["utsnitt_hoyde"]))
+            check(b.size == (int(r["utsnitt_bredde"]), int(r["utsnitt_hoyde"]))
                   and 0 <= float(r["m_x0"]) and float(r["m_x1"]) <= b.width,
                   f"the marker sits inside {r['utsnitt']}")
             break
-        cross(all(r["ocr_linje"] for r in manifest),
+        check(all(r["ocr_linje"] for r in manifest),
               "the OCR line was fetched for every row")
         hit = [r for r in manifest if r["klasse"] == "TREFF"]
-        cross(all(r["label_id"] for r in hit),
+        check(all(r["label_id"] for r in hit),
               "covering rows carry label_id through")
         rotated = [r for r in manifest if r["fil"] == "0100003.pdf"]
-        cross(len(rotated) >= 1 and all(
+        check(len(rotated) >= 1 and all(
             int(r["utsnitt_hoyde"]) > int(r["utsnitt_bredde"]) for r in rotated),
               "rotated pages are cropped upright (tall crop)")
-        cross(all(r["ocr_tekst"] in ("48089700000", "12") for r in rotated),
+        check(all(r["ocr_tekst"] in ("48089700000", "12") for r in rotated),
               "the numbers are read from the OCR cache on the rotated page "
               f"({[r['ocr_tekst'] for r in rotated]})")
 
@@ -362,16 +362,16 @@ def hoved(keep):
                 Token("underlinje", 100, 532, 470, 550, 0.9),
                 Token("", 210, 500, 400, 520, 0.9)]
         i_box, i_line, block = _ocr_context(toks, rect)
-        cross(i_box == "07079600000", f"_ocr_context finds the box ({i_box!r})")
-        cross(i_line == "Selger 07079600000 andel",
+        check(i_box == "07079600000", f"_ocr_context finds the box ({i_box!r})")
+        check(i_line == "Selger 07079600000 andel",
               f"_ocr_context finds the line without neighbours ({i_line!r})")
-        cross(block == "", "without --ocr-lines the block is empty")
+        check(block == "", "without --ocr-lines the block is empty")
         _, _, b1 = _ocr_context(toks, rect, n_lines=1)
-        cross(b1.split("\n") == ["overlinje",
+        check(b1.split("\n") == ["overlinje",
                                  "Selger 07079600000 andel",
                                  "underlinje"],
               f"n_lines=1 gives the line plus one neighbour each way ({b1!r})")
-        cross(_ocr_context([], rect) == ("", "", ""),
+        check(_ocr_context([], rect) == ("", "", ""),
               "an empty token list is harmless")
 
         # Asymmetric margins and full page width.
@@ -384,7 +384,7 @@ def hoved(keep):
                   read(os.path.join(wide, "manifest.csv"))}
         narrow = {r["fil"] + r["nr"]: r for r in manifest
                 if r["klasse"] == "BOM"}
-        cross(all(int(m_wide[k]["utsnitt_bredde"]) > int(v["utsnitt_bredde"])
+        check(all(int(m_wide[k]["utsnitt_bredde"]) > int(v["utsnitt_bredde"])
                   and int(m_wide[k]["utsnitt_hoyde"]) < int(v["utsnitt_hoyde"])
                   for k, v in narrow.items() if k in m_wide),
               "--margin-x/-y work independently per axis")
@@ -395,7 +395,7 @@ def hoved(keep):
              "--folder", pdf_dir, "--out-dir", full, "--hit-sample", "0",
              "--full-width", "--max-px", "0")
         page_width = round(PAGE_B * SCALE)
-        cross(all(abs(int(r["utsnitt_bredde"]) - page_width) <= 2
+        check(all(abs(int(r["utsnitt_bredde"]) - page_width) <= 2
                   for r in read(os.path.join(full, "manifest.csv"))
                   if r["fil"] != "0100003.pdf"),
               "--full-width gives crops the full page width")
@@ -412,8 +412,8 @@ def hoved(keep):
                  "--seed", "7", "--workers", n)
         a = open(os.path.join(serial, "manifest.csv"), "rb").read()
         b = open(os.path.join(parallel, "manifest.csv"), "rb").read()
-        cross(a == b, "--workers 1 and --workers 4 give an identical manifest")
-        cross(sorted(os.listdir(os.path.join(serial, "utsnitt")))
+        check(a == b, "--workers 1 and --workers 4 give an identical manifest")
+        check(sorted(os.listdir(os.path.join(serial, "utsnitt")))
               == sorted(os.listdir(os.path.join(parallel, "utsnitt"))),
               "and identical crop names")
         progress = run_step(os.path.join(HERE, "vlm_export.py"),
@@ -421,7 +421,7 @@ def hoved(keep):
                          "--folder", pdf_dir, "--hit-sample", "0",
                          "--out-dir", os.path.join(rot, "eksport_frem"),
                          "--workers", "2")
-        cross("doc/s" in progress and "ETA" in progress,
+        check("doc/s" in progress and "ETA" in progress,
               "progress is printed along the way")
 
         top = os.path.join(rot, "eksport_topp")
@@ -430,13 +430,13 @@ def hoved(keep):
              "--folder", pdf_dir, "--out-dir", top, "--hit-sample", "0",
              "--from-top", "--full-width", "--max-px", "0")
         m_top = read(os.path.join(top, "manifest.csv"))
-        cross(all(abs(int(r["utsnitt_bredde"]) - round(PAGE_B * SCALE)) <= 2
+        check(all(abs(int(r["utsnitt_bredde"]) - round(PAGE_B * SCALE)) <= 2
                   for r in m_top if r["fil"] != "0100003.pdf"),
               "--from-top + --full-width gives the full page width")
-        cross(all(float(r["m_y1"]) <= int(r["utsnitt_hoyde"])
+        check(all(float(r["m_y1"]) <= int(r["utsnitt_hoyde"])
                   and float(r["m_y0"]) >= 0 for r in m_top),
               "the marker stays inside the image in full-page crops too")
-        cross(all(int(r["utsnitt_hoyde"]) > int(r["utsnitt_bredde"]) * 0.4
+        check(all(int(r["utsnitt_hoyde"]) > int(r["utsnitt_bredde"]) * 0.4
                   for r in m_top if r["fil"] != "0100003.pdf"),
               "crops reach down from the top, not just around the box")
 
@@ -457,12 +457,12 @@ def hoved(keep):
         finally:
             srv.shutdown()
         judge = {d["nr"]: d for d in read(os.path.join(ut, "judge_ok.csv"))}
-        cross(len(judge) == 6, f"6 judgements written ({len(judge)})")
-        cross(not any(d["feil"] for d in judge.values()),
+        check(len(judge) == 6, f"6 judgements written ({len(judge)})")
+        check(not any(d["feil"] for d in judge.values()),
               "no errors against the friendly stub")
         for r in manifest:
             truth_answer = "ja" if r["klasse"] != "BOM" else "nei"
-            cross(judge[r["nr"]]["svar"] == truth_answer,
+            check(judge[r["nr"]]["svar"] == truth_answer,
                   f"{r['utsnitt']}: verdict «{judge[r['nr']]['svar']}» "
                   f"as expected")
 
@@ -475,11 +475,11 @@ def hoved(keep):
                  "--url", url, "--model", "stub", "--concurrent", "1", "--attempt", "1", "--timeout", "20")
             image_csv = os.path.join(ut, "judge_image.csv")
             d1 = read(image_csv)
-            cross(len(d1) == 6, f"all 6 rows written despite errors ({len(d1)})")
-            cross(any(r["feil"] for r in d1), "at least one error was logged")
-            cross(all(r["svar"] in ("ja", "nei", "usikker") for r in d1),
+            check(len(d1) == 6, f"all 6 rows written despite errors ({len(d1)})")
+            check(any(r["feil"] for r in d1), "at least one error was logged")
+            check(all(r["svar"] in ("ja", "nei", "usikker") for r in d1),
                   "every answer is a valid value")
-            cross(all(r["svar"] == "usikker" for r in d1
+            check(all(r["svar"] == "usikker" for r in d1
                       if r["feil"].startswith(("HTTPError", "URLError"))),
                   "network errors became «usikker», never «nei»")
             n_error = sum(1 for r in d1 if r["feil"])
@@ -489,7 +489,7 @@ def hoved(keep):
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "1", "--resume")
             d2 = read(image_csv)
-            cross(len(d2) == 6 + n_error,
+            check(len(d2) == 6 + n_error,
                   f"--resume added exactly the {n_error} failed rows "
                   f"({len(d2) - 6})")
         finally:
@@ -502,10 +502,10 @@ def hoved(keep):
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_tenk.csv"), "--concurrent", "1")
-            cross(set(counter["reasoning"]) == {"none"},
+            check(set(counter["reasoning"]) == {"none"},
                   "reasoning_effort=none is sent by default")
             d = read(os.path.join(ut, "d_tenk.csv"))
-            cross(all(not r["feil"] for r in d),
+            check(all(not r["feil"] for r in d),
                   "thinking was turned off. Real answers, no errors")
 
             # With --thinking auto the field is omitted and content comes back
@@ -516,10 +516,10 @@ def hoved(keep):
                  "--concurrent", "1", "--attempt", "1", "--thinking", "auto",
                  "--max-items", "2")
             d = read(os.path.join(ut, "d_auto.csv"))
-            cross(all("thought" in r["feil"] for r in d),
+            check(all("thought" in r["feil"] for r in d),
                   "empty «content» is diagnosed as thinking, not an anonymous "
                   "error")
-            cross(all(r["svar"] == "usikker" for r in d),
+            check(all(r["svar"] == "usikker" for r in d),
                   "and becomes «usikker», not «nei»")
         finally:
             srv.shutdown()
@@ -536,9 +536,9 @@ def hoved(keep):
                             "--model", "stub", "--out-csv", path, "--concurrent", "1",
                             "--no-file", no_file)
             d = read(path)
-            cross("--no-file: 2 of 6" in printout and len(d) == 2,
+            check("--no-file: 2 of 6" in printout and len(d) == 2,
                   "only the two listed rows were judged")
-            cross({r["nr"] for r in d} == {"2", "5"},
+            check({r["nr"] for r in d} == {"2", "5"},
                   "and they were the right rows")
         finally:
             srv.shutdown()
@@ -550,19 +550,19 @@ def hoved(keep):
             run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
                  "stub", "--out-csv", path, "--concurrent", "1")
-            cross(len(read(path)) == 6, "the first run judges all 6")
+            check(len(read(path)) == 6, "the first run judges all 6")
             ut2 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
                        "--concurrent", "1")
-            cross("Nothing to do" in ut2 and len(read(path)) == 6,
+            check("Nothing to do" in ut2 and len(read(path)) == 6,
                   "a second run without flags does NOTHING. Finished work is "
                   "not overwritten")
             ut3 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
                        "--concurrent", "1", "--restart")
-            cross("overwriting" in ut3 and len(read(path)) == 6,
+            check("overwriting" in ut3 and len(read(path)) == 6,
                   "--restart overwrites, and says that it does")
         finally:
             srv.shutdown()
@@ -574,10 +574,10 @@ def hoved(keep):
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_400.csv"), "--concurrent", "1")
             d = read(os.path.join(ut, "d_400.csv"))
-            cross(counter["avvist"] == 1,
+            check(counter["avvist"] == 1,
                   f"only the FIRST call was rejected ({counter['avvist']}), "
                   f"the field is dropped for the rest")
-            cross(len(d) == 6 and all(not r["feil"] for r in d),
+            check(len(d) == 6 and all(not r["feil"] for r in d),
                   "all 6 judgements came through after the fallback")
         finally:
             srv.shutdown()
@@ -591,9 +591,9 @@ def hoved(keep):
         with open(os.path.join(ut, "evaluation", "oppsummering.json"),
                   encoding="utf-8") as f:
             up = json.load(f)
-        cross(up["n_bom_nei"] == 4, f"4 BOM got nei ({up['n_bom_nei']})")
-        cross(up["n_dek_nei"] == 0, f"0 covering got nei ({up['n_dek_nei']})")
-        cross(abs(up["gain"] - 4.0) < 1e-6,
+        check(up["n_bom_nei"] == 4, f"4 BOM got nei ({up['n_bom_nei']})")
+        check(up["n_dek_nei"] == 0, f"0 covering got nei ({up['n_dek_nei']})")
+        check(abs(up["gain"] - 4.0) < 1e-6,
               f"gain scaled to 4 ({up['gain']})")
         # Partial run: if the loss is scaled up, the gain must be scaled too.
         half = os.path.join(ut, "d_halv.csv")
@@ -607,23 +607,23 @@ def hoved(keep):
         out_half = run_step(os.path.join(HERE, "vlm_evaluate.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--judge", half,
                        "--out-dir", os.path.join(ut, "ev_halv"))
-        cross("Scale-up BOM:              2.00" in out_half,
+        check("Scale-up BOM:              2.00" in out_half,
               "BOM scales 4/2 = 2.00 in a partial run")
-        cross("Scale-up covering:         3.00" in out_half,
+        check("Scale-up covering:         3.00" in out_half,
               "covering scales 3/1 = 3.00, not the export factor 1.5")
-        cross(abs(up["loss_upper"] - 3.0 * 1.5) < 0.05,
+        check(abs(up["loss_upper"] - 3.0 * 1.5) < 0.05,
               f"upper loss bound = 3 × factor 1.5 = 4.5 ({up['loss_upper']:.2f})")
         # Zero losses observed, so the point estimate is infinite while the
         # upper bound is not: two boxes prove nothing.
-        cross("VERDICT: UNCERTAIN" in out_text,
+        check("VERDICT: UNCERTAIN" in out_text,
               "the verdict is UNCERTAIN. Zero loss in a tiny sample proves "
               "nothing")
-        cross("∞" in out_text, "the point estimate shows as infinite")
+        check("∞" in out_text, "the point estimate shows as infinite")
         lost = read(os.path.join(ut, "evaluation", "lost.csv"))
         gain = read(os.path.join(ut, "evaluation", "gain.csv"))
-        cross(len(lost) == 0 and len(gain) == 4,
+        check(len(lost) == 0 and len(gain) == 4,
               "lost.csv empty, gain.csv has 4 rows")
-        cross("label_id" in read(os.path.join(ut, "evaluation",
+        check("label_id" in read(os.path.join(ut, "evaluation",
                                              "gain.csv"))[0],
               "the manifests have a label_id column (same format as "
               "filter_review)")
@@ -663,15 +663,15 @@ def hoved(keep):
                       os.path.join(ut, "manifest.csv"), "--judge", only_ocr,
                       "--out-dir", os.path.join(ut, "ev_kunocr"),
                       "--fnr-override")
-        cross("--fnr-override: 2 verdicts changed" in out_ocr,
+        check("--fnr-override: 2 verdicts changed" in out_ocr,
               "the manifest OCR line alone protects the covering boxes")
 
-        cross("--fnr-override: 2 verdicts changed" in out_ov,
+        check("--fnr-override: 2 verdicts changed" in out_ov,
               "the override saves both covering boxes")
         with open(os.path.join(ut, "ev_ov", "oppsummering.json"),
                   encoding="utf-8") as f:
             o = json.load(f)
-        cross(o["n_dek_nei"] == 0 and o["n_bom_nei"] == 4,
+        check(o["n_dek_nei"] == 0 and o["n_bom_nei"] == 4,
               f"zero loss, gain untouched ({o['n_dek_nei']}/{o['n_bom_nei']})")
 
         # Judge only the BOM rows and the tool must say the scale-up does not
@@ -693,11 +693,11 @@ def hoved(keep):
                         os.path.join(ut, "manifest.csv"), "--judge",
                         os.path.join(ut, "d_skjev.csv"), "--out-dir",
                         os.path.join(ut, "ev_skjev"))
-        cross("WARNING" in out_skewed and "does not look random" in out_skewed,
+        check("WARNING" in out_skewed and "does not look random" in out_skewed,
               "a skewed sample triggers the warning")
-        cross("NB: the accounts above rest" in out_skewed,
+        check("NB: the accounts above rest" in out_skewed,
               "and the warning is repeated at the accounts")
-        cross("WARNING" not in out_text,
+        check("WARNING" not in out_text,
               "a complete sample gives NO warning")
 
         # Rule baseline: same accounts, no model. On the synthetic data only
@@ -706,11 +706,11 @@ def hoved(keep):
                         "--manifest", os.path.join(ut, "manifest.csv"),
                         "--judge", "regel:fnr-kandidat",
                         "--out-dir", os.path.join(ut, "ev_regel"))
-        cross("Baseline" in out_rule, "the regel: baseline runs without a model")
+        check("Baseline" in out_rule, "the regel: baseline runs without a model")
         with open(os.path.join(ut, "ev_regel", "oppsummering.json"),
                   encoding="utf-8") as f:
             o = json.load(f)
-        cross(o["n_bom_nei"] == 4 and o["n_dek_nei"] == 0,
+        check(o["n_bom_nei"] == 4 and o["n_dek_nei"] == 0,
               f"the fnr-kandidat rule takes 4 BOM and zero covering "
               f"({o['n_bom_nei']}/{o['n_dek_nei']})")
 
@@ -721,15 +721,15 @@ def hoved(keep):
                       "--judge", os.path.join(ut, "judge_ok.csv"),
                       "--out-dir", os.path.join(ut, "ev_del"),
                       "--split-by", "kilde", "--only", "har_tokens=1")
-        cross("SPLIT BY kilde" in out_split and "Subset" in out_split,
+        check("SPLIT BY kilde" in out_split and "Subset" in out_split,
               "--split-by and --only run together")
-        cross("6 of 6 rows" in out_split, "har_tokens=1 keeps every row")
+        check("6 of 6 rows" in out_split, "har_tokens=1 keeps every row")
         out_empty = run_step(os.path.join(HERE, "vlm_evaluate.py"),
                       "--manifest", os.path.join(ut, "manifest.csv"),
                       "--judge", os.path.join(ut, "judge_ok.csv"),
                       "--out-dir", os.path.join(ut, "ev_tom"),
                       "--only", "kilde=finnesikke")
-        cross("No rows left" in out_empty,
+        check("No rows left" in out_empty,
               "an empty condition says so instead of counting on nothing")
 
         # With --uncertain-remover the image arm's usikre must show as loss
@@ -738,7 +738,7 @@ def hoved(keep):
              "--judge", os.path.join(ut, "judge_image.csv"),
              "--out-dir", os.path.join(ut, "evaluering_bilde"),
              "--uncertain-remover")
-        cross(os.path.isfile(os.path.join(ut, "evaluering_bilde", "lost.csv")),
+        check(os.path.isfile(os.path.join(ut, "evaluering_bilde", "lost.csv")),
               "--uncertain-remover runs and writes lost.csv")
 
         print("\nALT OK.")
@@ -754,4 +754,4 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--keep", action="store_true",
                    help="Do not delete the work directory afterwards")
-    hoved(p.parse_args().keep)
+    main(p.parse_args().keep)

@@ -234,7 +234,7 @@ def build_lines(tokens):
     return ut
 
 
-def _sladdeboks(digit_boxes):
+def _sladd_box(digit_boxes):
     if len(digit_boxes) <= SLADD_DIGITS:
         return None
     last = digit_boxes[-SLADD_DIGITS:]            # the 5 to cover
@@ -310,7 +310,7 @@ def sladd_boxes_from_tokens(tokens, lines=None):
     for _line, text, map_ in (lines if lines is not None else build_lines(tokens)):
         for hit in find_fnr(text):
             digit_boxes = [map_[i] for i in range(hit.start, hit.end) if map_[i] is not None]
-            box = _sladdeboks(digit_boxes)
+            box = _sladd_box(digit_boxes)
             if box is None:
                 continue
             window = _normalize_ocr(text[hit.start:hit.end])

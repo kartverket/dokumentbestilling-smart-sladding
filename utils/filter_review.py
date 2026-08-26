@@ -166,8 +166,8 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
         return
 
     for p in ds.pred:
-        p["_grunner"] = reasons_for(p) if removed(p) else []
-        if not p["_grunner"]:
+        p["_reasons"] = reasons_for(p) if removed(p) else []
+        if not p["_reasons"]:
             p["_kat"] = None
         elif not p["covers"]:
             p["_kat"] = "oversladd"
@@ -212,7 +212,7 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
                 "elongation": round(p["elongation"], 2) if p else "",
                 "kortside_pt": round(p["short_side"], 1) if p else "",
                 "langside_pt": round(p["long_side"], 1) if p else "",
-                "reason": "; ".join(p.get("_grunner", ())),
+                "reason": "; ".join(p.get("_reasons", ())),
                 "_j": j,
                 "vurdering": "",
             })
@@ -366,7 +366,7 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
                 if p["klasse"] == "SLURV":
                     mark += "/SLURV"
                 _draw_text(drawer, r, f"{mark} [{p['kilde']}]", color, over=True)
-                _draw_text(drawer, r, "; ".join(p["_grunner"]), color, over=False)
+                _draw_text(drawer, r, "; ".join(p["_reasons"]), color, over=False)
                 if p["conf"] is not None:
                     drawer.text((r[0] + 2, max(r[1] + 2, 2)),
                                 f"conf={p['conf']:.2f}", fill=color,
@@ -891,7 +891,7 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
     for r in rows:
         reasons = rejection_reasons(r, **filter_kwargs)
         if reasons:
-            r["_grunner"] = reasons
+            r["_reasons"] = reasons
             discarded.append(r)
 
     share = len(discarded) / len(rows) * 100 if rows else 0
@@ -901,19 +901,19 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
         print("  None. The filter rejects no sladding made by a case handler.")
         return
 
-    for field, title in (("_grunn", "rule (a box can break several)"),
+    for field, title in (("_reason", "rule (a box can break several)"),
                          ("ml_status", "ml_status"), ("type", "type")):
         distribution, denominator = defaultdict(int), defaultdict(int)
         for r in discarded:
-            if field == "_grunn":
-                for g in r["_grunner"]:
+            if field == "_reason":
+                for g in r["_reasons"]:
                     distribution[re.sub(r"[\d.]+", "N", g, count=1)] += 1
             else:
                 distribution[r[field]] += 1
-        if field != "_grunn":
+        if field != "_reason":
             for r in rows:
                 denominator[r[field]] += 1
-        if len(distribution) > 1 or field == "_grunn":
+        if len(distribution) > 1 or field == "_reason":
             print(f"\n  Grouped by {title}:")
             for k, v in sorted(distribution.items(), key=lambda kv: -kv[1]):
                 tot = denominator.get(k)
@@ -962,14 +962,14 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
     os.makedirs(out_dir, exist_ok=True)
     rang = {"MISTET_DEKNING": 0, "": 1, "utenfor_scope": 2, "fortsatt_dekket": 3}
     discarded.sort(key=lambda r: (rang.get(r.get("_status", ""), 1),
-                                  "; ".join(r["_grunner"]),
+                                  "; ".join(r["_reasons"]),
                                   r["doc_no"], r["side"]))
     manifest = []
     for nr, r in enumerate(discarded, 1):
         x0, y0, x1, y1 = r["box"]
         manifest.append({
             "nr": nr, "fil_revisjon_id": r["doc_no"], "side": r["side"],
-            "reason": "; ".join(r["_grunner"]),
+            "reason": "; ".join(r["_reasons"]),
             "ml_status": r["ml_status"], "type": r["type"],
             "elongation": round(r["elongation"], 2),
             "kortside_pt": round(r["short_side"], 1),
@@ -1031,7 +1031,7 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
             rr = [x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE]
             drawer.rectangle(rr, outline=CRITICAL_REMOVED, width=4)
             _draw_text(drawer, rr, "REJECTED BY FILTER", CRITICAL_REMOVED, True)
-            _draw_text(drawer, rr, "; ".join(r["_grunner"]),
+            _draw_text(drawer, rr, "; ".join(r["_reasons"]),
                         CRITICAL_REMOVED, False)
             done = Image.alpha_composite(image.convert("RGBA"),
                                            overlay).convert("RGB")
@@ -1383,7 +1383,7 @@ def main():
 
     ocr = p.add_argument_group(
         "OCR features (stricter lenient_check; hits only kilde «yolo» with "
-        "text in the box. See _ocr_grunn in filter_common.py)")
+        "text in the box. See _ocr_reason in filter_common.py)")
     ocr.add_argument("--min-digits", type=float, default=None,
                      dest="min_digits",
                      help="Require at least N digits in the box (prod today: 1)")

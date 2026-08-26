@@ -388,14 +388,14 @@ def main():
               f"({_count_cached(args.yolo_cache)}/{len(files)} documents cached)")
 
     # Resume: skip files already in the CSV.
-    hoppet_over = 0
+    skipped = 0
     if args.proceed and args.csv and os.path.isfile(args.csv_out):
         done = _read_done_from_csv(args.csv_out)
         original = len(files)
         files = [f for f in files if os.path.basename(f) not in done]
-        hoppet_over = original - len(files)
-        if hoppet_over:
-            print(f"--proceed: skipping {hoppet_over} already processed, {len(files)} remaining")
+        skipped = original - len(files)
+        if skipped:
+            print(f"--proceed: skipping {skipped} already processed, {len(files)} remaining")
     elif args.csv and not args.proceed:
         if os.path.isfile(args.csv_out) and os.path.getsize(args.csv_out) > 0 and not args.overwrite:
             n_existing = len(_read_done_from_csv(args.csv_out))
@@ -409,7 +409,7 @@ def main():
     total_time = 0
     total_count = len(files)
 
-    will_ha_artifact = args.csv or args.png or args.truth or args.sladd or args.only_error
+    wants_artifact = args.csv or args.png or args.truth or args.sladd or args.only_error
 
     truth = None
     if args.png or args.only_error or args.truth:
@@ -420,7 +420,7 @@ def main():
     sladd_boxes, yolo_boxes, csv_boxes, failed = {}, {}, {}, []
     timings = {}
     ocr_lines = {}                          # (name, page) -> list of (text, marks)
-    warned_om_linjer = False
+    warned_about_lines = False
 
     # PNG rendering (CPU) in background threads while the GPU moves on.
     png_executor = ThreadPoolExecutor(max_workers=2) if (args.png and not args.only_error) else None
@@ -440,16 +440,16 @@ def main():
 
     start_wall = time.perf_counter()
 
-    def ta_against(i, name, pages, time_used):
+    def handle_finished(i, name, pages, time_used):
         """Everything that happens to a finished document: log, CSV, PNG, eval."""
-        nonlocal total_time, warned_om_linjer
+        nonlocal total_time, warned_about_lines
         total_time += time_used
         timings[name] = time_used
 
         if args.ocr_log:
-            if not warned_om_linjer and pages and "linjer" not in pages[0]:
+            if not warned_about_lines and pages and "linjer" not in pages[0]:
                 print("  !! --ocr-log: model returns flat format without 'linjer' - the log stays empty.")
-                warned_om_linjer = True
+                warned_about_lines = True
             for page in pages:
                 ocr_lines[(name, page["side"])] = page.get("linjer", [])
 
@@ -457,7 +457,7 @@ def main():
         wall = time.perf_counter() - start_wall
         remains = wall / i * (total_count - i)
 
-        if not will_ha_artifact:
+        if not wants_artifact:
             print(f"  {n} box(es), {len(pages)} page(s), {time_used:.2f}s (est. remaining: {remains:.0f}s)")
             return
 
@@ -564,7 +564,7 @@ def main():
                     time_used = time.perf_counter() - start
                 else:
                     pages = payload
-                ta_against(i, name, pages, time_used)
+                handle_finished(i, name, pages, time_used)
     else:
         # ── Sequential run ───────────────────────────────────────
         # Pre-read the next file while the GPU works.
@@ -589,7 +589,7 @@ def main():
             if pages is None:
                 continue
 
-            ta_against(i, name, pages, time.perf_counter() - start)
+            handle_finished(i, name, pages, time.perf_counter() - start)
 
     wall_time = time.perf_counter() - start_wall
     print(f"\nDone! {total_count} documents in {wall_time:.1f}s ({wall_time/max(total_count,1):.2f}s/doc)")
@@ -601,7 +601,7 @@ def main():
         n = _write_ocr_log(ocr_lines, args.ocr_log_file)
         print(f"Wrote OCR lines for {n} page(s) to {args.ocr_log_file}")
 
-    if not will_ha_artifact and not args.only_error:
+    if not wants_artifact and not args.only_error:
         return
 
     eval_result = None

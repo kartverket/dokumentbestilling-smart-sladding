@@ -63,7 +63,7 @@ MAX_LETTERS     = 1         # 2+ letters is not an fnr, whatever YOLO says
 # fnr never has one. High detection conf exempts: real fnr caught by the rule
 # sit at conf >= 0.5, coordinates at <= 0.37. Final kilde after dedup, so pure
 # "yolo" only. Uttrekk 6: ~1250 oversladdinger removed / 3 real fnr lost.
-# Mirrored by _desimalregel_forkaster (model_main) and _ocr_grunn
+# Mirrored by _decimal_rule_discards (model_main) and _ocr_reason
 # (utils/filter_common.py).
 REJECT_DECIMAL_REC_VETO    = 0.98
 REJECT_DECIMAL_CONF_EXEMPT = 0.6
@@ -76,7 +76,7 @@ REJECT_DECIMAL_LOW_TIER_CONF_MAX  = 0.4
 # (too long for a personnummer, too short for an fnr, so dagboknummer, amount
 # or coordinate) or a valid orgnr mod11. 9-runs are excluded on purpose, they
 # are often real fnr with two characters dropped by OCR. Uttrekk 6: 79
-# oversladdinger removed / 1 real fnr. Mirrored by _ocr_grunn.
+# oversladdinger removed / 1 real fnr. Mirrored by _ocr_reason.
 LINE_EVIDENCE_REC_VETO  = 0.99
 LINE_EVIDENCE_CONF_EXEMPT = 0.5
 LINE_EVIDENCE_RUN_MAX    = 8
@@ -86,13 +86,13 @@ LINE_EVIDENCE_RUN_MAX    = 8
 # columns are the source; a real fnr has no such gaps. Final kilde "paddle"
 # only. Position-blind on "begge" it cost 974 fnr. 8, not 3: handwritten fnr
 # reach ~6 digit widths (5.94 measured), coordinate gaps >= 10. Uttrekk 6:
-# 72 oversladdinger removed / 0 lost (gap 3 gave 91/1). Mirrored by _ocr_grunn.
+# 72 oversladdinger removed / 0 lost (gap 3 gave 91/1). Mirrored by _ocr_reason.
 WINDOW_MAX_GAP          = 8.0   # digit widths
 WINDOW_REJECT_DECIMAL_IN_GAP = True
 
 # ── Rule profile per rettsstiftelsestype ──────────────────────────
 # The coordinate family is maps, measurement tables and coordinate lists:
-# 21 % precision against 88.5 % elsewhere. Inside it _koordfam_forkaster
+# 21 % precision against 88.5 % elsewhere. Inside it _koordfam_discards
 # removed 576 oversladdinger / 0 real fnr; globally it costs hundreds of fnr.
 # Codes come from the skip job; without them the global behaviour applies.
 KOORDFAM_CODES = frozenset((

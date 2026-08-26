@@ -669,7 +669,7 @@ GEOMETRY_PARAMETERS = (
     "min_long_side", "max_long_side", "max_area", "min_area_px",
     "conf_threshold")
 
-# Stricter variants of lenient_check; see _ocr_grunn for the semantics.
+# Stricter variants of lenient_check; see _ocr_reason for the semantics.
 OCR_PARAMS = (
     "min_digits", "max_letters", "min_digits_run", "require_fnr_candidate",
     "reject_decimal", "rec_veto", "ocr_conf_exempt", "reject_00_run",
@@ -687,14 +687,14 @@ def _ocr_reason(p, min_digits=None, max_letters=None, min_digits_run=None,
                max_gap=None, reject_decimal_gap=None):
     """Why a YOLO box is rejected by a stricter lenient_check, or None.
 
-    Mirrors _godta_yolo_boks in app/model_main.py: the box needs text features
+    Mirrors _accept_yolo_box in app/model_main.py: the box needs text features
     (only kilde "yolo" has them) and har_tokens must be 1, since boxes without
     text are governed by YOLO_CONF_NO_TEXT instead. The window rules target
     paddle/begge and therefore run before that gate.
 
     rec_veto is the hypothesis under test: OCR rules may only reject when Paddle
     read the box confidently. On a bad read a missing fnr proves nothing.
-    ocr_conf_fritak mirrors the geometry conf gate: manual review (uttrekk 6) put
+    ocr_conf_exempt mirrors the geometry conf gate: manual review (uttrekk 6) put
     real fnr almost all at conf >= 0.5, coordinates and kontonummer below 0.4.
     """
     # Graphics/map detections have no text to defend themselves with, so only
@@ -804,7 +804,7 @@ def rejection_reasons(p, min_elongation=None, max_elongation=None,
     return reasons
 
 
-def er_filtered(p, min_elongation=None, max_elongation=None,
+def is_filtered(p, min_elongation=None, max_elongation=None,
                 max_height=None, min_height=None,
                 max_width=None, min_width=None,
                 min_short_side=None, max_short_side=None,
@@ -846,7 +846,7 @@ def er_filtered(p, min_elongation=None, max_elongation=None,
 
 def make_filter(**kwargs):
     """Predicate p -> bool for one shared filter config."""
-    return lambda p: er_filtered(p, **kwargs)
+    return lambda p: is_filtered(p, **kwargs)
 
 
 def make_filter_per_source(per_source, only_source=None):
@@ -860,7 +860,7 @@ def make_filter_per_source(per_source, only_source=None):
         if only_source is not None and source != only_source.lower():
             return False
         kw = per_source.get(source)
-        return er_filtered(p, **kw) if kw else False
+        return is_filtered(p, **kw) if kw else False
     return _removed
 
 
@@ -869,7 +869,7 @@ def parse_per_source(spec_list):
 
     Units: h/hmin/b/bmin in pt, a in pt², amin in px² (like MIN_BOX_AREA).
     The OCR rules apply to kilde "yolo" only and the window rules (luke, desluke)
-    to paddle/begge; see _ocr_grunn. Keys carrying a bound rather than 0/1:
+    to paddle/begge; see _ocr_reason. Keys carrying a bound rather than 0/1:
     rveto/lveto = OCR rules apply only above that read quality, cfritak = they
     stand down above that detection conf, run610 = reject digit runs 6..V
     (1 = 6..10), luke = reject a gap of >= V digit widths, utconf = boxes without
