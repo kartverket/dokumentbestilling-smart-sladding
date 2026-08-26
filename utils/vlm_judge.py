@@ -614,6 +614,10 @@ def run(a):
             print(f"  Review:          {write_review_md(out_path, folder)}")
             print(f"  With label-id:   "
                   f"{write_review_label_md(out_path, folder)}")
+            # Asking a finished run for its candidates is the normal way to
+            # get them, so this must not fall out with the work list.
+            if a.missing_candidates:
+                write_missing_candidates(out_path, rows, a)
         return out_path
 
     print(f"  {len(left)} boxes to judge  "
