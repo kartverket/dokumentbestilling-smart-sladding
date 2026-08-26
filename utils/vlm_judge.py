@@ -44,7 +44,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import vlm_cache
-from filter_common import reclassify_invalid_covering
+from filter_common import (reclassify_invalid_covering,
+                           reclassify_missing_covered)
 
 STD_URL = "http://localhost:8000/v1"
 STD_TIMEOUT = 120
@@ -547,6 +548,10 @@ def run(a):
     if reclassified:
         print(f"  {reclassified} covering rows treated as BOM — their labels "
               f"are listed in ugyldige_labels.txt")
+    remapped = reclassify_missing_covered(rows)
+    if remapped:
+        print(f"  {remapped} BOM rows treated as TREFF — their boxes cover "
+              f"a row in manglende_labels.csv")
     folder = a.crop_dir or os.path.join(
         os.path.dirname(os.path.abspath(a.manifest)), "utsnitt")
     prompt = STD_PROMPT
@@ -583,7 +588,8 @@ def run(a):
                               {r["nr"]: r.get("klasse", "") for r in rows})
         if synced:
             print(f"  {synced} stored rows re-labelled from the manifest "
-                  f"(ugyldige_labels.txt grew since they were judged)")
+                  f"(ugyldige_labels.txt or manglende_labels.csv grew "
+                  f"since they were judged)")
     if a.only_candidates:
         if not os.path.isfile(out_path):
             sys.exit(f"  {out_path} does not exist yet, nothing to draw from.")

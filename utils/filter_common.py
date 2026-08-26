@@ -261,6 +261,46 @@ def reclassify_invalid_covering(rows):
     return n
 
 
+def reclassify_missing_covered(rows):
+    """BOM rows whose box covers a manglende_labels.csv row become TREFF:
+    the fasit was missing, not the fødselsnummer. label_id gets the added
+    row's id, so a retraction through ugyldige_labels.txt applies to it like
+    any other label. Runs at read time so a grown manglende_labels.csv
+    applies to old manifests without a re-export. Run it AFTER
+    reclassify_invalid_covering: a box over both an invalid label and a
+    missing number must end up covering. With Y_ORIGIN «bottom» the manifest
+    lacks the page height the conversion needs, and no rows are changed.
+    Returns the number of rows changed."""
+    if Y_ORIGIN == "bottom":
+        return 0
+    invalid = read_invalid_label_ids()
+    per_page = defaultdict(list)
+    for m in read_missing_label_rows():
+        if m["id"] in invalid:
+            continue
+        box, key = _label_box(m), _label_key(m)
+        if box and key:
+            per_page[key].append((tuple(v * SCALE for v in box), m["id"]))
+    if not per_page:
+        return 0
+    n = 0
+    for r in rows:
+        if r.get("klasse") != "BOM":
+            continue
+        try:
+            key = (int(r["doc_no"]), int(r["side"]))
+            box = tuple(float(r[k]) for k in ("x0", "y0", "x1", "y1"))
+        except (TypeError, ValueError, KeyError):
+            continue
+        hit = [mid for mbox, mid in per_page.get(key, ())
+               if _same_box(box, mbox)]
+        if hit:
+            r["klasse"] = "TREFF"
+            r["label_id"] = ";".join(hit)
+            n += 1
+    return n
+
+
 _WARNED_WITHOUT_ID = False
 
 

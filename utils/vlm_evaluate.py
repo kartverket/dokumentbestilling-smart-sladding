@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(
 # Imported, not copied, so a change in prod cannot leave a silently diverging
 # copy of the digit-confusion rules here.
 from paddle_ocr_model_fnr import find_fnr
-from filter_common import reclassify_invalid_covering
+from filter_common import (reclassify_invalid_covering,
+                           reclassify_missing_covered)
 
 ANSWER = ("ja", "nei", "usikker")
 STD_COST = 20.0
@@ -479,6 +480,10 @@ def main():
     if reclassified:
         print(f"{reclassified} covering rows reclassified to BOM — all their "
               f"labels are listed in ugyldige_labels.txt")
+    remapped = reclassify_missing_covered(manifest)
+    if remapped:
+        print(f"{remapped} BOM rows reclassified to TREFF — their boxes "
+              f"cover a row in manglende_labels.csv")
     if os.path.isdir(a.judge):
         a.judge = os.path.join(a.judge, "full_info.csv")
     if a.judge.startswith("regel:"):
