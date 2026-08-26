@@ -47,7 +47,8 @@ MARKER_WIDTH = 3
 MARKER_SPACE = 3               # px outside the box, so digits stay visible
 
 STD_MARGIN = 60.0             # context margin in PDF points
-STD_MAX_PX = 1400            # crops wider than this are scaled down
+# The smaller max-px, the faster the model (but lower quality image is used)
+STD_MAX_PX = 800             # crops wider than this are scaled down
 STD_WORKERS = max(1, min(8, (os.cpu_count() or 2) - 1))
 
 MANIFEST_FIELD = [
