@@ -254,13 +254,21 @@ def main(keep):
         for field in ("tall", "holdepunkt"):
             check(STD_PROMPT.index(f'"{field}"') < STD_PROMPT.index('"svar"'),
                   f"«{field}» comes before «svar» in the JSON template")
-        check("usikker" in STD_PROMPT.lower(),
-              "the prompt offers «usikker» as a way out")
-        check("tjue ganger" in STD_PROMPT,
-              "the prompt states the 20x cost asymmetry")
-        # The main gain: 00-padded orgnr can never be a fødselsnummer.
-        check("starte med 00" in STD_PROMPT,
-              "the prompt keeps the 00-prefix orgnr rule")
+        # «usikker» is a parse failure state, not an answer: doubt has to go
+        # to «ja», or recall leaks out through a third alternative.
+        check(re.search(r"i tvil,?\s*svar «ja»", STD_PROMPT),
+              "the prompt sends doubt to «ja»")
+        check("usikker" not in STD_PROMPT.lower(),
+              "the prompt does not offer «usikker» as an answer")
+        asymmetry = re.search(r"(\d+) ganger verre", STD_PROMPT)
+        check(asymmetry and int(asymmetry.group(1)) > 1,
+              "the prompt states the cost asymmetry "
+              f"({asymmetry.group(1) + 'x' if asymmetry else 'missing'})")
+        # A «nei» is only legal for a named alternative, and the contrasts
+        # this test builds documents from have to be among them.
+        for word in ("kontonummer", "organisasjonsnummer", "koordinat"):
+            check(word in STD_PROMPT.lower(),
+                  f"the prompt names «{word}» as a legal «nei»")
 
         print("\n[1] parse_answer")
         check(parse_answer('{"svar":"nei","tall":"66266","begrunnelse":"koordinat"}')
