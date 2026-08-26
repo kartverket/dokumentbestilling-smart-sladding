@@ -207,7 +207,6 @@ ee74366c-c457-4eb8-b692-45642d115f5e    # kontonummer
 99e23751-a720-4deb-8c1b-07eebece2c16    # kontonummer
 6c0fccf7-03a5-4690-96f9-cd943681f329    # kontonummer
 1b60a6ce-5a37-46e3-bf14-7f7ed645b2ae    # orgnr
-
 1b84b6ff-93c9-409e-b65a-63cf0e3dc44e    # utenfor siden
 4bdbf952-a4e8-42ee-8046-55a3c45ef6c1    # én sladding over to numre (mangler-5747d3eb6439, mangler-0be60277a0cd)
 112a7fb8-359e-45e2-9955-119a060a4a71    # depotnummer?
