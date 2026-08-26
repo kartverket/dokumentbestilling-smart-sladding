@@ -585,6 +585,12 @@ def run(a):
         if synced:
             print(f"  {synced} stored rows re-labelled from the manifest "
                   f"(ugyldige_labels.txt grew since they were judged)")
+    if a.only_candidates:
+        if not os.path.isfile(out_path):
+            sys.exit(f"  {out_path} does not exist yet, nothing to draw from.")
+        write_missing_candidates(out_path, rows, a)
+        return out_path
+
     done = set()
     if not a.resume and os.path.isfile(out_path):
         print(f"  ⚠ --restart: overwriting {out_path}")
@@ -807,6 +813,11 @@ def main():
                         "fasit is missing, and the images feed "
                         "note_missing_label.py. Sources are read from "
                         "utvalg.json next to the manifest.")
+    p.add_argument("--only-candidates", action="store_true",
+                   help="Draw the candidate pages from the judgements "
+                        "already on disk and stop. The judgement CSV is "
+                        "flushed continuously, so this works on a run still "
+                        "going, without judging anything itself.")
     p.add_argument("--res-csv", default=None,
                    help="Override the result CSV from utvalg.json")
     p.add_argument("--truth-csv", default=None,
@@ -830,6 +841,8 @@ def main():
             p.error(f"--{flag} is required")
     # Resolved before the run, not after: the drawing happens at the end, and
     # a missing path should not surface after hours of GPU time.
+    if a.only_candidates:
+        a.missing_candidates = True
     if a.missing_candidates:
         missing = resolve_sources(a)
         if missing:
