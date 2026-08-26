@@ -1,16 +1,15 @@
 """Evaluates the VLM judgements against the fasit classes: cost against gain.
 
 Step 3 of the VLM verifier pilot. Joins judge_image.csv against manifest.csv
-and weighs BOM boxes judged «nei» (gain: oversladdinger we can drop) against
-covering boxes judged «nei» (risk: real fnr). Same decision rule as every
-other filter in this repo: one lost fasit box must buy at least 20 removed
-oversladdinger.
+and counts BOM boxes judged «nei» (gain: oversladdinger we can drop) against
+covering boxes judged «nei» (risk: real fnr). The tool reports the numbers.
+Whether they are good enough is a call the reader makes.
 
 Two things make that less trivial than it looks. The export takes ALL BOM but
 only a sample of the covering boxes, so the factors in utvalg.json scale the
 loss up to the full uttrekk. And with 0 or 1 losses observed a point estimate
-is worthless, so ov/lost is also computed against a 95 % Poisson upper bound,
-that is the number to measure against the cost before anything reaches prod.
+is worthless, so oversladdinger per lost fnr is also computed against a 95 %
+Poisson upper bound.
 
 Every covering box judged «nei» is written to lost.csv with label_id: fasit
 can be noise, and the ids go straight into ugyldige_labels.txt if the verdict
@@ -41,7 +40,6 @@ from filter_common import (reclassify_invalid_covering,
                            reclassify_missing_covered)
 
 ANSWER = ("ja", "nei", "usikker")
-STD_COST = 20.0
 
 
 # ── Statistics ────────────────────────────────────────────────
@@ -266,19 +264,26 @@ def _group(row):
 
 # ── Report ────────────────────────────────────────────────────
 
+def _columns(tab):
+    """The verdicts to show. usikker only appears when something landed there."""
+    return [s for s in ANSWER
+            if s != "usikker" or any(tab[k]["usikker"] for k in tab)]
+
+
 def write_matrix(row_list, write=print):
     tab = defaultdict(lambda: defaultdict(int))
     for r in row_list:
         tab[r["klasse"]][r["svar"]] += 1
+    column = _columns(tab)
     write("\nCONFUSION MATRIX  (row = fasit class, column = VLM verdict)")
-    write(f"  {'klasse':>10} {'ja':>8} {'nei':>8} {'usikker':>9} {'sum':>8}")
+    write(f"  {'klasse':>10} " + " ".join(f"{s:>8}" for s in column)
+          + f" {'sum':>8}")
     for klasse in sorted(tab):
         row = tab[klasse]
-        n = sum(row.values())
-        write(f"  {klasse:>10} {row['ja']:>8} {row['nei']:>8} "
-              f"{row['usikker']:>9} {n:>8}")
+        write(f"  {klasse:>10} " + " ".join(f"{row[s]:>8}" for s in column)
+              + f" {sum(row.values()):>8}")
     write(f"  {'SUM':>10} "
-          + " ".join(f"{sum(tab[k][s] for k in tab):>8}" for s in ANSWER)
+          + " ".join(f"{sum(tab[k][s] for k in tab):>8}" for s in column)
           + f" {len(row_list):>8}")
 
 
@@ -313,8 +318,7 @@ def _factors(sample, n_bom_judged, n_cov_judged):
     return miss, cov
 
 
-def tally(row_list, sample, cost=STD_COST, uncertain_remover=False,
-             write=print):
+def tally(row_list, sample, uncertain_remover=False, write=print):
     """Gain against loss risk, scaled up to the full uttrekk."""
     remove = {"nei", "usikker"} if uncertain_remover else {"nei"}
 
@@ -331,64 +335,58 @@ def tally(row_list, sample, cost=STD_COST, uncertain_remover=False,
     loss_point = len(cov_remove) * hit_factor
     loss_upper = poisson_upper_bound(len(cov_remove)) * hit_factor
 
+    width = max(len(str(len(miss))), len(str(len(cov))))
+    lower_bound = gain / loss_upper if loss_upper > 0 else float("inf")
+    point = gain / loss_point if loss_point > 0 else float("inf")
+
     write("\n" + "=" * 68)
-    write(f"ACCOUNTS   (usikker counts as "
-          f"{'REMOVED' if uncertain_remover else 'KEPT'}, cost {cost:g})")
+    write("RESULT")
     write("=" * 68)
-    write(f"  Judged boxes:            {len(row_list)}   "
-          f"({len(miss)} BOM, {len(cov)} covering)")
-    write(f"  Scale-up BOM:            {miss_factor:>6.2f}   "
-          f"({len(miss)} judged of {sample.get('n_bom_total', '?')} in the uttrekk)")
-    write(f"  Scale-up covering:       {hit_factor:>6.2f}   "
-          f"({len(cov)} judged of {sample.get('n_covering_total', '?')})")
+    write(f"  {len(miss_removed):>{width}} of {len(miss):>{width}} BOM said «nei»"
+          f"      {_share(len(miss_removed), len(miss)):>5}"
+          f"   →  {_estimate(gain):>7} oversladdinger dropped")
+    write(f"  {len(cov_remove):>{width}} of {len(cov):>{width}} covering said «nei»"
+          f" {_share(len(cov_remove), len(cov)):>5}"
+          f"   →  {_estimate(loss_point):>7} fnr lost, "
+          f"{_estimate(loss_upper)} at the 95 % bound")
+    write(f"  Sample to uttrekk: BOM × {miss_factor:.2f}, "
+          f"covering × {hit_factor:.2f}.")
+    if uncertain_remover:
+        write("  «usikker» counts as «nei» here (--uncertain-remover).")
     write("")
-    write(f"  GAIN     BOM with «nei»:       {len(miss_removed):>6} in the sample"
-          f"  →  {gain:>8.0f} in the uttrekk")
-    write(f"           share of BOM:         "
-          f"{(len(miss_removed) / len(miss) * 100 if miss else 0):>6.1f}%")
-    write(f"  LOSS     covering with «nei»:  {len(cov_remove):>6} in the sample"
-          f"  →  {loss_point:>8.1f} in the uttrekk (point estimate)")
-    write(f"           95 % upper bound:     "
-          f"{poisson_upper_bound(len(cov_remove)):>6.1f} in the sample"
-          f"  →  {loss_upper:>8.1f} in the uttrekk")
+
+    if not cov:
+        write("  No covering boxes in the sample, so there is nothing to "
+              "weigh the gain against.")
+    else:
+        write(f"  Oversladdinger per lost fnr:  "
+              f"{_estimate(lower_bound)} against the 95 % bound, "
+              f"{_estimate(point)} at face value.")
 
     more_coverers = sum(1 for r in cov_remove
                         if _int(r.get("dekkere")) > 1)
+    write("")
     if more_coverers:
-        write(f"           NB: {more_coverers} of them cover a fasit box that "
-              f"has other covers, so they")
-        write(f"           are not necessarily losses. The loss figure is an "
-              f"upper bound.")
-
-    write("")
-    if loss_point > 0:
-        write(f"  ov/lost (point estimate):  {gain / loss_point:>8.1f}")
-    else:
-        write(f"  ov/lost (point estimate):  {'∞':>8}   (no loss observed)")
-    lower_bound = gain / loss_upper if loss_upper > 0 else float("inf")
-    write(f"  ov/lost (conservative):    {lower_bound:>8.1f}   "
-          f"← this is the number measured against cost {cost:g}")
-    write("")
-    if not cov:
-        write("  VERDICT: undecidable, no covering boxes in the sample.")
-        write("           This is a pure calibration run (prompt + speed).")
-    elif lower_bound >= cost:
-        write(f"  VERDICT: PASSED: even conservatively, each lost fnr buys "
-              f"{lower_bound:.0f} oversladdinger.")
-    elif gain / max(loss_point, 1e-9) >= cost:
-        write(f"  VERDICT: UNCERTAIN: the point estimate holds, the upper "
-              f"loss bound does not.")
-        write(f"           Judge more covering boxes (larger --hit-sample) "
-              f"before deciding.")
-    else:
-        write(f"  VERDICT: FAILED: too expensive at cost {cost:g}.")
-    write("")
-    write("  Every covering «nei» must be reviewed manually before the number "
-          "is trusted: fasit can be noise.")
-    write("  See lost.csv.")
+        write(f"  {more_coverers} of the losses cover a fasit box that other "
+              f"boxes also cover, so the")
+        write("  loss is an upper bound.")
+    write("  Every covering «nei» must be reviewed by hand before the number "
+          "is trusted:")
+    write("  fasit can be noise.")
     return {"gain": gain, "loss_point": loss_point, "loss_upper": loss_upper,
             "ov_per_tapt": lower_bound, "n_bom_nei": len(miss_removed),
             "n_dek_nei": len(cov_remove), "n_bom": len(miss), "n_dek": len(cov)}
+
+
+def _share(part, whole):
+    return f"{part / whole * 100:.1f}%" if whole else "-"
+
+
+def _estimate(v):
+    """Estimates: one decimal below 10, whole numbers above, ∞ when no loss."""
+    if v == float("inf"):
+        return "∞"
+    return f"{v:.1f}" if v < 10 else f"{v:.0f}"
 
 
 def _int(v):
@@ -432,8 +430,8 @@ def write_manifest(row_list, path, field=LOST_FIELD):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Joins VLM judgements against fasit classes and weighs "
-                    "gain against loss risk at cost 20.")
+        description="Joins VLM judgements against fasit classes and counts "
+                    "gain against loss risk.")
     p.add_argument("--manifest", required=True, help="manifest.csv from vlm_export")
     p.add_argument("--judge", required=True,
                    help="judge_*.csv from vlm_judge, OR «regel:<name>» to "
@@ -446,8 +444,6 @@ def main():
     p.add_argument("--out-dir", default=None,
                    help="Directory for lost.csv/gain.csv (default: next to "
                         "the judgements)")
-    p.add_argument("--cost", type=float, default=STD_COST,
-                   help=f"Oversladdinger per lost fnr (default {STD_COST:g})")
     p.add_argument("--fnr-override", action="store_true",
                    help="Force the verdict to «ja» when the model's own "
                         "transcription OR PaddleOCR's line from the manifest "
@@ -547,10 +543,9 @@ def main():
     write_per_source(row_list)
     if a.split_by:
         write_deling(row_list, a.split_by)
-    res = tally(row_list, sample, cost=a.cost,
-                   uncertain_remover=a.uncertain_remover)
+    res = tally(row_list, sample, uncertain_remover=a.uncertain_remover)
     if skewed:
-        print("  NB: the accounts above rest on a sample that does not look "
+        print("  NB: the result above rests on a sample that does not look "
               "random, see the warning at the top.")
 
     out_dir = a.out_dir or (
@@ -574,8 +569,7 @@ def main():
 
     with open(os.path.join(out_dir, "oppsummering.json"), "w",
               encoding="utf-8") as f:
-        json.dump({**res, "kostnad": a.cost,
-                   "usikker_fjerner": a.uncertain_remover,
+        json.dump({**res, "usikker_fjerner": a.uncertain_remover,
                    "n_domt": len(row_list), "n_manifest": len(manifest),
                    "n_feil": n_error}, f, ensure_ascii=False, indent=2)
 

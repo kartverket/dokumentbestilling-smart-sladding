@@ -615,18 +615,17 @@ def main(keep):
         out_half = run_step(os.path.join(HERE, "vlm_evaluate.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--judge", half,
                        "--out-dir", os.path.join(ut, "ev_halv"))
-        check("Scale-up BOM:              2.00" in out_half,
+        check("BOM × 2.00" in out_half,
               "BOM scales 4/2 = 2.00 in a partial run")
-        check("Scale-up covering:         3.00" in out_half,
+        check("covering × 3.00" in out_half,
               "covering scales 3/1 = 3.00, not the export factor 1.5")
         check(abs(up["loss_upper"] - 3.0 * 1.5) < 0.05,
               f"upper loss bound = 3 × factor 1.5 = 4.5 ({up['loss_upper']:.2f})")
         # Zero losses observed, so the point estimate is infinite while the
         # upper bound is not: two boxes prove nothing.
-        check("VERDICT: UNCERTAIN" in out_text,
-              "the verdict is UNCERTAIN. Zero loss in a tiny sample proves "
-              "nothing")
-        check("∞" in out_text, "the point estimate shows as infinite")
+        check("∞ at face value" in out_text,
+              "zero loss in the sample shows as an infinite face value, and "
+              "the 95 % bound stands next to it")
         lost = read(os.path.join(ut, "evaluation", "lost.csv"))
         gain = read(os.path.join(ut, "evaluation", "gain.csv"))
         check(len(lost) == 0 and len(gain) == 4,
@@ -703,8 +702,8 @@ def main(keep):
                         os.path.join(ut, "ev_skjev"))
         check("WARNING" in out_skewed and "does not look random" in out_skewed,
               "a skewed sample triggers the warning")
-        check("NB: the accounts above rest" in out_skewed,
-              "and the warning is repeated at the accounts")
+        check("NB: the result above rests" in out_skewed,
+              "and the warning is repeated at the result")
         check("WARNING" not in out_text,
               "a complete sample gives NO warning")
 
