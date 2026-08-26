@@ -212,3 +212,5 @@ ee74366c-c457-4eb8-b692-45642d115f5e    # kontonummer
 4bdbf952-a4e8-42ee-8046-55a3c45ef6c1    # én sladding over to numre (mangler-5747d3eb6439, mangler-0be60277a0cd)
 112a7fb8-359e-45e2-9955-119a060a4a71    # depotnummer?
 0b5bde87-3c84-4ed1-ae35-8ebfc880fa52    # orgnr
+07eaef38-56e0-4577-8a34-fb8e135c782d    # én sladd over 2 fnr (mangler-ac97c015c2ec)
+36abb01f-991d-4d52-b92b-e2947006dd19    # én sladd over 2 fnr (mangler-f527304024f5)
