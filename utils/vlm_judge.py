@@ -14,10 +14,9 @@ instead of the GPU — across runs, manifests and export names. The prompt
 version (the cache fingerprint) is printed at startup. --no-cache turns the
 cache off; --restart alone rewrites the CSV but still reuses cached answers.
 
-Three modes: --mode bilde (the crop as an image), tekst (ocr_tekst/ocr_linje
-from the manifest, needs an export run with --ocr-cache) and begge. Having
-both measures whether sight is worth the cost: where PaddleOCR read
-correctly the task is pure text, but on handwriting the OCR text is missing.
+The model judges the crop image alone. Feeding it the OCR text as well made
+the judgements worse, so the old tekst and begge modes are gone; the
+manifest's OCR is still used after the fact, by vlm_evaluate --fnr-override.
 
 Anything that cannot be interpreted — timeout, HTTP error, unparsable answer —
 is logged in the «feil» column and becomes «usikker», NEVER «nei»: «nei» is
@@ -58,13 +57,13 @@ STD_MAX_TOKENS = 150
 _THINKING = {"value": "none"}
 # WITHOUT_CONTENT_FIELD plus the sensitive and technical columns. The model's
 # checklist is stored so vlm_evaluate can re-apply the fnr rule without a GPU.
-OUT_FIELD = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet", "begrunnelse",
+OUT_FIELD = ["utsnitt", "riktig", "klasse", "svar", "begrunnelse",
            "dato_gyldig", "holdepunkt", "sekunder", "label_id", "nr", "kilde",
            "tall", "linjen", "sifre_paa_linjen", "feil", "raatekst"]
 
 # The judgement CSV above transcribes REAL fødselsnumre and is itself
 # sensitive; this sister file holds only the verdicts and can be shared.
-WITHOUT_CONTENT_FIELD = ["utsnitt", "riktig", "klasse", "svar", "sikkerhet",
+WITHOUT_CONTENT_FIELD = ["utsnitt", "riktig", "klasse", "svar",
                      "begrunnelse", "dato_gyldig", "holdepunkt", "sekunder",
                      "label_id", "nr", "kilde"]
 
@@ -98,7 +97,7 @@ def _md_row(row, crop_dir, md_dir):
         row.get("klasse", ""), (row.get("svar") or "").strip().lower())
     cells = [f"[{os.path.splitext(file)[0]}]({rel})", correct,
               row.get("klasse", ""), row.get("svar", ""),
-              str(row.get("sikkerhet", "")), row.get("holdepunkt", ""),
+              row.get("holdepunkt", ""),
               row.get("begrunnelse", "")]
     return "| " + " | ".join(c.replace("|", "/") for c in cells) + " |\n"
 
@@ -163,9 +162,9 @@ def write_review_md(out_path, crop_dir):
          open(path, "w", encoding="utf-8") as f_out:
         f_out.write(f"# Review: {name}\n\n"
                    f"❌ marks the rows that threaten recall.\n\n"
-                   f"| utsnitt | riktig | klasse | svar | sikkerhet "
+                   f"| utsnitt | riktig | klasse | svar "
                    f"| holdepunkt | begrunnelse |\n"
-                   f"|---|---|---|---|---|---|---|\n")
+                   f"|---|---|---|---|---|---|\n")
         for row in csv.DictReader(f_inn):
             f_out.write(_md_row(row, crop_dir, md_dir))
     return path
@@ -186,88 +185,22 @@ def write_without_content(out_path):
 # The prompt is the real experiment of the pilot: it is built around the
 # contrasts both YOLO and the rules fall for, so treat edits as experiments.
 STD_PROMPT = """\
-Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den RØDE RAMMEN markerer et område en automatisk modell foreslår å sladde.
+Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den røde rammen markerer et område som er foreslått sladdet.
 
-Spørsmålet er IKKE «er dette et fullstendig fødselsnummer». Det er: BERØRER RAMMEN ET FØDSELSNUMMER? Rammen er som regel liten MED VILJE: sladdingen skal typisk bare dekke personnummeret — de fem siste sifrene — mens fødselsdatoen står usladdet rett foran på linjen, eller på linjen over. At rammen bare inneholder fem sifre er altså det NORMALE for en riktig sladd, aldri i seg selv et argument for nei. Dommen gjelder hele sifferrekken som berører rammen, medregnet sifrene som står utenfor den.
+Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over, og skanninger kan gjøre sifre utydelige.
 
-FREMGANGSMÅTE — følg den i rekkefølge og stopp så snart du får svar:
-1. Les hele teksten du ser, ikke bare det som står inne i rammen.
-2. Skriv av HELE tekstlinjen rammen står på, fra venstre til høyre, slik du ser den. Ikke bare det som er inne i rammen — hele linjen.
-3. Finn i den avskriften den lengste sammenhengende sifferrekken som berører rammen — OGSÅ sifrene som står utenfor rammen. Rekken slutter ikke ved rammekanten. Se bort fra mellomrom, punktum og bindestrek mellom sifrene.
-4. Har den rekken elleve sifre, og er de seks første en gyldig dato (dag 01-31 eller 41-71, måned 01-12 eller 41-52)? → svar JA. Du er ferdig.
-5. LET ETTER LEDETEKST som navngir tallet: «fødselsnummer», «fødselsnr», «f.nr», «personnr», «fødsel- og personnr» — også i kombinasjoner som «organisasjonsnr/fødselsnr». I skjemaer og tabeller står ledeteksten som overskrift OVER feltet, gjerne to-fire linjer over rammen — let til du finner den. Fant du en slik ledetekst: har rekken ni sifre og starter på 8 eller 9 er det org.nr-delen av en kombinert ledetekst → NEI. Ellers → svar JA.
-6. Har rekken fem-seks sifre: SE PÅ LINJEN RETT OVER og teksten rett foran. Står det en sekssifret gyldig dato der, hører de sammen — et fødselsnummer delt over to linjer, med datoen øverst og personnummeret under. → svar JA.
-7. Ellers: står det et ORD ELLER TEGN fra listen under som forteller hva tallet er? → svar NEI med ordet i «holdepunkt». Er det ENESTE som taler mot tallet din egen telling eller dato-utregning — ingen ledetekst, ingen forklaring — er NEI for dyrt: svar NEI bare når rekken åpenbart ikke kan være del av et fødselsnummer (f.eks. tre-fire sifre alene), ellers USIKKER.
-8. Bare hvis sifrene ikke lar seg lese i det hele tatt — uskarpt, avskåret, tomt — svar USIKKER.
+Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
 
-ORD OG TEGN som bekrefter et nei. Du kan også svare nei uten et slikt ord, når sifferrekken ikke har elleve sifre — men dikt aldri opp en kategori som ikke står her:
-  - ordet konto, bank eller IBAN i nærheten, og elleve sifre gruppert 4-2-5
-  - desimaltall: punktum eller komma INNE I selve tallet, som «6626630.58» eller «256843,12»
-  - gnr, bnr, fnr, snr, matrikkel eller seksjon, ofte med skråstrek
-  - org.nr, AS, ANS eller foretak i nærheten, og ni sifre som starter på 8 eller 9
-  - dagboknr, journalnr eller saksnr
-  - årstall, beløp, areal, sidetall eller tall på en målestokk
+- Svar «ja» når tallet er eller sannsynligvis er et fødselsnummer.
+- Svar «nei» BARE når du tydelig ser at tallet er noe annet: kontonummer, organisasjonsnummer, koordinat, beløp, dato alene, matrikkel-/saks-/dokumentnummer, og skriv hva det er i «holdepunkt».
+- Organisasjons- og foretaksnummer skal IKKE sladdes og er ALLTID «nei» — også når tallet står i et felt merket «Fødselsnr./Org.nr.», og også når det er utfylt til elleve sifre med «00» foran (00916348401 = orgnr 916348401). Et firma/en organisasjon/virksomhet/foretak (AS, ANS, foretak, sameie, kommune) har aldri fødselsnummer, og et ekte fødselsnummer kan aldri starte med 00, for dag 00 finnes ikke. Det finnes ikke noe «fødselsnummer for et AS».
+- Punktnumre, koordinater og mål i kart og tekniske tegninger er ikke fødselsnumre. Men denne begrunnelsen krever at utsnittet ÅPENBART er et kart eller en tegning: du må se streker, symboler eller flere lignende tallrekker rundt tallet. Vanlig tekst med navn og felter er ALDRI «et kart» — tvil betyr «usikker», ikke «nei».
+- En dato i et datofelt (Dato, tinglyst, utstedt) er ikke et fødselsnummer, svar «nei». Bare en fødselsdato som hører sammen med et personnummer er del av et fødselsnummer.
+- Svaret skal stemme med din egen begrunnelse
+- Ellers: svar «usikker». Å fjerne sladden fra et ekte fødselsnummer er tjue ganger så ille som å la en unødvendig sladd stå.
 
-FELLER SOM HAR GITT FEIL FØR:
-  - «020291 00000» er gruppert 6-5. Det ER fødselsnummerformatet. Kall det aldri kontonummer.
-  - Fødselsnumre begynner ofte med 0, fordi dagen er 01-09. Helt normalt.
-  - «12.03.50» er en dato. Punktum MELLOM datoledd er ikke desimalskille.
-  - «301 / 10000» er matrikkel. Skråstrek er ikke desimalskille.
-  - Et smalt 1-tall er lett å lese som skråstrek i et skann. Skråstrek ALENE er aldri holdepunkt for nei — krev ordet gnr, bnr, snr eller matrikkel i tillegg. Og teller du elleve sifre når skråstreken leses som 1, ER det elleve sifre.
-  - Fødselsnummer deles ofte over to linjer: dato øverst, fem sifre personnummer under. En femsifret rekke er bare «for kort» når heller ikke linjen eller nabolinjene har dato-halvdelen.
-  - «bare fem sifre i rammen» eller «mangler resten av fødselsnummeret» er ALDRI en gyldig begrunnelse for nei. Rammen skal bare dekke personnummeret — resten av rekken står utenfor rammen: foran på linjen, eller på linjen over. Let den opp før du konkluderer.
-  - Skjemaer setter ledeteksten OVER feltet, ofte to-tre linjer over rammen. «Fødselsnr.» langt over rammen gjelder fortsatt tallet i rammen.
-  - Lister og tabeller: står rammen i en kolonne der radene over er fødselsnumre, er denne raden det også. Døm kolonnen, ikke cellen alene.
-  - Din egen dato-utregning er UPÅLITELIG — «1607» er 16. juli, en helt gyldig dato. Avvis aldri en ellevesifret rekke fordi du regnet dato-delen ugyldig; uten et ord-holdepunkt i tillegg → USIKKER.
-  - Ikke regn på kontrollsifre. Du kan ikke gjøre mod11 pålitelig, og et feilregnestykke er ingen grunn til nei.
-  - Dikt aldri opp en kategori som ikke står i listen over.
-
-FIRE EKSEMPLER:
-Rammen dekker «00000», og linjen sier «Kari Nordmann 010190 00000»:
-{"linjen": "Kari Nordmann 010190 00000", "sifre_i_rammen": 5, "sifre_paa_linjen": "01019000000", "dato_gyldig": true, "holdepunkt": "", "elleve_og_dato_ok": true, "svar": "ja", "sikkerhet": 95, "tall": "010190 00000", "begrunnelse": "rammen dekker halve fnr-et på linjen"}
-Rammen dekker «6626630.58» på et målebrevkart:
-{"linjen": "N 6626630.58 Ø 256843.12", "sifre_i_rammen": 9, "sifre_paa_linjen": "662663058", "dato_gyldig": false, "holdepunkt": "desimalpunktum i tallet", "elleve_og_dato_ok": false, "svar": "nei", "sikkerhet": 95, "tall": "6626630.58", "begrunnelse": "koordinat med desimaler"}
-Rammen dekker «00000», linjen over sier «Kari Nordmann f. 010190»:
-{"linjen": "00000", "sifre_i_rammen": 5, "sifre_paa_linjen": "00000", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "ja", "sikkerhet": 90, "tall": "010190 00000", "begrunnelse": "dato på linjen over — fnr delt over to linjer"}
-Rammen dekker «48526», og verken linjen eller nabolinjene har en dato:
-{"linjen": "48526", "sifre_i_rammen": 5, "sifre_paa_linjen": "48526", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "nei", "sikkerhet": 80, "tall": "48526", "begrunnelse": "fem sifre, ingen dato-halvdel på nabolinjene"}
-
-Rammen er for uskarp til at sifrene kan leses:
-{"linjen": "", "sifre_i_rammen": 0, "sifre_paa_linjen": "", "dato_gyldig": false, "holdepunkt": "", "elleve_og_dato_ok": false, "svar": "usikker", "sikkerhet": 20, "tall": "", "begrunnelse": "kan ikke lese sifrene"}
-
-Sjekklistefeltene skal stå FØR «svar». Rekkefølgen er ikke tilfeldig: skriver du kontrollen først, har du gjort den når du konkluderer.
-  «linjen»            hele tekstlinjen rammen står på, avskrevet slik du ser den
-  «sifre_i_rammen»    antall sifre du ser innenfor rammen
-  «sifre_paa_linjen»  lengste sammenhengende sifferrekke i «linjen» som berører rammen, uten skilletegn.
-                      Den skal kunne finnes igjen i «linjen» — dikt den ikke opp.
-  «dato_gyldig»       true hvis de seks første sifrene i den rekken er en gyldig DDMMÅÅ
-  «holdepunkt»        ordet eller tegnet som begrunner et nei, eller "" hvis du ikke fant noe
-  «elleve_og_dato_ok» true hvis «sifre_paa_linjen» har nøyaktig elleve sifre OG «dato_gyldig» er true.
-                      Er dette true, MÅ «svar» være "ja". Ingen unntak, uansett hva tallet ellers ligner på.
-  «svar»              "ja", "nei" eller "usikker". DETTE FELTET ER OBLIGATORISK — svaret er ubrukelig uten det.
-  «tall»              tallet du leser i og rundt rammen
-  «sikkerhet»         helt tall 0-100 for hvor sikker du er. Vær ærlig — et lavt tall er nyttig og koster ingenting.
-  «begrunnelse»       høyst 15 ord
-
-Å svare nei på et ekte fødselsnummer er tjue ganger så dyrt som å la en unødvendig sladding stå. Er du i tvil, svar USIKKER.
-
-Svar KUN med JSON på samme form som eksemplene, uten annen tekst. Kontroller før du sender at «svar» er med.\
-"""
-
-TEXT_MEASURE = """\
-
-OCR-en leste dette inne i rammen: «{ocr_tekst}»
-Teksten OCR-en leste rundt rammen (linjen, og nabolinjene om de finnes):
-«{ocr_linje}»
-Merk at OCR-en kan ha lest feil, særlig på håndskrift.\
-"""
-
-TEXT_ONLY_MEASURE = """\
-Du får ikke se bildet. OCR-en leste dette inne i rammen: «{ocr_tekst}»
-Teksten OCR-en leste rundt rammen (linjen, og nabolinjene om de finnes):
-«{ocr_linje}»
-Merk at OCR-en kan ha lest feil, særlig på håndskrift — svar USIKKER hvis \
-teksten er for ødelagt til å avgjøre.\
+Svar kun med JSON:
+{"tall": "tallet du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja", "begrunnelse": "maks 15 ord"}\
 """
 
 
@@ -286,26 +219,15 @@ def _checklist(d):
     return ut
 
 
-def _confidence(d):
-    """«sikkerhet» as 0-100, or "" if the model gave nothing usable."""
-    raw = d.get("sikkerhet")
-    if raw is None or raw == "":
-        return ""
-    try:
-        return max(0, min(100, int(round(float(raw)))))
-    except (TypeError, ValueError):
-        return ""
-
-
 def parse_answer(text):
-    """Raw model answer -> (svar, sikkerhet, tall, begrunnelse, feil, checklist).
+    """Raw model answer -> (svar, tall, begrunnelse, feil, checklist).
 
     Strict to lenient: plain JSON, then the first JSON object in the text
     (models like to wrap it in ```json), then a keyword search. Anything left
     over becomes «usikker», never «nei».
     """
     if not text or not text.strip():
-        return "usikker", "", "", "", "empty answer", {}
+        return "usikker", "", "", "empty answer", {}
     clean = text.strip()
     if clean.startswith("```"):
         clean = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", clean).strip()
@@ -323,33 +245,27 @@ def parse_answer(text):
             continue
         answer = str(d.get("svar", "")).strip().lower()
         if answer in ("ja", "nei", "usikker"):
-            return (answer, _confidence(d), str(d.get("tall", "")).strip(),
+            return (answer, str(d.get("tall", "")).strip(),
                     str(d.get("begrunnelse", "")).strip(), "", _checklist(d))
         missing = "svar" not in d or not str(d.get("svar", "")).strip()
-        return ("usikker", _confidence(d), str(d.get("tall", "")).strip(),
+        return ("usikker", str(d.get("tall", "")).strip(),
                 str(d.get("begrunnelse", "")).strip(),
                 "the model omitted the «svar» field — the rest of the JSON came"
                 if missing else f"unknown answer {answer!r}", _checklist(d))
 
     m = _ANSWER_RE.search(clean)
     if m:
-        return (m.group(1).lower(), "", "", clean[:120],
+        return (m.group(1).lower(), "", clean[:120],
                 "not JSON, read by keyword", {})
-    return "usikker", "", "", clean[:120], "unparsable answer", {}
+    return "usikker", "", clean[:120], "unparsable answer", {}
 
 
 # ── Calls ─────────────────────────────────────────────────────
 
-def _build_melding(prompt, mode, ocr, image_b64):
+def _build_melding(prompt, image_b64):
     """One chat message for one crop, from the inputs judge_one loaded."""
-    text = prompt
-    if mode == "text":
-        return [{"role": "user",
-                 "content": text + "\n\n" + TEXT_ONLY_MEASURE.format(**ocr)}]
-    if mode == "both":
-        text += "\n" + TEXT_MEASURE.format(**ocr)
     return [{"role": "user", "content": [
-        {"type": "text", "text": text},
+        {"type": "text", "text": prompt},
         {"type": "image_url",
          "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
     ]}]
@@ -410,30 +326,23 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
     """
     t0 = time.monotonic()
 
-    ocr = None
-    if a.mode in ("text", "both"):
-        ocr = {"ocr_tekst": row.get("ocr_tekst", "") or "(ingenting)",
-               "ocr_linje": (row.get("ocr_blokk") or row.get("ocr_linje") or
-                             "(ingenting)")}
-    image_b64 = None
-    if a.mode in ("image", "both"):
-        try:
-            with open(os.path.join(folder, row["utsnitt"]), "rb") as f:
-                image_b64 = base64.b64encode(f.read()).decode("ascii")
-        except OSError as e:
-            return {"svar": "usikker", "sikkerhet": "", "tall": "",
-                    "begrunnelse": "",
-                    "sekunder": round(time.monotonic() - t0, 2),
-                    "feil": f"{type(e).__name__}: {e}"[:200], "raatekst": ""}
+    try:
+        with open(os.path.join(folder, row["utsnitt"]), "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("ascii")
+    except OSError as e:
+        return {"svar": "usikker", "tall": "",
+                "begrunnelse": "",
+                "sekunder": round(time.monotonic() - t0, 2),
+                "feil": f"{type(e).__name__}: {e}"[:200], "raatekst": ""}
 
-    key = vlm_cache.item_key(image_b64, ocr) if cache_dir else None
+    key = vlm_cache.item_key(image_b64, None) if cache_dir else None
     if key:
         cached = vlm_cache.read_cache(cache_dir, key)
         if cached is not None:
-            answer, confidence, number, rationale, parse_error, check = \
+            answer, number, rationale, parse_error, check = \
                 parse_answer(cached)
             if not parse_error:
-                return {"svar": answer, "sikkerhet": confidence,
+                return {"svar": answer,
                         "tall": number, "begrunnelse": rationale, **check,
                         "sekunder": round(time.monotonic() - t0, 2),
                         "feil": "", "raatekst": "", "_cache": True}
@@ -447,7 +356,7 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
         i_url = 0
     for attempt in range(1, a.attempt + 1):
         try:
-            messages = _build_melding(prompt, a.mode, ocr, image_b64)
+            messages = _build_melding(prompt, image_b64)
             # A retry goes to the next backend, so one dead instance does not
             # cost the row.
             url = urler[(i_url + attempt - 1) % len(urler)]
@@ -475,13 +384,13 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
     sec = time.monotonic() - t0
 
     if error:
-        return {"svar": "usikker", "sikkerhet": "", "tall": "",
+        return {"svar": "usikker", "tall": "",
                 "begrunnelse": "", "sekunder": round(sec, 2), "feil": error,
                 "raatekst": ""}
-    answer, confidence, number, rationale, parse_error, check = parse_answer(raw)
+    answer, number, rationale, parse_error, check = parse_answer(raw)
     if key and not parse_error:
         vlm_cache.write_cache(cache_dir, key, row.get("utsnitt", ""), raw, sec)
-    return {"svar": answer, "sikkerhet": confidence, "tall": number,
+    return {"svar": answer, "tall": number,
             "begrunnelse": rationale, **check,
             "sekunder": round(sec, 2), "feil": parse_error,
             "raatekst": raw.replace("\n", " ")[:400] if parse_error else ""}
@@ -534,26 +443,19 @@ def run(a):
 
     cache_dir = None
     if a.cache:
-        templates = {"image": "", "both": TEXT_MEASURE,
-                     "text": TEXT_ONLY_MEASURE}[a.mode]
-        fp = vlm_cache.fingerprint(prompt, templates, a.model, a.mode,
+        fp = vlm_cache.fingerprint(prompt, "", a.model, "image",
                                    a.temperature, a.max_tokens,
                                    _THINKING["value"])
         cache_dir = os.path.join(a.cache, fp)
         vlm_cache.write_meta(cache_dir, {
-            "model": a.model, "mode": a.mode, "temperature": a.temperature,
+            "model": a.model, "mode": "image", "temperature": a.temperature,
             "max_tokens": a.max_tokens, "thinking": _THINKING["value"],
             "prompt_file": a.prompt_file or "(built-in)",
-            "templates": templates, "prompt": prompt})
+            "templates": "", "prompt": prompt})
         print(f"  Prompt version {fp}  (cache: {cache_dir})")
 
-    if a.mode in ("text", "both") and not any(
-            r.get("ocr_linje") for r in rows):
-        print("  ⚠ Manifest has no ocr_linje — run vlm_export with "
-              "--ocr-cache, or the text arm judges blind.")
-
     out_path = a.out_csv or os.path.join(os.path.dirname(
-        os.path.abspath(a.manifest)), f"judge_{a.mode}.csv")
+        os.path.abspath(a.manifest)), "judge_image.csv")
     if not out_path.lower().endswith(".csv"):
         # One directory per run: all four files under the run name.
         kat = out_path
@@ -600,8 +502,8 @@ def run(a):
                   f"{write_review_label_md(out_path, folder)}")
         return out_path
 
-    print(f"  {len(left)} boxes to judge  ({a.mode} mode, "
-          f"{a.concurrent} concurrent, model {a.model})")
+    print(f"  {len(left)} boxes to judge  "
+          f"({a.concurrent} concurrent, model {a.model})")
     new_file = not (a.resume and os.path.isfile(out_path))
     if not new_file:
         with open(out_path, newline="", encoding="utf-8-sig") as f:
@@ -724,7 +626,7 @@ def main():
                    help="Directory with the PNGs (default: utsnitt/ next to "
                         "the manifest)")
     p.add_argument("--out-csv", default=None,
-                   help="Judgement CSV (default: judge_<mode>.csv next to "
+                   help="Judgement CSV (default: judge_image.csv next to "
                         "the manifest)")
 
     p.add_argument("--url", nargs="+", default=[STD_URL],
@@ -736,9 +638,6 @@ def main():
     p.add_argument("--model", default=None,
                    help="Model name the endpoint knows (required)")
     p.add_argument("--api-key", default=None, help="Bearer token if needed")
-    p.add_argument("--mode", default="image", choices=("image", "text", "both"),
-                   help="bilde = VLM on the crop, tekst = LLM on the OCR "
-                        "text, begge = crop + OCR line (default bilde)")
 
     p.add_argument("--concurrent", type=int, default=4, metavar="N",
                    help="Parallel calls (default 4)")

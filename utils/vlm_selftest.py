@@ -144,24 +144,8 @@ def build_data(rot):
 
 # ── Stub endpoint ─────────────────────────────────────────────
 
-_QUOTE = re.compile(r"leste dette inne i rammen: «(.*?)»")
-_FNR = re.compile(r"(?<!\d)(\d[\d]{5}[ .-]?\d{5})(?!\d)")
-
-
-def _answer_from_text(line_text):
-    """The stub's "model": 11 digits, no decimal, no 4-2-5 grouping."""
-    m = _QUOTE.search(line_text)
-    if not m:
-        return None
-    quote = m.group(1)
-    if re.search(r"\d[.,]\d", quote) or re.match(r"^\d{4} \d{2} \d{5}$",
-                                                 quote.strip()):
-        return "nei"
-    digits = re.sub(r"\D", "", quote)
-    return "ja" if len(digits) == 11 else "nei"
-
-
-def make_server(bad=False, thinks=False, reject_reasoning=False):
+def make_server(bad=False, thinks=False, reject_reasoning=False,
+                answers=None):
     """Stub speaking /v1/chat/completions.
 
     bad             injects 500 errors and prose answers
@@ -169,6 +153,8 @@ def make_server(bad=False, thinks=False, reject_reasoning=False):
                     in «reasoning», unless reasoning_effort=none was sent
     reject_reasoning
                     answers 400 to reasoning_effort, like older endpoints
+    answers         {image-b64: svar} — the stub's "model". Unknown images
+                    fall back to a ja/nei/usikker round-robin.
     """
     counter = {"n": 0, "reasoning": [], "avvist": 0}
     laas = threading.Lock()
@@ -195,21 +181,21 @@ def make_server(bad=False, thinks=False, reject_reasoning=False):
                 self.send_error(500, "synthetic server error")
                 return
 
-            parts = []
+            svar_bilde = None
             for m in requirement["messages"]:
                 c = m["content"]
-                if isinstance(c, str):
-                    parts.append(c)
-                else:
-                    parts += [d.get("text", "") for d in c
-                              if d.get("type") == "text"]
-            line_text = "\n".join(parts)
+                if not isinstance(c, list):
+                    continue
+                for d in c:
+                    if d.get("type") == "image_url":
+                        b64 = d["image_url"]["url"].split("base64,", 1)[-1]
+                        svar_bilde = (answers or {}).get(b64)
 
             if bad and i % 7 == 0:
                 content = "Dette ser ut som et fødselsnummer, ja."
             else:
-                answer = _answer_from_text(line_text) or ("ja", "nei", "usikker")[i % 3]
-                content = json.dumps({"svar": answer, "sikkerhet": 90,
+                answer = svar_bilde or ("ja", "nei", "usikker")[i % 3]
+                content = json.dumps({"svar": answer,
                                       "tall": "", "begrunnelse": "stub"})
             melding = {"role": "assistant", "content": content}
             if thinks and requirement.get("reasoning_effort") != "none":
@@ -260,33 +246,21 @@ def hoved(keep):
         # The prompt must actually ask for every field the judge PARSES.
         print("\n[0] the prompt asks for the fields we parse")
         from vlm_judge import STD_PROMPT
-        # Not "the word appears somewhere": the examples once satisfied that
-        # while the FIELD LIST lacked «svar», and the model followed the list.
-        field_list = STD_PROMPT[STD_PROMPT.index("Sjekklistefeltene skal stå"):
-                               STD_PROMPT.index("Å svare nei")]
-        for field in ("svar", "sikkerhet", "tall", "begrunnelse"):
-            cross(f"«{field}»" in field_list,
-                  f"the field list explains «{field}»")
+        for field in ("svar", "tall", "holdepunkt", "begrunnelse"):
             cross(f'"{field}"' in STD_PROMPT,
-                  f"and the examples show «{field}»")
+                  f"the JSON template asks for «{field}»")
+        # Autoregressive: what the model writes before «svar» is computation
+        # the verdict can build on, what comes after is rationalisation.
+        for field in ("tall", "holdepunkt"):
+            cross(STD_PROMPT.index(f'"{field}"') < STD_PROMPT.index('"svar"'),
+                  f"«{field}» comes before «svar» in the JSON template")
         cross("usikker" in STD_PROMPT.lower(),
               "the prompt offers «usikker» as a way out")
-        # The checklist only works BEFORE the verdict: the model is
-        # autoregressive, so a field after «svar» is a rationalisation.
-        example = STD_PROMPT[STD_PROMPT.index('{"linjen"'):]
-        for field in ("linjen", "sifre_i_rammen", "sifre_paa_linjen",
-                     "dato_gyldig", "holdepunkt"):
-            cross(example.index(f'"{field}"') < example.index('"svar"'),
-                  f"checklist field «{field}» comes before «svar» in the JSON")
-        cross("12.03.50" in STD_PROMPT,
-              "the prompt says a date dot is not a decimal separator")
-        # Left free, the model invented "identity number for e-signature".
-        cross("dikt aldri opp en kategori" in STD_PROMPT.lower(),
-              "the category list is closed against invented reasons")
-        # One example per outcome. The five-digit fragment is the main loss.
-        for outcome in ('"svar": "ja"', '"svar": "nei"', '"svar": "usikker"'):
-            cross(outcome in STD_PROMPT,
-                  f"the prompt has an example with {outcome}")
+        cross("tjue ganger" in STD_PROMPT,
+              "the prompt states the 20x cost asymmetry")
+        # The main gain: 00-padded orgnr can never be a fødselsnummer.
+        cross("starte med 00" in STD_PROMPT,
+              "the prompt keeps the 00-prefix orgnr rule")
 
         print("\n[1] parse_answer")
         cross(parse_answer('{"svar":"nei","tall":"66266","begrunnelse":"koordinat"}')
@@ -299,9 +273,9 @@ def hoved(keep):
         cross(parse_answer("^^^")[0] == "usikker", "junk becomes usikker")
         # The most expensive failure so far: full checklist, no «svar».
         without = parse_answer('{"linjen":"Dagboknr. 1234/1980","holdepunkt":"dagboknr",'
-                         '"sikkerhet":95,"tall":"1234/1980"}')
-        cross(without[0] == "usikker" and "omitted the «svar»" in without[4],
-              f"a missing «svar» is named precisely ({without[4]!r})")
+                         '"tall":"1234/1980"}')
+        cross(without[0] == "usikker" and "omitted the «svar»" in without[3],
+              f"a missing «svar» is named precisely ({without[3]!r})")
         cross(all(parse_answer(t)[0] != "nei" for t in ("", "^^^", "{}")),
               "no failure state can become «nei»")
 
@@ -466,17 +440,23 @@ def hoved(keep):
                   for r in m_top if r["fil"] != "0100003.pdf"),
               "crops reach down from the top, not just around the box")
 
-        # ── Judging: friendly stub, text mode (semantics) ────
-        print("\n[4] vlm_judge --mode tekst  (friendly stub)")
-        srv, url, _ = make_server(bad=False)
+        # ── Judging: friendly stub (semantics) ───────────────
+        print("\n[4] vlm_judge  (friendly stub)")
+        # The stub's "model": it knows which crop shows what.
+        answers = {}
+        for r in manifest:
+            with open(os.path.join(ut, "utsnitt", r["utsnitt"]), "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            answers[b64] = "ja" if r["klasse"] != "BOM" else "nei"
+        srv, url, _ = make_server(bad=False, answers=answers)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "text",
-                 "--concurrent", "2")
+                 "--url", url, "--model", "stub", "--concurrent", "2",
+                 "--out-csv", os.path.join(ut, "judge_ok.csv"))
         finally:
             srv.shutdown()
-        judge = {d["nr"]: d for d in read(os.path.join(ut, "judge_text.csv"))}
+        judge = {d["nr"]: d for d in read(os.path.join(ut, "judge_ok.csv"))}
         cross(len(judge) == 6, f"6 judgements written ({len(judge)})")
         cross(not any(d["feil"] for d in judge.values()),
               "no errors against the friendly stub")
@@ -487,13 +467,12 @@ def hoved(keep):
                   f"as expected")
 
         # ── Judging: nasty stub, image mode (robustness) ─────
-        print("\n[5] vlm_judge --mode bilde  (nasty stub: 500s + prose)")
+        print("\n[5] vlm_judge  (nasty stub: 500s + prose)")
         srv, url, counter = make_server(bad=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "image",
-                 "--concurrent", "1", "--attempt", "1", "--timeout", "20")
+                 "--url", url, "--model", "stub", "--concurrent", "1", "--attempt", "1", "--timeout", "20")
             image_csv = os.path.join(ut, "judge_image.csv")
             d1 = read(image_csv)
             cross(len(d1) == 6, f"all 6 rows written despite errors ({len(d1)})")
@@ -508,8 +487,7 @@ def hoved(keep):
             # Resuming: the failed rows must be retried
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "image",
-                 "--concurrent", "1", "--resume")
+                 "--url", url, "--model", "stub", "--concurrent", "1", "--resume")
             d2 = read(image_csv)
             cross(len(d2) == 6 + n_error,
                   f"--resume added exactly the {n_error} failed rows "
@@ -523,8 +501,7 @@ def hoved(keep):
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "text",
-                 "--out-csv", os.path.join(ut, "d_tenk.csv"), "--concurrent", "1")
+                 "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_tenk.csv"), "--concurrent", "1")
             cross(set(counter["reasoning"]) == {"none"},
                   "reasoning_effort=none is sent by default")
             d = read(os.path.join(ut, "d_tenk.csv"))
@@ -535,8 +512,7 @@ def hoved(keep):
             # empty: the error must SAY that thinking was the cause.
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "text",
-                 "--out-csv", os.path.join(ut, "d_auto.csv"),
+                 "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_auto.csv"),
                  "--concurrent", "1", "--attempt", "1", "--thinking", "auto",
                  "--max-items", "2")
             d = read(os.path.join(ut, "d_auto.csv"))
@@ -549,7 +525,7 @@ def hoved(keep):
             srv.shutdown()
 
         print("\n[5e] --no-file picks out rows")
-        srv, url, _ = make_server(bad=False)
+        srv, url, _ = make_server(bad=False, answers=answers)
         try:
             no_file = os.path.join(ut, "harde.txt")
             with open(no_file, "w", encoding="utf-8") as f:
@@ -557,8 +533,7 @@ def hoved(keep):
             path = os.path.join(ut, "d_nr.csv")
             printout = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                             os.path.join(ut, "manifest.csv"), "--url", url,
-                            "--model", "stub", "--mode", "text",
-                            "--out-csv", path, "--concurrent", "1",
+                            "--model", "stub", "--out-csv", path, "--concurrent", "1",
                             "--no-file", no_file)
             d = read(path)
             cross("--no-file: 2 of 6" in printout and len(d) == 2,
@@ -569,23 +544,23 @@ def hoved(keep):
             srv.shutdown()
 
         print("\n[5d] resuming is the default")
-        srv, url, _ = make_server(bad=False)
+        srv, url, _ = make_server(bad=False, answers=answers)
         try:
             path = os.path.join(ut, "d_std.csv")
             run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
-                 "stub", "--mode", "text", "--out-csv", path, "--concurrent", "1")
+                 "stub", "--out-csv", path, "--concurrent", "1")
             cross(len(read(path)) == 6, "the first run judges all 6")
             ut2 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
-                       "--model", "stub", "--mode", "text", "--out-csv", path,
+                       "--model", "stub", "--out-csv", path,
                        "--concurrent", "1")
             cross("Nothing to do" in ut2 and len(read(path)) == 6,
                   "a second run without flags does NOTHING. Finished work is "
                   "not overwritten")
             ut3 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
-                       "--model", "stub", "--mode", "text", "--out-csv", path,
+                       "--model", "stub", "--out-csv", path,
                        "--concurrent", "1", "--restart")
             cross("overwriting" in ut3 and len(read(path)) == 6,
                   "--restart overwrites, and says that it does")
@@ -597,8 +572,7 @@ def hoved(keep):
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
                  "--manifest", os.path.join(ut, "manifest.csv"),
-                 "--url", url, "--model", "stub", "--mode", "text",
-                 "--out-csv", os.path.join(ut, "d_400.csv"), "--concurrent", "1")
+                 "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_400.csv"), "--concurrent", "1")
             d = read(os.path.join(ut, "d_400.csv"))
             cross(counter["avvist"] == 1,
                   f"only the FIRST call was rejected ({counter['avvist']}), "
@@ -612,7 +586,7 @@ def hoved(keep):
         print("\n[6] vlm_evaluate")
         out_text = run_step(os.path.join(HERE, "vlm_evaluate.py"),
                         "--manifest", os.path.join(ut, "manifest.csv"),
-                        "--judge", os.path.join(ut, "judge_text.csv"),
+                        "--judge", os.path.join(ut, "judge_ok.csv"),
                         "--out-dir", os.path.join(ut, "evaluation"))
         with open(os.path.join(ut, "evaluation", "oppsummering.json"),
                   encoding="utf-8") as f:
@@ -623,7 +597,7 @@ def hoved(keep):
               f"gain scaled to 4 ({up['gain']})")
         # Partial run: if the loss is scaled up, the gain must be scaled too.
         half = os.path.join(ut, "d_halv.csv")
-        rows_every = read(os.path.join(ut, "judge_text.csv"))
+        rows_every = read(os.path.join(ut, "judge_ok.csv"))
         with open(half, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=rows_every[0].keys())
             w.writeheader()
@@ -654,33 +628,18 @@ def hoved(keep):
               "the manifests have a label_id column (same format as "
               "filter_review)")
 
-        cross(all(d["sikkerhet"] == "90" for d in judge.values()),
-              "sikkerhet is carried through to the judgement CSV")
-        out_curve = run_step(os.path.join(HERE, "vlm_evaluate.py"),
-                        "--manifest", os.path.join(ut, "manifest.csv"),
-                        "--judge", os.path.join(ut, "judge_text.csv"),
-                        "--out-dir", os.path.join(ut, "ev_kurve"))
-        cross("CONFIDENCE CURVE" in out_curve, "the confidence curve is printed")
-        out_threshold = run_step(os.path.join(HERE, "vlm_evaluate.py"),
-                          "--manifest", os.path.join(ut, "manifest.csv"),
-                          "--judge", os.path.join(ut, "judge_text.csv"),
-                          "--out-dir", os.path.join(ut, "ev_terskel"),
-                          "--min-confidence", "95")
-        cross("4 «nei» verdicts downgraded" in out_threshold,
-              "--min-confidence downgrades «nei» below the threshold")
-
         # The model may say nei all it likes: with eleven digits and a valid
         # date in its OWN transcription, the code overrules it.
         false = os.path.join(ut, "d_overstyr.csv")
         with open(false, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=[
-                "nr", "svar", "sikkerhet", "tall", "begrunnelse", "linjen",
+                "nr", "svar", "tall", "begrunnelse", "linjen",
                 "sifre_paa_linjen", "dato_gyldig", "holdepunkt", "feil"])
             w.writeheader()
             for r in manifest:
                 fnr = r["klasse"] != "BOM"
                 w.writerow({
-                    "nr": r["nr"], "svar": "nei", "sikkerhet": 95,
+                    "nr": r["nr"], "svar": "nei",
                     "tall": "", "begrunnelse": "claimed org.nr",
                     "linjen": "Kari Nordmann 010190 00000" if fnr else "N 6626630.58",
                     "sifre_paa_linjen": "01019000000" if fnr else "662663058",
@@ -694,11 +653,11 @@ def hoved(keep):
         # the manifest's ocr_linje, without help from the model.
         only_ocr = os.path.join(ut, "d_kunocr.csv")
         with open(only_ocr, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["nr", "svar", "sikkerhet", "tall",
+            w = csv.DictWriter(f, fieldnames=["nr", "svar", "tall",
                                               "begrunnelse", "feil"])
             w.writeheader()
             for r in manifest:
-                w.writerow({"nr": r["nr"], "svar": "nei", "sikkerhet": 95,
+                w.writerow({"nr": r["nr"], "svar": "nei",
                             "tall": "", "begrunnelse": "", "feil": ""})
         out_ocr = run_step(os.path.join(HERE, "vlm_evaluate.py"), "--manifest",
                       os.path.join(ut, "manifest.csv"), "--judge", only_ocr,
@@ -721,11 +680,11 @@ def hoved(keep):
         with open(only_miss, "w", encoding="utf-8") as f:
             f.write("\n".join(r["nr"] for r in manifest
                                if r["klasse"] == "BOM"))
-        srv, url, _ = make_server(bad=False)
+        srv, url, _ = make_server(bad=False, answers=answers)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
-                 "stub", "--mode", "text", "--concurrent", "1",
+                 "stub", "--concurrent", "1",
                  "--no-file", only_miss,
                  "--out-csv", os.path.join(ut, "d_skjev.csv"))
         finally:
@@ -759,7 +718,7 @@ def hoved(keep):
         # a condition that matches nothing must say so.
         out_split = run_step(os.path.join(HERE, "vlm_evaluate.py"),
                       "--manifest", os.path.join(ut, "manifest.csv"),
-                      "--judge", os.path.join(ut, "judge_text.csv"),
+                      "--judge", os.path.join(ut, "judge_ok.csv"),
                       "--out-dir", os.path.join(ut, "ev_del"),
                       "--split-by", "kilde", "--only", "har_tokens=1")
         cross("SPLIT BY kilde" in out_split and "Subset" in out_split,
@@ -767,7 +726,7 @@ def hoved(keep):
         cross("6 of 6 rows" in out_split, "har_tokens=1 keeps every row")
         out_empty = run_step(os.path.join(HERE, "vlm_evaluate.py"),
                       "--manifest", os.path.join(ut, "manifest.csv"),
-                      "--judge", os.path.join(ut, "judge_text.csv"),
+                      "--judge", os.path.join(ut, "judge_ok.csv"),
                       "--out-dir", os.path.join(ut, "ev_tom"),
                       "--only", "kilde=finnesikke")
         cross("No rows left" in out_empty,

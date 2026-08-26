@@ -162,7 +162,6 @@ def join(manifest, judge):
         row["svar"] = (d.get("svar") or "usikker").strip().lower()
         if row["svar"] not in ANSWER:
             row["svar"] = "usikker"
-        row["sikkerhet"] = d.get("sikkerhet", "")
         row["tall"] = d.get("tall", "")
         row["begrunnelse"] = d.get("begrunnelse", "")
         row["feil"] = d.get("feil", "")
@@ -313,46 +312,6 @@ def _factors(sample, n_bom_judged, n_cov_judged):
     return miss, cov
 
 
-def write_confidence_curve(row_list, sample, cost=STD_COST, write=print):
-    """Gain and loss as a function of how sure the model must be.
-
-    Answers whether an operating point exists: a threshold where «nei» is rare
-    enough on covering boxes to clear the cost requirement without losing the
-    gain. If no row qualifies, the confidence is uncalibrated.
-    """
-    has = [r for r in row_list if str(r.get("sikkerhet", "")).strip() != ""]
-    if not has:
-        write("\nCONFIDENCE CURVE: the judgements have no «sikkerhet», run "
-              "again with a vlm_judge that asks for it.")
-        return
-    miss_factor, hit_factor = _factors(
-        sample, sum(1 for r in has if _group(r) == "BOM"),
-        sum(1 for r in has if _group(r) == "DEKKENDE"))
-
-    def number(r):
-        try:
-            return float(r["sikkerhet"])
-        except (TypeError, ValueError):
-            return -1.0
-
-    write(f"\nCONFIDENCE CURVE  ({len(has)} of {len(row_list)} judgements have "
-          f"sikkerhet)")
-    write(f"  {'threshold':>9} {'BOM nei':>9} {'gain':>9} {'DEK nei':>9} "
-          f"{'loss':>9} {'ov/lost':>9}")
-    for threshold in (0, 50, 60, 70, 80, 90, 95, 99, 100):
-        bn = sum(1 for r in has if _group(r) == "BOM"
-                 and r["svar"] == "nei" and number(r) >= threshold)
-        dn = sum(1 for r in has if _group(r) == "DEKKENDE"
-                 and r["svar"] == "nei" and number(r) >= threshold)
-        gain = bn * miss_factor
-        loss_upper = poisson_upper_bound(dn) * hit_factor
-        ratio = gain / loss_upper if loss_upper > 0 else float("inf")
-        mark = "  ← above the cost requirement" if ratio >= cost and bn else ""
-        write(f"  {threshold:>9} {bn:>9} {gain:>9.0f} {dn:>9} "
-              f"{loss_upper:>9.0f} {ratio:>9.1f}{mark}")
-    write("  «loss» is the conservative upper bound, as in the accounts.")
-
-
 def tally(row_list, sample, cost=STD_COST, uncertain_remover=False,
              write=print):
     """Gain against loss risk, scaled up to the full uttrekk."""
@@ -497,10 +456,6 @@ def main():
                    help="Turn off the ledetekst guard in --fnr-override, "
                         "so only real 11-digit runs protect a box. Use it to "
                         "measure what the guard costs in gain.")
-    p.add_argument("--min-confidence", type=float, default=None, metavar="V",
-                   help="Accept «nei» only where the model gave sikkerhet ≥ V. "
-                        "The rest are downgraded to «usikker», i.e. kept. Use "
-                        "the confidence curve to pick V.")
     p.add_argument("--split-by", default=None, metavar="KOLONNE",
                    help="Show the confusion matrix per value of a manifest "
                         "column (e.g. har_fnr_kandidat, kilde, "
@@ -573,21 +528,6 @@ def main():
             print(f"    ({missing} rows have neither checklist fields nor OCR "
                   f"text, left untouched)")
 
-    if a.min_confidence is not None:
-        n = 0
-        for r in row_list:
-            if r["svar"] != "nei":
-                continue
-            try:
-                certain = float(r.get("sikkerhet", ""))
-            except (TypeError, ValueError):
-                certain = -1.0
-            if certain < a.min_confidence:
-                r["svar"] = "usikker"
-                n += 1
-        print(f"  --min-confidence {a.min_confidence:g}: {n} «nei» verdicts "
-              f"downgraded to «usikker» (kept)")
-
     if a.only:
         condition = [parse_condition(v) for v in a.only]
         before = len(row_list)
@@ -602,7 +542,6 @@ def main():
     write_per_source(row_list)
     if a.split_by:
         write_deling(row_list, a.split_by)
-    write_confidence_curve(row_list, sample, cost=a.cost)
     res = tally(row_list, sample, cost=a.cost,
                    uncertain_remover=a.uncertain_remover)
     if skewed:

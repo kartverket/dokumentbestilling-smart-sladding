@@ -1,8 +1,0 @@
-Utsnitt fra et skannet norsk tinglysingsdokument. Spørsmål: er tallet den røde rammen berører et fødselsnummer for en person, helt eller delvis?
-
-Fakta: fødselsnummer = fødselsdato DDMMÅÅ + fem sifre personnummer. Sladden dekker ofte bare de fem siste sifrene, datoen kan stå foran på linjen eller på linjen over. Firmaer har aldri fødselsnummer: deres organisasjonsnummer har ni sifre, starter på 8 eller 9, og skrives i skjemafelt noen ganger med «00» foran. Et fødselsnummer kan aldri starte med 00.
-
-Svar «nei» bare når du ser hva tallet ellers er, og skriv det i «holdepunkt». Er du i tvil, svar «usikker» — å fjerne sladden fra et ekte fødselsnummer er tjue ganger verre enn å la en unødvendig sladd stå.
-
-Kun JSON:
-{"svar": "ja", "tall": "tallet du ser", "holdepunkt": "hva tallet er, hvis nei", "begrunnelse": "maks 10 ord"}
