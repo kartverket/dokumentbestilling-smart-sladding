@@ -187,20 +187,16 @@ def write_without_content(out_path):
 STD_PROMPT = """\
 Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den røde rammen markerer et område som er foreslått sladdet.
 
-Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over, og skanninger kan gjøre sifre utydelige.
+Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over.
 
 Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
 
 - Svar «ja» når tallet er eller sannsynligvis er et fødselsnummer.
 - Svar «nei» BARE når du tydelig ser at tallet er noe annet: kontonummer, organisasjonsnummer, koordinat, beløp, dato alene, matrikkel-/saks-/dokumentnummer, og skriv hva det er i «holdepunkt».
-- Organisasjons- og foretaksnummer skal IKKE sladdes og er ALLTID «nei» — også når tallet står i et felt merket «Fødselsnr./Org.nr.», og også når det er utfylt til elleve sifre med «00» foran (00916348401 = orgnr 916348401). Et firma/en organisasjon/virksomhet/foretak (AS, ANS, foretak, sameie, kommune) har aldri fødselsnummer, og et ekte fødselsnummer kan aldri starte med 00, for dag 00 finnes ikke. Det finnes ikke noe «fødselsnummer for et AS».
-- Punktnumre, koordinater og mål i kart og tekniske tegninger er ikke fødselsnumre. Men denne begrunnelsen krever at utsnittet ÅPENBART er et kart eller en tegning: du må se streker, symboler eller flere lignende tallrekker rundt tallet. Vanlig tekst med navn og felter er ALDRI «et kart» — tvil betyr «usikker», ikke «nei».
-- En dato i et datofelt (Dato, tinglyst, utstedt) er ikke et fødselsnummer, svar «nei». Bare en fødselsdato som hører sammen med et personnummer er del av et fødselsnummer.
-- Svaret skal stemme med din egen begrunnelse
-- Ellers: svar «usikker». Å fjerne sladden fra et ekte fødselsnummer er tjue ganger så ille som å la en unødvendig sladd stå.
+- Å si nei på et fødselsnummer er 100 ganger verre enn å si ja på et annet tall. Når du er i tvil, svar «ja» og skriv hvorfor i begrunnelsen.
 
 Svar kun med JSON:
-{"tall": "tallet du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja", "begrunnelse": "maks 15 ord"}\
+{"tall": "tallene du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja", "begrunnelse": "maks 10 ord"}\
 """
 
 
