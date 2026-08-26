@@ -423,6 +423,124 @@ def _sync_klasse(out_path, klasse_per_nr):
     return changed
 
 
+def resolve_sources(a):
+    """Fills --res-csv/--truth-csv/--pdf-dir from utvalg.json.
+
+    vlm_export already writes the three absolute paths next to the manifest,
+    so --missing-candidates normally needs no arguments of its own. The flags
+    stay as overrides for a manifest whose sources have since moved.
+    Returns the names still unresolved.
+    """
+    sidecar = os.path.join(os.path.dirname(os.path.abspath(a.manifest)),
+                           "utvalg.json")
+    known = {}
+    if os.path.isfile(sidecar):
+        try:
+            with open(sidecar, encoding="utf-8") as f:
+                d = json.load(f)
+            known = {"res_csv": d.get("res_csv"),
+                     "truth_csv": d.get("fasit_csv"),
+                     "pdf_dir": d.get("folder")}
+        except (ValueError, OSError):
+            pass
+    missing = []
+    for flag in ("res_csv", "truth_csv", "pdf_dir"):
+        if not getattr(a, flag):
+            setattr(a, flag, known.get(flag))
+        if not getattr(a, flag):
+            missing.append("--" + flag.replace("_", "-"))
+    return missing
+
+
+def write_missing_candidates(out_path, rows, a):
+    """Pages for BOM boxes the model called a fødselsnummer.
+
+    A BOM box covers no fasit label. When the model says «ja» anyway, either
+    it is wrong or the labelling missed a number, and only a human can tell
+    the two apart. The page is drawn the way valider_full draws its errors:
+    every prediction framed and numbered, every fasit label at half opacity,
+    so the «#N» in the corner goes straight into note_missing_label.py.
+
+    The index deliberately holds no transcription. The number is on the page
+    already, and this file does not need to be another copy of it.
+    """
+    from csv_export import read_result_csv
+    from evaluation import read_truth_xywh
+    from visualization import draw_and_save
+
+    verdict = {}
+    with open(out_path, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            verdict[r["nr"]] = (r.get("svar") or "").strip().lower()
+
+    hits = [r for r in rows
+            if r.get("klasse") == "BOM" and verdict.get(r["nr"]) == "ja"]
+    if not hits:
+        print("  --missing-candidates: no BOM box was judged «ja».")
+        return None
+
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                           "manglende_kandidater")
+    boxes = read_result_csv(a.res_csv)
+    truth = read_truth_xywh(a.truth_csv) or {}
+    pages = {(r["fil"], int(r["side"])) for r in hits}
+    doc_pages = {(int(r["doc_no"]), int(r["side"])) for r in hits}
+    on_page = {k: v for k, v in boxes.items() if k in pages}
+
+    # Only the boxes judged «ja» get the oversladd colour, so the candidate
+    # stands out from the other predictions on the same page.
+    flagged = {}
+    for r in hits:
+        key = (r["fil"], int(r["side"]))
+        bw, bh, _ = on_page.get(key, (0, 0, []))
+        flagged.setdefault(key, (bw, bh, []))[2].append(
+            tuple(float(r[k]) for k in ("x0", "y0", "x1", "y1")))
+
+    # miss_indices=set() puts every label in the faint colour: this is not a
+    # recall review, the fasit is here as context for the box in question.
+    draw_and_save(on_page, {k: v for k, v in truth.items() if k in doc_pages},
+                  a.pdf_dir, out_dir, write_log=False, clean=False,
+                  sources=on_page, oversladd_boxes=flagged,
+                  miss_indices=set())
+
+    def index_of(row):
+        _, _, page_boxes = on_page.get((row["fil"], int(row["side"])),
+                                       (0, 0, []))
+        want = tuple(round(float(row[k]), 1) for k in ("x0", "y0", "x1", "y1"))
+        for i, b in enumerate(page_boxes):
+            if tuple(round(v, 1) for v in b[:4]) == want:
+                return i
+        return None
+
+    lines = ["# BOM judged «ja» — candidates for a missing label", "",
+             f"{len(hits)} box(es). Open the PNG, check the frame with the "
+             f"matching number, and run the command under it if the fasit "
+             f"really did miss a fødselsnummer.", ""]
+    unmatched = 0
+    for r in sorted(hits, key=lambda r: (r["fil"], int(r["side"]))):
+        i = index_of(r)
+        png = f"{os.path.splitext(r['fil'])[0]}_side{int(r['side'])}.png"
+        if i is None:
+            unmatched += 1
+            lines += [f"## {png}", "", "Box not found in the result CSV — "
+                      "wrong --res-csv for this manifest?", ""]
+            continue
+        lines += [f"## {png}  box #{i}  ({r.get('kilde', '')})", "",
+                  f"![]({os.path.join('.', png)})", "", "```bash",
+                  f"python utils/note_missing_label.py --png "
+                  f"{os.path.join(out_dir, png)} --box {i} "
+                  f"--res-csv {a.res_csv} --truth-csv {a.truth_csv}",
+                  "```", ""]
+
+    index = os.path.join(out_dir, "kandidater.md")
+    with open(index, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"  --missing-candidates: {len(hits)} box(es) in {out_dir}")
+    if unmatched:
+        print(f"    ⚠ {unmatched} could not be matched against --res-csv")
+    return index
+
+
 def run(a):
     with open(a.manifest, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
@@ -598,6 +716,8 @@ def run(a):
     if cache_dir:
         print(f"  Cache: {tally['cache']} of {tally['n']} answers reused "
               f"({cache_dir})")
+    if a.missing_candidates:
+        write_missing_candidates(out_path, rows, a)
     if timings:
         print(f"  Latency per call: median {timings[len(timings) // 2]:.2f}s, "
               f"p90 {timings[int(len(timings) * 0.9)]:.2f}s, "
@@ -676,6 +796,19 @@ def main():
                         "--restart alone still reuses cached answers.")
     p.add_argument("--prompt-file", default=None, metavar="FIL",
                    help="Read the prompt from a file instead of the built-in")
+    p.add_argument("--missing-candidates", action="store_true",
+                   help="After judging, draw the pages holding BOM boxes the "
+                        "model called a fødselsnummer, next to the "
+                        "judgements. Those are candidates for a label the "
+                        "fasit is missing, and the images feed "
+                        "note_missing_label.py. Sources are read from "
+                        "utvalg.json next to the manifest.")
+    p.add_argument("--res-csv", default=None,
+                   help="Override the result CSV from utvalg.json")
+    p.add_argument("--truth-csv", default=None,
+                   help="Override the labels CSV from utvalg.json")
+    p.add_argument("--pdf-dir", default=None,
+                   help="Override the PDF directory from utvalg.json")
     p.add_argument("--write-prompt", action="store_true",
                    help="Print the built-in prompt to stdout and exit")
     a = p.parse_args()
@@ -691,6 +824,14 @@ def main():
     for flag in ("manifest", "model"):
         if not getattr(a, flag):
             p.error(f"--{flag} is required")
+    # Resolved before the run, not after: the drawing happens at the end, and
+    # a missing path should not surface after hours of GPU time.
+    if a.missing_candidates:
+        missing = resolve_sources(a)
+        if missing:
+            p.error("--missing-candidates found no "
+                    + ", ".join(missing)
+                    + " in utvalg.json next to the manifest. Give them.")
     run(a)
 
 
