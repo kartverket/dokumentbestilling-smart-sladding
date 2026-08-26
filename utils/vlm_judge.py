@@ -49,7 +49,10 @@ from filter_common import reclassify_invalid_covering
 
 STD_URL = "http://localhost:8000/v1"
 STD_TIMEOUT = 120
-STD_MAX_TOKENS = 700
+# Measured answers land on 56-76 tokens, so this is roughly double the
+# longest one seen. A truncated answer is unparsable and becomes «usikker»,
+# never «nei», so the cap costs recall nothing when it does bite.
+STD_MAX_TOKENS = 150
 
 # Set to None if the endpoint rejects the field — shared across the threads.
 _THINKING = {"value": "none"}
