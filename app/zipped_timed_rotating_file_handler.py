@@ -7,10 +7,9 @@ import logging.handlers
 class ZippedTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     """Rotates at midnight and zips the day that just ended.
 
-    Uses the base class doRollover, which gets two things right we used to get
-    wrong: it names the file after the date the log *covers* (from
-    rolloverAt - interval, not now()), and it honours backupCount. We only
-    supply the two stdlib hooks: namer and rotator.
+    Uses the base class doRollover: it names the file after the date the log
+    *covers* (from rolloverAt - interval, not now()) and honours backupCount.
+    We only supply the two stdlib hooks: namer and rotator.
 
     backupCount counts zip files, one per day with when="midnight", so the
     number reads as days of history.

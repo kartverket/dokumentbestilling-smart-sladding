@@ -49,7 +49,7 @@ def _evaluate(pred_boxes, sent_doc_no, truth, threshold):
     """Hits + oversladding in point space, only for the documents we sent.
 
     pred_boxes:  {(docnr, page): [(x0,y0,x1,y1), ...]}  prod boxes in points
-    sendt_docnr: docnrs that were sent OK
+    sent_doc_no: docnrs that were sent OK
     truth:       {(fil_revisjon_id, page): [(x,y,w,h,type), ...]}
     """
     hit = truth_tot = oversladd = 0

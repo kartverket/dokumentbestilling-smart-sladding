@@ -1,4 +1,4 @@
-"""PDF fetching, split out of model_main.py so the job avoids the ML imports."""
+"""PDF fetching, kept separate from model_main.py so the job avoids the ML imports."""
 import requests
 import logging
 

@@ -73,7 +73,7 @@ def _from_png(path):
 def _sources_near(png_path):
     """(result CSV, labels CSV) for the run an image belongs to.
 
-    Two layouts, both found by walking up. Error images from valider_full sit
+    Two layouts, both found by walking up. Error images from run.py sit
     in <run>/error_images/<bom|oversladd>/ with resultat.csv a couple of
     levels above. Candidate images from vlm_judge sit in
     <export>/<judgements>/manglende_kandidater/, and the export directory
@@ -174,8 +174,8 @@ def _retract(label_id, comment, replaced_by, path=INVALID_LABELS_FILE):
             f.write("\n".join(lines) + "\n")
         return "utvidet"
 
-    # The file has historically ended without a newline, and appending to that
-    # glues the new id onto the last one, where neither parses.
+    # A file ending without a newline glues an appended id onto the last
+    # one, where neither parses, so the file is always rewritten whole.
     lines.append(f"{label_id}    # {comment} ({replaced_by})".rstrip())
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

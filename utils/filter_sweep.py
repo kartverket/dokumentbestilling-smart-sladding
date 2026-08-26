@@ -314,7 +314,7 @@ def _state(truth, pred, criterion, threshold, oversize_factor,
                        criterion=criterion)
     # In-scope predictions only: build_dataset forces predictions on unlabelled
     # documents to BOM, which would inflate the BOM cells and make the sums
-    # disagree with ds.n_bom.
+    # disagree with ds.n_miss.
     i_scope = {id(p) for p in ds.pred}
     return {
         "ds": ds,
@@ -473,7 +473,7 @@ def _sweep_distribution(ds):
 def _derive_bounds(ds, pct, use_conf=None):
     """Per-kilde limits derived from the TREFF distribution, not from net.
 
-    Lower = TREFF percentile `pst` from the bottom, upper = from the top.
+    Lower = TREFF percentile `pct` from the bottom, upper = from the top.
     Nothing is fitted against ov.rm. The limits only describe which shapes
     correct sladdinger have had.
     """
@@ -815,7 +815,7 @@ def main():
 
         # ── OCR features: stricter variants of lenient_check ────────
         # Only kilde «yolo» with text in the box is affected. See _ocr_reason
-        # in filter_common. Everything else is untouched.
+        # in filter_rules. Everything else is untouched.
         n_features = sum(1 for x in ds.pred if x.get("har_tokens"))
         if not n_features:
             print("\n(no feature columns in the result CSV, the OCR sweep is "
@@ -985,8 +985,6 @@ def main():
                 title="OCR FEATURES COMBINED: fnr candidate "
                        "(hits only «yolo» with text)",
                 label_prefix="ocr-fnr ", **common)
-            # cfritak and line veto made the run rule prod-ready; min_digits
-            # got a tenfold ov/lost in the new regime without the same gates.
             ocr_rows += _sweep_combinations(
                 ds, [None, 4, 5, 6], [None, 0.95, 0.98], [None, 0.99],
                 [None, 0.5, 0.6],
@@ -997,8 +995,7 @@ def main():
                        "veto and conf exemption (hits only «yolo» with text)",
                 label_prefix="ocr-smin ", **common)
             # Orgnr rules with line veto: mod11 is worthless if one digit is
-            # misread, so the line veto is the natural gate, with rec veto
-            # alone these rules landed just below the cost requirement.
+            # misread, so the line veto is the natural gate.
             ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 1], [None, 0.99, 0.999],
                 [None, 0.5],
@@ -1030,9 +1027,9 @@ def main():
                 title="OCR FEATURES COMBINED: orgnr rules "
                        "(hits only «yolo» with text)",
                 label_prefix="ocr-org ", **common)
-            # Decimal rule with conf exemption: manual review showed the losses
-            # nearly all have a high detection conf, while the coordinates the
-            # rule targets sit low. The fourth axis is a dummy.
+            # Decimal rule with conf exemption: real fnr losses sit at high
+            # detection conf, the coordinates the rule targets sit low. The
+            # fourth axis is a dummy.
             ocr_rows += _sweep_combinations(
                 ds, [None, 1], [None, 0.90, 0.95, 0.98],
                 [None, 0.40, 0.45, 0.50, 0.60, 0.70], [None],
@@ -1047,7 +1044,6 @@ def main():
             # rules also hit the begge hits, because a real fnr is written in
             # date form («01.01.50 12345» gives decimal gaps after digit 2 and
             # 4), OCR adds noise dots, and form fields split fnr physically.
-            # Measured globally @luke3+desluke: 978 lost / 114 ov.rm, dead.
             if any(x.get("maks_luke") is not None for x in ds.pred):
                 ocr_rows += _sweep_combinations(
                     ds, [None, 1], [None, 1.5, 2, 3, 4, 6, 8], [None], [None],

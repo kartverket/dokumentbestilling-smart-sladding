@@ -1,10 +1,8 @@
 """Machinery for running heavy document jobs in parallel against one GPU.
 
 The main process only coordinates; all work happens in independent processes
-pulling files from a shared counter. Measured on V100S + Xeon 6230: ~77 % of
-the time in a single pipeline went to single-threaded CPU preprocessing and
-only ~11 % to GPU work, so the card idled half the time. Four processes against
-the same card gave 3.3x throughput and saturated it (228 of 250 W).
+pulling files from a shared counter. Most of a single pipeline's time is
+single-threaded CPU preprocessing, so one process alone leaves the card idle.
 
 Memory management follows from that: each process gets its own cap on the card
 (FLAGS_gpu_memory_limit_mb), the batch size finds that cap itself via slow
@@ -386,10 +384,8 @@ def _pipeline(task):
     prefetch = task["prefetch"]
     memory_limit = task["memory_limit"]
 
-    # Own memory cap per process. Measured: FLAGS_fraction_of_gpu_memory_to_use
-    # is NOT respected by paddle's inference predictor, while
-    # FLAGS_gpu_memory_limit_mb is. Without it the processes grow into each
-    # other until the card is empty. Must be set before anything touches the GPU.
+    # FLAGS_gpu_memory_limit_mb is the only cap paddle's predictor respects,
+    # and it must be set before anything touches the GPU.
     os.environ["FLAGS_allocator_strategy"] = "auto_growth"
     if task.get("gpu_mb"):
         os.environ["FLAGS_gpu_memory_limit_mb"] = str(int(task["gpu_mb"]))
@@ -587,10 +583,7 @@ def setup(args, extra=None):
         n = max(min(cores // 12, 6), 1)
     n = max(n, 1)
 
-    # Without a per-process cap the allocators grow independently until the
-    # card is full (measured: 30.9 of 32 GB), and whichever process asks for
-    # memory last is the one that fails. Memory already in use is subtracted:
-    # if another job is on the card, we share what is left.
+    # Uncapped allocators grow until the card is full; subtract what other jobs already hold.
     gpu = gpu_memory_info()
     gpu_mb = None
     in_use = 0
@@ -653,7 +646,7 @@ class Throughput:
         if len(self._punkter) < 2:
             return None
         t1, d1, s1 = self._punkter[-1]
-        # Newest point at least vindu_sek old; before one exists, fall back to
+        # Newest point at least window_sec old; before one exists, fall back to
         # the oldest so a number is available from the second status line on.
         t0, d0, s0 = self._punkter[0]
         for t, d, sd in self._punkter:

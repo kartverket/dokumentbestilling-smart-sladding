@@ -442,7 +442,7 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
 # --ocr-text fades the original and draws the pipeline's CACHED tokens on top,
 # colored by rec score. Tokens live in the ROTATED image's pixel space (the
 # pipeline OCRs the rotated page), so predictions and ground truth are
-# transformed forward with the inverse of orientation.box_back.
+# transformed forward with the inverse of orientation.unrotate_box.
 
 OCR_REC_HIGH = (0, 115, 0)        # green
 OCR_REC_MID = (25, 45, 170)      # blue
@@ -471,7 +471,7 @@ def _rec_color(rec):
 
 
 def rotate_box(r, k, w0, h0):
-    """Unrotated pixel rect -> rotated space (inverse of orientation.box_back)."""
+    """Unrotated pixel rect -> rotated space (inverse of orientation.unrotate_box)."""
     if not k:
         return list(r)
     x0, y0, x1, y1 = r
@@ -720,7 +720,7 @@ def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
     if out_csv:
         with open(out_csv, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            # The column is named "value", not after the field: for the areal
+            # The column is named "value", not after the field: for the area
             # criterion field == "cov_area", which would appear twice.
             w.writerow(["utsnitt", "fil", "side", "fasit_idx", "vipper", "kilde",
                         "conf", "value", "cov_area", "cov_short", "cov_long", "iou",

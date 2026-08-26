@@ -182,8 +182,8 @@ def _read_tokens(res):
 
 
 def _groups_to_lines(tokens):
-    # The line's min-y0/max-y1 are kept running instead of recomputed over all
-    # tokens per membership test, which was quadratic on token-heavy pages.
+    # The line's min-y0/max-y1 are kept running: recomputing them per
+    # membership test is quadratic on token-heavy pages.
     lines = []                 # [tokens, min_y0, max_y1] per line
     for token in sorted(tokens, key=lambda t: ((t.y0 + t.y1) / 2, t.x0)):
         center_y = (token.y0 + token.y1) / 2
@@ -266,9 +266,7 @@ def _sladd_box(digit_boxes):
 
 # A real fnr has separators at FIXED positions: the date periods after digit
 # 2 and 4 ("01.01.50") and the field separator after digit 6 ("010150 12345").
-# Gaps there prove nothing. Coordinate seams put their gaps at arbitrary
-# positions, which are the ones flagged. (Uttrekk 6: all 4 losses of the
-# position-blind variant sat exactly at 2/4/6.)
+# Gaps there prove nothing; coordinate seams put their gaps elsewhere.
 _LEGAL_GAP_POS = frozenset((2, 4, 6))
 
 

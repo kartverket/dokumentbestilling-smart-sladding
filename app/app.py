@@ -31,7 +31,7 @@ def get_bounding_boxes():
         elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
         # Comma-separated XX_YYY codes from the grunnbok, e.g.
         # ?rettsstiftelsestyper=SR_JOU,SR_BSK enables per-document-type rule
-        # profiles (see KOORDFAM_CODES in config). Omitted/empty = as before.
+        # profiles (see KOORDFAM_CODES in config). Omitted/empty = global.
         rettsstiftelsestyper = [k.strip() for k in
                                 request.args.get('rettsstiftelsestyper', '')
                                 .split(',') if k.strip()]
@@ -46,7 +46,6 @@ def get_bounding_boxes():
         return jsonify({'error': str(e)}), 500
 
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",

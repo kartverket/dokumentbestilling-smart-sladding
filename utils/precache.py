@@ -317,11 +317,7 @@ def main():
     opts = pp.setup(args)
     n = opts["n_processes"]
 
-    # The recognition model defaults to 128 lines per batch, and one such batch
-    # asked for 1.4 GB in measurements. Under a ~6.5 GB per-process cap it blows
-    # up as soon as the allocator has grown a little, and waiting does not help
-    # because the memory is the process's own. 32 lines held the card at 69 %
-    # with no memory errors at all. Read by app/paddle_ocr_model_fnr.py.
+    # The default rec batch does not fit under a small per-process cap; read by app/paddle_ocr_model_fnr.py.
     rec_batch = args.rec_batch
     if not rec_batch and opts["gpu_mb"]:
         rec_batch = 32 if opts["gpu_mb"] < 10000 else 64

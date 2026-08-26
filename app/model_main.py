@@ -6,16 +6,11 @@ import numpy as np
 
 from config import (DEDUP_OVERLAP, PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF,
                     YOLO_CONF_NO_TEXT, YOLO_CONF_VERTICAL, YOLO_CONF_GEOMETRY_THRESHOLD,
-                    REJECT_DECIMAL_REC_VETO, REJECT_DECIMAL_CONF_EXEMPT,
-                    REJECT_DECIMAL_LOW_TIER_REC_VETO, REJECT_DECIMAL_LOW_TIER_CONF_MAX,
-                    LINE_EVIDENCE_REC_VETO, LINE_EVIDENCE_CONF_EXEMPT,
-                    LINE_EVIDENCE_RUN_MAX,
-                    WINDOW_MAX_GAP, WINDOW_REJECT_DECIMAL_IN_GAP,
-                    KOORDFAM_CODES, KOORDFAM_NO_TEXT_CONF,
-                    SEKSJONERING_CODES,
-                    SEKSJONERING_MAX_SHORT_SIDE_PT, SEKSJONERING_MAX_LONG_SIDE_PT,
-                    SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_DIGITS,
-                    SEKSJONERING_REC_VETO, SEKSJONERING_CONF_EXEMPT)
+                    KOORDFAM_CODES, SEKSJONERING_CODES,
+                    RULE_DECIMAL, RULE_DECIMAL_LOW_TIER, RULE_LINE_EVIDENCE,
+                    RULE_WINDOW, RULE_KOORDFAM,
+                    RULE_SEKSJONERING_YOLO, RULE_SEKSJONERING_PADDLE)
+from filter_rules import make_filter, rule_input
 from geometry import smallest_share
 from load_pdf import read_pages_from_bytes
 from paddle_ocr_model_fnr import (read_tokens_batched, sladd_boxes_from_tokens,
@@ -39,132 +34,47 @@ def _take_time(t, post):
 def _skip_over_geometry_filter(conf, source):
     """High confidence -> trust the model, skip the geometry filters.
 
-    "begge" used to be exempt at any confidence, but low-confidence "begge"
-    caused real oversladding (4 of 7 losses at conf 0.17-0.31). Paddle is
-    never exempt: OCR confidence is read quality, not detection certainty.
+    Paddle is never exempt: OCR confidence is read quality, not detection
+    certainty.
     """
     if source == "paddle":
         return False
     return conf is not None and conf >= YOLO_CONF_GEOMETRY_THRESHOLD
 
 
-def _decimal_rule_discards(features, conf):
-    """Decimal separator in confidently read text -> coordinate, not fnr.
+# ── OCR and profile rules ────────────────────────────────────
+# Shared with the sweep tools: predicates in filter_rules.py, operating
+# point in config.py.
 
-    Mirrors _ocr_reason in utils/filter_common.py (reject_decimal=1,
-    rec_veto, ocr_conf_exempt).
-    Called on the FINAL kilde after dedup, so a box that became "begge" is
-    spared. See config.
+_decimal_discards = make_filter(**RULE_DECIMAL)
+_decimal_low_tier_discards = make_filter(**RULE_DECIMAL_LOW_TIER)
+_line_evidence_discards = make_filter(**RULE_LINE_EVIDENCE)
+_window_discards = make_filter(**RULE_WINDOW)
+_koordfam_discards = make_filter(**RULE_KOORDFAM)
+_seksjonering_yolo_discards = make_filter(**RULE_SEKSJONERING_YOLO)
+_seksjonering_paddle_discards = make_filter(**RULE_SEKSJONERING_PADDLE)
+
+
+def _rules_discard(pair, koordfam, seksjonering):
+    """Whether the OCR and profile rules drop the box.
+
+    Runs on the FINAL kilde after dedup: "begge" and "yolo_vertikal" are
+    spared, and the koordfam/seksjonering profiles apply only when the
+    document's rettsstiftelsestyper say so. Paddle boxes carry the window
+    features from _window_features instead of the box features.
     """
-    if not features or not features.get("har_tokens"):
-        return False
-    rec = features.get("rec_min")
-    if rec is None or not features.get("har_desimal_naer"):
-        return False
-    if rec >= REJECT_DECIMAL_REC_VETO \
-            and (conf is None or conf < REJECT_DECIMAL_CONF_EXEMPT):
-        return True
-    # Low tier: a weaker read suffices when the detection itself is weak.
-    return (rec >= REJECT_DECIMAL_LOW_TIER_REC_VETO
-            and (conf is None or conf < REJECT_DECIMAL_LOW_TIER_CONF_MAX))
-
-
-def _line_evidence_discards(features, conf):
-    """A confidently read line proves the number cannot be an fnr.
-
-    Mirrors _ocr_reason in utils/filter_common.py (reject_run_6_10,
-    reject_orgnr, line_veto, ocr_conf_exempt). Final kilde after dedup. See config.
-    """
-    if not features or not features.get("har_tokens"):
-        return False
-    if conf is not None and conf >= LINE_EVIDENCE_CONF_EXEMPT:
-        return False
-    line = features.get("rec_min_linje")
-    if line is None or line < LINE_EVIDENCE_REC_VETO:
-        return False
-    long = features.get("lang_run")
-    if long is not None and 6 <= long <= LINE_EVIDENCE_RUN_MAX:
-        return True
-    return bool(features.get("har_orgnr"))
-
-
-_SEKSJONERING_MAX_SHORT_SIDE_PX = SEKSJONERING_MAX_SHORT_SIDE_PT * PDF_DPI / 72.0
-_SEKSJONERING_MAX_LONG_SIDE_PX = SEKSJONERING_MAX_LONG_SIDE_PT * PDF_DPI / 72.0
-
-
-def _seksjonering_geometry_discards(box):
-    """Orientation-free shape: too large to be a 5-digit sladd."""
-    x0, y0, x1, y1 = box[:4]
-    short, long = sorted((x1 - x0, y1 - y0))
-    return (short > _SEKSJONERING_MAX_SHORT_SIDE_PX
-            or long > _SEKSJONERING_MAX_LONG_SIDE_PX)
-
-
-def _seksjonering_yolo_discards(box, features, conf):
-    """Seksjonering document: table cell, not an fnr sladd.
-
-    Mirrors is_filtered in utils/filter_common.py, per-kilde spec
-    "yolo:kmaks=40,lmaks=80,smin=6,rveto=0.98,cfritak=0.5". Geometry always
-    applies; the digit requirement only on confidently read text.
-    """
-    if _seksjonering_geometry_discards(box):
-        return True
-    if not features or not features.get("har_tokens"):
-        return False
-    if conf is not None and conf >= SEKSJONERING_CONF_EXEMPT:
-        return False
-    rec = features.get("rec_min")
-    if rec is None or rec < SEKSJONERING_REC_VETO:
-        return False
-    return (features.get("n_siffer") or 0) < SEKSJONERING_MIN_DIGITS
-
-
-def _seksjonering_paddle_discards(box):
-    """Mirrors "paddle:e=3,kmaks=40,lmaks=80": square or oversized cells."""
-    x0, y0, x1, y1 = box[:4]
-    short, long = sorted((x1 - x0, y1 - y0))
-    if short <= 0:
-        return True
-    if long / short < SEKSJONERING_PADDLE_MIN_ELONG:
-        return True
-    return _seksjonering_geometry_discards(box)
-
-
-def _koordfam_discards(features, conf):
-    """Coordinate document: a number without fnr evidence is a coordinate.
-
-    Mirrors _ocr_reason in utils/filter_common.py (require_fnr_candidate,
-    reject_decimal, without_text_conf). Only when the document's
-    rettsstiftelsestyper hit KOORDFAM_CODES. Globally the same rules cost
-    hundreds of real fnr. Token-less boxes are map graphics with no text
-    evidence, so they need detection conf instead.
-    """
-    if not features:
-        return False
-    har_tokens = features.get("har_tokens")
-    if har_tokens is None:
-        return False
-    if not har_tokens:
-        return conf is None or conf < KOORDFAM_NO_TEXT_CONF
-    if not features.get("har_fnr_kandidat"):
-        return True
-    return bool(features.get("har_desimal_naer"))
-
-
-def _paddle_window_discards(features):
-    """The 11-digit window the box was built from is a seam, not an fnr.
-
-    Mirrors _ocr_reason in utils/filter_common.py (reject_decimal_gap,
-    max_gap). Final kilde after dedup: boxes that became "begge" are
-    YOLO-confirmed and spared. The features are already position-aware from
-    _window_features. Gaps after digit 2/4/6 do not count. See config.
-    """
-    if not features:
-        return False
-    if WINDOW_REJECT_DECIMAL_IN_GAP and features.get("har_desimal_luke"):
-        return True
-    gap = features.get("maks_luke")
-    return gap is not None and gap >= WINDOW_MAX_GAP
+    box, kilde, conf, _rec, features = pair
+    if kilde == "yolo":
+        p = rule_input(box, features, conf)
+        return (_decimal_discards(p) or _decimal_low_tier_discards(p)
+                or _line_evidence_discards(p)
+                or (koordfam and _koordfam_discards(p))
+                or (seksjonering and _seksjonering_yolo_discards(p)))
+    if kilde == "paddle":
+        p = rule_input(box, features, conf)
+        return (_window_discards(p)
+                or (seksjonering and _seksjonering_paddle_discards(p)))
+    return False
 
 
 def _find_boxes_only_yolo(yolo_boxes):
@@ -199,9 +109,8 @@ def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
     for (x0, y0, x1, y1, conf) in yolo_boxes:
         yb = (x0, y0, x1, y1)
         covered = [pair for pair in boxes if smallest_share(yb, pair[0]) > DEDUP_OVERLAP]
-        # Only Paddle hits may be promoted to "begge". Renaming earlier YOLO
-        # boxes too contaminated the "begge" bucket with pure YOLO hits and
-        # hid them from the OCR rules, which only apply to kilde "yolo".
+        # Only Paddle hits may be promoted to "begge": renaming YOLO boxes
+        # too would hide them from the OCR rules, which only see kilde "yolo".
         paddle_covered = [pair for pair in covered if pair[1] in ("paddle", "begge")]
         if paddle_covered:
             for pair in paddle_covered:
@@ -218,7 +127,7 @@ def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
             features = features_for_box(tokens, lines, yb) if source == "yolo" else None
             boxes.append([yb, source, round(conf, 3), None, features])
 
-    # ── Decimal and line-evidence rules ────────────────────────────────────
+    # ── OCR and profile rules ──────────────────────────────────────────────
     # Deliberately after the dedup loop: the kilde is final, so boxes that
     # became "begge" keep their sladding.
     # postfilter=False skips BOTH blocks below (rules + geometry) to measure
@@ -226,19 +135,7 @@ def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
     # they are the model's operating point, not postfilters.
     if postfilter:
         boxes = [pair for pair in boxes
-                  if not (pair[1] == "yolo"
-                          and (_decimal_rule_discards(pair[4], pair[2])
-                               or _line_evidence_discards(pair[4], pair[2])
-                               or (koordfam
-                                   and _koordfam_discards(pair[4], pair[2]))
-                               or (seksjonering
-                                   and _seksjonering_yolo_discards(
-                                       pair[0], pair[4], pair[2]))))
-                  and not (pair[1] == "paddle"
-                           and (_paddle_window_discards(pair[4])
-                                or (seksjonering
-                                    and _seksjonering_paddle_discards(
-                                        pair[0]))))]
+                  if not _rules_discard(pair, koordfam, seksjonering)]
 
         # ── Dimension filters ──────────────────────────────────
         # Universal limits; only high yolo confidence exempts. On top: the
@@ -390,8 +287,7 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
 
         if not root_hit:
             with _take_time(t, "orientation"):
-                # One model call for the whole document; per page the GPU was
-                # spun up and down once per page.
+                # One model call for the whole document, not one per page.
                 rotations = find_rotations_batch(images)
 
         images_ocr = [np.rot90(b, k) if k else b for b, k in zip(images, rotations)]
@@ -399,7 +295,6 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
         if not ocr_hit and not only_yolo:
             with _take_time(t, "ocr"):
                 tokens_per_page = read_tokens_batched(images_ocr)
-            # Cache for future runs
             if cache_dir and name:
                 write_ocr_cache(cache_dir, name, rotations, tokens_per_page)
 

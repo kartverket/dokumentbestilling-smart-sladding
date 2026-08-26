@@ -168,7 +168,7 @@ def _evaluate_and_draw_error(sladd_doc, csv_doc, truth, folder, png_dir,
     Writes to subfolders bom/ (missed detections) and oversladd/; a page with
     both kinds of error lands in both.
     """
-    # write= keeps output off the shared sys.stdout; diagnostikk=False because
+    # write= keeps output off the shared sys.stdout; diagnostics=False because
     # for a single document "no truth" only means unlabelled.
     doc_eval = evaluate_against_truth(sladd_doc, truth, folder, threshold=threshold,
                             y_origin=y_origin, sources=csv_doc,
@@ -198,7 +198,7 @@ def _evaluate_and_draw_error(sladd_doc, csv_doc, truth, folder, png_dir,
         os.makedirs(miss_dir, exist_ok=True)
         sladd_b = {k: v for k, v in sladd_doc.items() if k in miss_pages}
         csv_b = {k: v for k, v in csv_doc.items() if k in miss_pages}
-        # Restrict truth to bom pages, else _sider_aa_tegne adds error-free
+        # Restrict truth to bom pages, else _pages_to_draw adds error-free
         # pages and they render as empty PNGs.
         miss_no_pages = {(_doc_no(name), si) for (name, si) in miss_pages}
         truth_miss = {k: v for k, v in truth.items() if k in miss_no_pages} if truth else None

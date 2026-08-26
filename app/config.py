@@ -2,32 +2,25 @@
 PDF_DPI = 300                  # higher = slower, more accurate
 
 # ---- Dimension filters -----------------------------------------------------
-# Universal across kilde; only high YOLO confidence exempts (paddle has none
-# and is always filtered). Short/long side, not width/height: width/height
-# discarded vertical sladdinger, 30 of 34 wrong removals in uttrekk 4.
-# Tuned on 41 reviewed losses in uttrekk 4: 64 oversladdinger removed, 7 fasit
-# boxes lost, all confirmed as boxes that should not be sladdet.
+# Universal across kilde; only high YOLO confidence exempts. Short/long side,
+# not width/height, so vertical sladdinger survive.
 MIN_BOX_AREA     = 965       # px²
-MIN_ELONGATION     = 1.44      # 1.5 cost 3 real sladdinger at 1.47-1.49
+MIN_ELONGATION     = 1.44
 MAX_ELONGATION    = 9         # 3-4x wider than the field itself
 MIN_SHORT_SIDE_PT    = 6
 
-# Kilde "yolo" only ("begge", paddle and "yolo_vertikal" are spared). Uttrekk
-# 6: ~53 oversladdinger removed, 4 fasit boxes lost, all confirmed reference
-# numbers. Short side applies at any conf; long side sits behind the exemption.
+# Kilde "yolo" only ("begge", paddle and "yolo_vertikal" are spared).
+# Short side applies at any conf; long side sits behind the exemption.
 MIN_SHORT_SIDE_YOLO_PT = 7
 MIN_LONG_SIDE_YOLO_PT = 20      # too short to hold 5 digits
 
 # Kilde "paddle" only, never exempted by conf: OCR conf is read quality, not
-# detection certainty. Uttrekk 6: ~20 oversladdinger removed, 0 fasit lost.
-# Paddle noise is thin strokes, short side p99.9 = 14.6pt against 8.6pt for
-# the smallest real paddle hit.
+# detection certainty. Paddle noise is thin strokes.
 MIN_SHORT_SIDE_PADDLE_PT = 7
 MIN_LONG_SIDE_PADDLE_PT = 20
 MAX_ELONGATION_PADDLE = 6
 
-# Skips the geometry filters. "begge" used to be exempt at any confidence;
-# removed, see _hopp_over_geometrifilter.
+# conf at which a YOLO box skips the geometry filters.
 YOLO_CONF_GEOMETRY_THRESHOLD = 0.5
 
 # Only the default for --max-width in utils/draw.py; not in the filter path.
@@ -59,41 +52,24 @@ YOLO_IMGSZ         = 1280
 MIN_DIGITS         = 1         # lenient_check floor
 MAX_LETTERS     = 1         # 2+ letters is not an fnr, whatever YOLO says
 
-# A decimal separator in confidently read text means coordinate or amount; an
-# fnr never has one. High detection conf exempts: real fnr caught by the rule
-# sit at conf >= 0.5, coordinates at <= 0.37. Final kilde after dedup, so pure
-# "yolo" only. Uttrekk 6: ~1250 oversladdinger removed / 3 real fnr lost.
-# Mirrored by _decimal_rule_discards (model_main) and _ocr_reason
-# (utils/filter_common.py).
-REJECT_DECIMAL_REC_VETO    = 0.98
-REJECT_DECIMAL_CONF_EXEMPT = 0.6
-# Lower tier: a weaker read suffices when the detection itself is weak.
-# Uttrekk 6: +38 oversladdinger removed / 1 lost.
-REJECT_DECIMAL_LOW_TIER_REC_VETO  = 0.95
-REJECT_DECIMAL_LOW_TIER_CONF_MAX  = 0.4
+# An fnr never contains a decimal separator; confident detections are exempt.
+RULE_DECIMAL = {"reject_decimal": 1, "rec_veto": 0.98, "ocr_conf_exempt": 0.6}
+# A weaker read suffices when the detection itself is weak.
+RULE_DECIMAL_LOW_TIER = {"reject_decimal": 1, "rec_veto": 0.95,
+                         "ocr_conf_exempt": 0.4}
 
-# A confidently read line can prove the number is no fnr: a digit run of 6-8
-# (too long for a personnummer, too short for an fnr, so dagboknummer, amount
-# or coordinate) or a valid orgnr mod11. 9-runs are excluded on purpose, they
-# are often real fnr with two characters dropped by OCR. Uttrekk 6: 79
-# oversladdinger removed / 1 real fnr. Mirrored by _ocr_reason.
-LINE_EVIDENCE_REC_VETO  = 0.99
-LINE_EVIDENCE_CONF_EXEMPT = 0.5
-LINE_EVIDENCE_RUN_MAX    = 8
+# A confidently read digit run of 6-8 or a valid orgnr rules out an fnr.
+# Stops at 8: 9-runs are often real fnr with OCR-dropped characters.
+RULE_LINE_EVIDENCE = {"reject_run_6_10": 8, "reject_orgnr": 1,
+                      "line_veto": 0.99, "ocr_conf_exempt": 0.5}
 
-# Reject paddle boxes whose 11-digit window was stitched across a decimal or a
-# large gap outside the legal positions (after digit 2/4/6). Coordinate
-# columns are the source; a real fnr has no such gaps. Final kilde "paddle"
-# only. Position-blind on "begge" it cost 974 fnr. 8, not 3: handwritten fnr
-# reach ~6 digit widths (5.94 measured), coordinate gaps >= 10. Uttrekk 6:
-# 72 oversladdinger removed / 0 lost (gap 3 gave 91/1). Mirrored by _ocr_reason.
-WINDOW_MAX_GAP          = 8.0   # digit widths
-WINDOW_REJECT_DECIMAL_IN_GAP = True
+# An 11-digit window stitched across a decimal or a gap outside the legal
+# positions (after digit 2/4/6) is a coordinate column, not an fnr.
+# max_gap is in digit widths; handwritten fnr reach ~6.
+RULE_WINDOW = {"max_gap": 8.0, "reject_decimal_gap": 1}
 
 # ── Rule profile per rettsstiftelsestype ──────────────────────────
-# The coordinate family is maps, measurement tables and coordinate lists:
-# 21 % precision against 88.5 % elsewhere. Inside it _koordfam_discards
-# removed 576 oversladdinger / 0 real fnr; globally it costs hundreds of fnr.
+# The coordinate family is maps, measurement tables and coordinate lists.
 # Codes come from the skip job; without them the global behaviour applies.
 KOORDFAM_CODES = frozenset((
     "SR_JOU",   # Jordskifte
@@ -103,29 +79,28 @@ KOORDFAM_CODES = frozenset((
     "TR_MAS",   # Massetransport
     "SR_SKN",   # Skjønn
     "JS_JSA",   # Opprettelse av jordsameie
-    "FR_REG",   # Registrering av grunn, marginal: 183 removed / 1 real fnr
+    "FR_REG",   # Registrering av grunn
     "SR_UTS",   # Utskifting, historical jordskifte
 ))
 
-# Token-less boxes in koordfam documents are map graphics the text rules never
-# see, so they need detection conf instead: 26 oversladdinger removed / 0
-# lost. Globally the same rule loses fnr, so it is safe ONLY in koordfam.
-KOORDFAM_NO_TEXT_CONF = 0.7
+# A number without fnr evidence in a koordfam document is a coordinate.
+# Token-less boxes are map graphics with no text evidence, so they need
+# detection conf instead. Loses real fnr outside koordfam.
+RULE_KOORDFAM = {"require_fnr_candidate": 1, "reject_decimal": 1,
+                 "without_text_conf": 0.7}
 
-# SE_SEK documents are table-heavy: 72 % precision against 92 % elsewhere, and
-# the false positives are table cells: oversized boxes or short digit runs.
-# Uttrekk 6: 143 oversladdinger removed / 2 real fnr lost (smin 5 would save
-# them but costs ~80 oversladdinger). NB: the koordfam rules are lethal here.
-# fnr sit in the same table lines as the decimal areas, 130 lost globally,
-# hence separate profiles per document type. Only SE_SEK is measured; the
-# reseksjonering relatives (RS_RES, SB_SEB, …) stay out until measured.
+# SE_SEK documents are table-heavy and the false positives are table cells.
+# The koordfam rules lose real fnr here, hence a separate profile. Only
+# SE_SEK is measured; the reseksjonering relatives stay out until measured.
 SEKSJONERING_CODES = frozenset(("SE_SEK",))
-SEKSJONERING_MAX_SHORT_SIDE_PT = 40.0  # yolo+paddle: fnr-sladd p99.9 = 29.5
-SEKSJONERING_MAX_LONG_SIDE_PT = 80.0  # yolo+paddle: fnr-sladd p99.9 = 78.9
-SEKSJONERING_PADDLE_MIN_ELONG = 3.0   # paddle: square cells rejected
-SEKSJONERING_MIN_DIGITS  = 6          # yolo: fewer digits = fraction/snr
-SEKSJONERING_REC_VETO    = 0.98       # digit rule only on a certain read
-SEKSJONERING_CONF_EXEMPT = 0.5
+# Side limits in pt, both kilder. Geometry applies at any conf; the digit
+# requirement (fewer digits = fraction or snr) only on a certain read.
+RULE_SEKSJONERING_YOLO = {"max_short_side": 40.0, "max_long_side": 80.0,
+                          "min_digits": 6, "rec_veto": 0.98,
+                          "ocr_conf_exempt": 0.5}
+# Same side limits; square table cells rejected on elongation.
+RULE_SEKSJONERING_PADDLE = {"min_elongation": 3.0, "max_short_side": 40.0,
+                            "max_long_side": 80.0}
 
 # Features box_features computes per YOLO box and writes to the result CSV.
 # The list lives here so utils/csv_export.py and utils/filter_common.py get it

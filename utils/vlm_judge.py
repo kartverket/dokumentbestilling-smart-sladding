@@ -14,9 +14,9 @@ instead of the GPU — across runs, manifests and export names. The prompt
 version (the cache fingerprint) is printed at startup. --no-cache turns the
 cache off; --restart alone rewrites the CSV but still reuses cached answers.
 
-The model judges the crop image alone. Feeding it the OCR text as well made
-the judgements worse, so the old tekst and begge modes are gone; the
-manifest's OCR is still used after the fact, by vlm_evaluate --fnr-override.
+The model judges the crop image alone: OCR text in the prompt makes the
+judgements worse. The manifest's OCR is still used after the fact, by
+vlm_evaluate --fnr-override.
 
 Anything that cannot be interpreted — timeout, HTTP error, unparsable answer —
 is logged in the «feil» column and becomes «usikker», NEVER «nei»: «nei» is
@@ -48,9 +48,8 @@ from filter_common import reclassify_invalid_covering
 
 STD_URL = "http://localhost:8000/v1"
 STD_TIMEOUT = 120
-# Measured answers land on 56-76 tokens, so this is roughly double the
-# longest one seen. A truncated answer is unparsable and becomes «usikker»,
-# never «nei», so the cap costs recall nothing when it does bite.
+# Roughly double a full answer. A truncated answer is unparsable and
+# becomes «usikker», never «nei», so the cap costs recall nothing when it bites.
 STD_MAX_TOKENS = 150
 
 # Set to None if the endpoint rejects the field — shared across the threads.
@@ -457,7 +456,7 @@ def write_missing_candidates(out_path, rows, a):
 
     A BOM box covers no fasit label. When the model says «ja» anyway, either
     it is wrong or the labelling missed a number, and only a human can tell
-    the two apart. The page is drawn the way valider_full draws its errors:
+    the two apart. The page is drawn the way run.py draws its errors:
     every prediction framed and numbered, every fasit label at half opacity,
     so the «#N» in the corner goes straight into note_missing_label.py.
 

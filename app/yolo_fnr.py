@@ -149,8 +149,8 @@ def is_too_narrow_yolo(box):
 def is_too_short_yolo(box):
     """Long side below MIN_LONG_SIDE_YOLO_PT is too short for 5 digits.
 
-    High confidence exempts (see _hopp_over_geometrifilter), unlike the short
-    side limit above.
+    High confidence exempts (see _skip_over_geometry_filter), unlike the
+    short side limit above.
     """
     x0, y0, x1, y1 = box[:4]
     return max(x1 - x0, y1 - y0) < MIN_LONG_SIDE_YOLO_PX

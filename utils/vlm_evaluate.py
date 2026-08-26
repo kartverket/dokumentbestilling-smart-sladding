@@ -1,6 +1,6 @@
 """Evaluates the VLM judgements against the fasit classes: cost against gain.
 
-Step 3 of the VLM verifier pilot. Joins judge_<mode>.csv against manifest.csv
+Step 3 of the VLM verifier pilot. Joins judge_image.csv against manifest.csv
 and weighs BOM boxes judged «nei» (gain: oversladdinger we can drop) against
 covering boxes judged «nei» (risk: real fnr). Same decision rule as every
 other filter in this repo: one lost fasit box must buy at least 20 removed

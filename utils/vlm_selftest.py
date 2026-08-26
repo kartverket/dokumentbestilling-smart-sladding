@@ -279,7 +279,7 @@ def main(keep):
               "prose falls back on keywords")
         check(parse_answer("")[0] == "usikker", "an empty answer becomes usikker")
         check(parse_answer("^^^")[0] == "usikker", "junk becomes usikker")
-        # The most expensive failure so far: full checklist, no «svar».
+        # A full checklist without «svar» is still a parse failure.
         without = parse_answer('{"linjen":"Dagboknr. 1234/1980","holdepunkt":"dagboknr",'
                          '"tall":"1234/1980"}')
         check(without[0] == "usikker" and "omitted the «svar»" in without[3],
@@ -292,8 +292,8 @@ def main(keep):
         from vlm_evaluate import _has_fnr_caption
         check(_fnr_candidate("loo190-00000"),
               "«loo190-00000» is recognised, o→0 and l→1")
-        # This cost us a real box: strip the spaces and the run glues to
-        # «1f1g» from «Iflg», and the boundary check fails.
+        # Strip the spaces and the run glues to «1f1g» from «Iflg», and
+        # the boundary check fails.
         check(_fnr_candidate("030392S0000 Iflg fullmakt"),
               "«030392S0000 Iflg fullmakt» is recognised despite neighbours")
         # The date of birth is in another form than DDMMYY, so there is no

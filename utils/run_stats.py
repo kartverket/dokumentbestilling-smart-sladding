@@ -46,8 +46,7 @@ def read_log_info(folder):
     log = folder / "logg.txt"
     if not log.exists():
         return info
-    # "Mappe:"/"Fasit-CSV:" are what result dirs written before the English
-    # translation carry; both spellings have to resolve.
+    # Older result dirs carry the Norwegian prefixes; both spellings have to resolve.
     for line in log.read_text(encoding="utf-8").splitlines():
         for prefix, key in (("Folder:", "folder"), ("Mappe:", "folder"),
                             ("Truth CSV:", "truth_csv"), ("Fasit-CSV:", "truth_csv")):
@@ -103,7 +102,7 @@ def paddle_stats(details, summary):
     s["sider"] = len({(r["fil"], r["side"]) for r in details})
 
     s["pred"] = int(summary.get("pred", 0))
-    # old result dirs: "overflod" (pre-translation) or "surplus" (aug 2026)
+    # older result dirs name this field "surplus" or "overflod"
     s["oversladd"] = int(summary.get("oversladd")
                          or summary.get("surplus")
                          or summary.get("overflod") or 0)
