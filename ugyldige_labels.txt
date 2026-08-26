@@ -213,3 +213,5 @@ ee74366c-c457-4eb8-b692-45642d115f5e    # kontonummer
 0b5bde87-3c84-4ed1-ae35-8ebfc880fa52    # orgnr
 07eaef38-56e0-4577-8a34-fb8e135c782d    # én sladd over 2 fnr (mangler-ac97c015c2ec)
 36abb01f-991d-4d52-b92b-e2947006dd19    # én sladd over 2 fnr (mangler-f527304024f5)
+814fb09d-cfa0-400a-bdfd-789dcbdda3dd    # én sladd over 2 fnr (mangler-137e42a83391, mangler-2e8ff5a78b3a)
+8bfa817e-dc92-4399-8b7e-bf6c6de01e87    # én sladd over 2 fnr (mangler-4642055de044, mangler-6503db200297)
