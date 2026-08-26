@@ -5,7 +5,13 @@ from collections import defaultdict
 
 import fitz
 
+_APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
+if _APP not in sys.path:
+    sys.path.insert(0, _APP)
+
+from geometry import intersection_area, area
 from save_result import write_result_files
+from utils_config import HIT_THRESHOLD
 
 
 def _doc_no(name):
@@ -21,16 +27,6 @@ def _norm_csv(x, y, w, h, pw, ph, y_origin):
     return (x0 / pw, y0 / ph, x1 / pw, y1 / ph)
 
 
-def _overlap(a, b):
-    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
-    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
-    return (ix1 - ix0) * (iy1 - iy0) if (ix1 > ix0 and iy1 > iy0) else 0.0
-
-
-def _area(a):
-    return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
-
-
 def _page_str(name, si, folder, sladd_boxes):
     file = os.path.join(folder, name)
     if file.lower().endswith(".pdf"):
@@ -44,7 +40,7 @@ def _page_str(name, si, folder, sladd_boxes):
     iw, ih, _ = sladd_boxes[(name, si)]
     return iw, ih
 
-def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin="top", sources=None,
+def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, y_origin="top", sources=None,
                  yolo_boxes=None, write=None, diagnostics=True):
     """Measures sladd boxes against the truth labels.
 
@@ -83,7 +79,9 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
             source_names = [b[4] if len(b) > 4 else "paddle" for b in with_source]
             conf_names  = [b[5] if len(b) > 5 else None for b in with_source]
         pw, ph = _page_str(name, si, folder, sladd_boxes)
-        pred = [(b[0] / iw, (b[1] - 2) / ih, b[2] / iw, (b[3] + 2) / ih) for b in raw]
+        # Scaled, not padded: redaction._pixel_to_point blacks out the raw box,
+        # so anything added here would be recall the PDF never gets.
+        pred = [(b[0] / iw, b[1] / ih, b[2] / iw, b[3] / ih) for b in raw]
         filtered_boxes = [(_norm_csv(x, y, w, h, pw, ph, y_origin), t)
                    for (x, y, w, h, t) in truth.get((nr, si), [])]
 
@@ -93,15 +91,15 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=0.32, y_origin=
         if filtered_boxes:
             write(f"\n{name}  (doc_no={nr}, page {si})")
         for fi, (fb, t) in enumerate(filtered_boxes):
-            fa = _area(fb)
+            fa = area(fb)
             best_cov = best_iou = best_ov = 0.0
             best_pi = -1
             for pi, pb in enumerate(pred):
-                ov = _overlap(fb, pb)
+                ov = intersection_area(fb, pb)
                 if ov > best_ov:
                     best_ov = ov
                     best_cov = ov / fa if fa else 0.0
-                    best_iou = ov / (fa + _area(pb) - ov)
+                    best_iou = ov / (fa + area(pb) - ov)
                     best_pi = pi
             hit = best_cov >= threshold
             if source_names:

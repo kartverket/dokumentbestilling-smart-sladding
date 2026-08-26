@@ -16,11 +16,12 @@ from config import (DEDUP_OVERLAP, PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF,
                     SEKSJONERING_MAX_SHORT_SIDE_PT, SEKSJONERING_MAX_LONG_SIDE_PT,
                     SEKSJONERING_PADDLE_MIN_ELONG, SEKSJONERING_MIN_DIGITS,
                     SEKSJONERING_REC_VETO, SEKSJONERING_CONF_EXEMPT)
+from geometry import smallest_share
 from load_pdf import read_pages_from_bytes
 from paddle_ocr_model_fnr import (read_tokens_batched, sladd_boxes_from_tokens,
                                   lines_with_fnr_marks, build_lines)
 from orientation import find_rotations_batch, unrotate_box
-from yolo_fnr import (find_yolo_boxes, lenient_check, tokens_in_box, overlap_share_box,
+from yolo_fnr import (find_yolo_boxes, lenient_check, tokens_in_box,
                       is_vertical, is_too_small, has_wrong_ratio, is_too_thin,
                       is_too_narrow_yolo, is_too_short_yolo, has_paddle_noise_shape)
 from box_features import features_for_box
@@ -197,7 +198,7 @@ def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
 
     for (x0, y0, x1, y1, conf) in yolo_boxes:
         yb = (x0, y0, x1, y1)
-        covered = [pair for pair in boxes if overlap_share_box(yb, pair[0]) > DEDUP_OVERLAP]
+        covered = [pair for pair in boxes if smallest_share(yb, pair[0]) > DEDUP_OVERLAP]
         # Only Paddle hits may be promoted to "begge". Renaming earlier YOLO
         # boxes too contaminated the "begge" bucket with pure YOLO hits and
         # hid them from the OCR rules, which only apply to kilde "yolo".

@@ -14,6 +14,7 @@ if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
 from config import MAX_WIDTH_ELECTRONIC_PT
+from utils_config import HIT_THRESHOLD
 from csv_export import read_result_csv
 from evaluation import read_truth_xywh, evaluate_against_truth
 from load_pdf import PDF_DPI, read_pages
@@ -163,8 +164,8 @@ def main():
                    help="run YOLO and show hits as red frames with conf")
     p.add_argument("--truth", action="store_true",
                    help="measure recall against the truth and print it")
-    p.add_argument("--threshold", type=float, default=0.32,
-                   help="overlap threshold for a hit (default 0.32)")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD,
+                   help=f"overlap threshold for a hit (default {HIT_THRESHOLD})")
     p.add_argument("--only-oversladd", action="store_true",
                    help="draw only pages with over-sladding (a box with no truth hit), "
                         "written to kun_oversladd/ under --png-dir")

@@ -31,7 +31,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from filter_common import (STD_CRITERION, STD_SLOPPINESS_FACTOR, STD_THRESHOLD,
+from filter_common import (STD_CRITERION, STD_SLOPPINESS_FACTOR, HIT_THRESHOLD,
                            build_dataset, read_truth_boxes, read_predictions)
 
 
@@ -67,7 +67,7 @@ def main():
     p.add_argument("--metadata-csv", required=True)
     p.add_argument("--truth-csv", required=True)
     p.add_argument("--res-csv", required=True)
-    p.add_argument("--threshold", type=float, default=STD_THRESHOLD)
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD)
     p.add_argument("--criterion", default=STD_CRITERION)
     p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR)
     p.add_argument("--exclude-unlabelled", dest="include_unlabelled",

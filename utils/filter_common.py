@@ -35,35 +35,24 @@ except ImportError:  # running outside the repo
                   "har_00_run", "har_orgnr", "har_org_ord", "lang_run",
                   "maks_luke", "har_desimal_luke")
 
+from geometry import intersection_area, area
+
 try:
-    from utils_config import Y_ORIGIN
+    from utils_config import Y_ORIGIN, HIT_THRESHOLD
 except ImportError:      # running outside the repo
     Y_ORIGIN = "top"
+    HIT_THRESHOLD = 0.32
 
 SCALE = PDF_DPI / 72.0   # PDF points -> pixels
 
-# Set by MANUAL review of borderline crops (filter_review.py --band areal LO HI),
-# not geometry: false hits on the neighbouring line are rare (12 of 20019 on
-# uttrekk 4), so discarding real hits costs more. Do not change without a review.
-STD_THRESHOLD = 0.32       # min coverage of a truth box for a prediction to "hit"
 STD_SLOPPINESS_FACTOR = 3.0   # pred area > factor x covered truth area => SLURV
 
 
-# ── Geometry ─────────────────────────────────────────────────
+# ── Document ids ─────────────────────────────────────────────
 
 def doc_no(name):
     m = re.match(r"0*(\d+)", os.path.basename(name))
     return int(m.group(1)) if m else None
-
-
-def overlap(a, b):
-    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
-    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
-    return (ix1 - ix0) * (iy1 - iy0) if (ix1 > ix0 and iy1 > iy0) else 0.0
-
-
-def area(a):
-    return max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
 
 
 # ── Match metrics ────────────────────────────────────────────
@@ -77,7 +66,7 @@ def match_metrics(pn, fn, truth_horizontal):
     explicitly rather than y. truth_horizontal must be decided in POINT space by
     the caller: normalising skews w/h, so a near-square box can flip orientation.
     """
-    o = overlap(pn, fn)
+    o = intersection_area(pn, fn)
     if o <= 0:
         return None
     fa, pa = area(fn), area(pn)
@@ -121,7 +110,8 @@ STD_CRITERION = "area"
 
 # Measured on label pairs from uttrekk 4 + 5. "long_side" is absent on purpose: it
 # separates neighbouring lines poorly (shared long-side extent) and is uncalibrated.
-RECOMMENDED_THRESHOLDS = {"area": 0.32, "short_side": 0.60, "iou": 0.20, "center": 0.40}
+RECOMMENDED_THRESHOLDS = {"area": HIT_THRESHOLD, "short_side": 0.60,
+                          "iou": 0.20, "center": 0.40}
 
 
 # ── Loading ──────────────────────────────────────────────────
@@ -519,7 +509,7 @@ class Dataset:
         return sorted({p["kilde"] for p in self.pred})
 
 
-def build_dataset(truth, pred, threshold=STD_THRESHOLD,
+def build_dataset(truth, pred, threshold=HIT_THRESHOLD,
                   oversize_factor=STD_SLOPPINESS_FACTOR, include_unlabelled=False,
                   processed_doc=None, criterion=STD_CRITERION):
     """Joins predictions to truth boxes, setting p["dekker"] (truth-box indices

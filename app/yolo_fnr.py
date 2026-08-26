@@ -10,6 +10,7 @@ from config import (
     MIN_SHORT_SIDE_YOLO_PT, MIN_LONG_SIDE_YOLO_PT,
     MIN_SHORT_SIDE_PADDLE_PT, MIN_LONG_SIDE_PADDLE_PT, MAX_ELONGATION_PADDLE,
     PDF_DPI, default_weights)
+from geometry import covered_share
 
 YOLO_WEIGHTS = default_weights()
 MIN_SHORT_SIDE_PX = MIN_SHORT_SIDE_PT * PDF_DPI / 72.0
@@ -77,18 +78,9 @@ def find_yolo_boxes(image, conf=None):
     return ut
 
 
-def _overlap_share(t, box):
-    bx0, by0, bx1, by1 = box
-    ix0, iy0 = max(t.x0, bx0), max(t.y0, by0)
-    ix1, iy1 = min(t.x1, bx1), min(t.y1, by1)
-    if ix1 <= ix0 or iy1 <= iy0:
-        return 0.0
-    ta = (t.x1 - t.x0) * (t.y1 - t.y0)
-    return ((ix1 - ix0) * (iy1 - iy0)) / ta if ta else 0.0
-
-
 def tokens_in_box(tokens, box, threshold=0.3):
-    return [t for t in tokens if _overlap_share(t, box) > threshold]
+    return [t for t in tokens
+            if covered_share((t.x0, t.y0, t.x1, t.y1), box) > threshold]
 
 
 def count_digits_and_letters(tokens):
@@ -175,14 +167,3 @@ def has_paddle_noise_shape(box):
         return True
     return (short < MIN_SHORT_SIDE_PADDLE_PX or long < MIN_LONG_SIDE_PADDLE_PX
             or long / short > MAX_ELONGATION_PADDLE)
-
-
-
-def overlap_share_box(a, b):
-    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
-    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
-    if ix1 <= ix0 or iy1 <= iy0:
-        return 0.0
-    ov = (ix1 - ix0) * (iy1 - iy0)
-    least = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-    return ov / least if least else 0.0

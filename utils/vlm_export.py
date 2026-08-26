@@ -36,7 +36,7 @@ import fitz
 from PIL import Image, ImageDraw
 
 from filter_common import (CRITERIA, PDF_DPI, SCALE, STD_CRITERION,
-                           STD_SLOPPINESS_FACTOR, STD_THRESHOLD, build_dataset,
+                           STD_SLOPPINESS_FACTOR, HIT_THRESHOLD, build_dataset,
                            doc_no, read_truth_boxes, read_truth_rows,
                            read_processed_docs, read_predictions,
                            write_summary)
@@ -474,8 +474,8 @@ def main():
                         "rs_<CODE>.txt for one rettsstiftelse type.")
     p.add_argument("--criterion", default=STD_CRITERION, choices=sorted(CRITERIA),
                    help=f"Coverage match rule (default {STD_CRITERION})")
-    p.add_argument("--threshold", type=float, default=STD_THRESHOLD,
-                   help=f"Overlap threshold (default {STD_THRESHOLD})")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD,
+                   help=f"Overlap threshold (default {HIT_THRESHOLD})")
     p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR,
                    help=f"SLURV limit (default {STD_SLOPPINESS_FACTOR})")
     p.add_argument("--include-unlabelled", action="store_true", default=True,

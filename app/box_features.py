@@ -43,6 +43,7 @@ import re
 import statistics
 
 from config import FEATURE_FIELDS                                   # noqa: F401, re-export
+from geometry import intersection_area
 from paddle_ocr_model_fnr import find_fnr
 from yolo_fnr import count_digits_and_letters, tokens_in_box
 
@@ -60,17 +61,12 @@ _ORG_ORD = re.compile(
     r"|sparebank|bank|forsikring|org\.?\s*nr|organisasjonsn|foretak)")
 
 
-def _overlap_area(t, box):
-    ix0, iy0 = max(t.x0, box[0]), max(t.y0, box[1])
-    ix1, iy1 = min(t.x1, box[2]), min(t.y1, box[3])
-    return (ix1 - ix0) * (iy1 - iy0) if (ix1 > ix0 and iy1 > iy0) else 0.0
-
-
 def _select_line(lines, box):
     """The line the box sits on: the one with the largest token overlap."""
     best, best_ov = None, 0.0
     for post in lines:
-        ov = sum(_overlap_area(t, box) for t in post[0])
+        ov = sum(intersection_area((t.x0, t.y0, t.x1, t.y1), box)
+                 for t in post[0])
         if ov > best_ov:
             best, best_ov = post, ov
     return best

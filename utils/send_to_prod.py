@@ -12,7 +12,9 @@ _APP = os.path.join(os.path.dirname(__file__), "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
-from evaluation import read_truth_xywh, _overlap, _area, _doc_no
+from evaluation import read_truth_xywh, _doc_no
+from geometry import intersection_area, area
+from utils_config import HIT_THRESHOLD
 
 FIELD = ["navn", "side", "x", "y", "width", "height"]
 
@@ -60,10 +62,10 @@ def _evaluate(pred_boxes, sent_doc_no, truth, threshold):
         preds = pred_boxes.get((nr, page), [])
         for (fx, fy, fw, fh, _t) in filtered_boxes:
             f = _to_xyxy(fx, fy, fw, fh)
-            fa = _area(f)
+            fa = area(f)
             best, bpi = 0.0, -1
             for pi, pb in enumerate(preds):
-                ov = _overlap(f, pb)
+                ov = intersection_area(f, pb)
                 if ov > best:
                     best, bpi = ov, pi
             truth_tot += 1
@@ -94,8 +96,8 @@ def main():
                    help="truth CSV for the automatic evaluation at the end")
     p.add_argument("--report-out", default="res_prod_fasit.txt",
                    help="txt report with hits/oversladding/timing")
-    p.add_argument("--threshold", type=float, default=0.32,
-                   help="fraction of truth area required for a hit (default 0.32)")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD,
+                   help=f"fraction of truth area required for a hit (default {HIT_THRESHOLD})")
     p.add_argument("--no-truth", action="store_true", help="skip the automatic evaluation against truth")
     args = p.parse_args()
 

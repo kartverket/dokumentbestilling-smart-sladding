@@ -29,12 +29,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from filter_common import (CRITERIA, CRITERION_FIELDS, CRITERION_LOW_IS_GOOD,
                            PDF_DPI, SCALE, STD_CRITERION, STD_SLOPPINESS_FACTOR,
-                           STD_THRESHOLD,
+                           HIT_THRESHOLD,
                            build_dataset, doc_no, measure_filter, rejection_reasons,
-                           match_metrics, overlap,
+                           match_metrics,
                            make_filter, make_filter_per_source, read_truth_boxes, read_processed_docs,
                            read_truth_rows, read_predictions, parse_per_source,
                            write_summary, OCR_PARAMS, GEOMETRY_PARAMETERS)
+from geometry import intersection_area
 
 # ── Colors ────────────────────────────────────────────────────
 LOST_TRUTH         = (230, 0, 200, 255)     # magenta
@@ -194,7 +195,7 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
         fx0, fy0, fx1, fy1 = fb["box"]
         for p in removed_for.get(j, [{}]):
             fa = fb["norm_areal"]
-            coverage = (overlap(p["norm"], fb["norm"]) / fa * 100
+            coverage = (intersection_area(p["norm"], fb["norm"]) / fa * 100
                        if p and fa > 0 else "")
             manifest.append({
                 "coverage_pct": round(coverage, 1) if coverage != "" else "",
@@ -1081,7 +1082,7 @@ def _p10_p50_p90(values):
 
 
 def review_uncovered(truth_csv, res_csv, folder, out_dir,
-                        criterion=STD_CRITERION, threshold=STD_THRESHOLD,
+                        criterion=STD_CRITERION, threshold=HIT_THRESHOLD,
                         good_coverage=0.90, processed_doc=None, also_ml=False,
                         max_crop=None, crop_margin=60.0):
     """Catalogues and draws ground-truth boxes without (good enough) coverage."""
@@ -1327,8 +1328,8 @@ def main():
     p.add_argument("--criterion", default=STD_CRITERION,
                    choices=sorted(CRITERIA),
                    help=f"Match rule for coverage (default: {STD_CRITERION})")
-    p.add_argument("--threshold", type=float, default=STD_THRESHOLD,
-                   help=f"Overlap threshold for coverage (default: {STD_THRESHOLD})")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD,
+                   help=f"Overlap threshold for coverage (default: {HIT_THRESHOLD})")
     p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR,
                    help=f"SLURV limit (default: {STD_SLOPPINESS_FACTOR})")
     p.add_argument("--include-unlabelled", action="store_true", default=True,

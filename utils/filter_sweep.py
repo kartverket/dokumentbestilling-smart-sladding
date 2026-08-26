@@ -25,11 +25,15 @@ from itertools import product
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from filter_common import (RECOMMENDED_THRESHOLDS, CRITERIA, STD_CRITERION,
-                           STD_SLOPPINESS_FACTOR, STD_THRESHOLD, baseline,
+                           STD_SLOPPINESS_FACTOR, HIT_THRESHOLD, baseline,
                            build_dataset, measure_filter, make_filter,
                            make_filter_per_source, read_truth_boxes, read_processed_docs, read_predictions,
                            match_metrics, pareto_front, write_summary,
                            split_by_document)
+
+# Default curve for --threshold-list. HIT_THRESHOLD is in it on purpose: the
+# curve only reads as a curve when it passes through the operating point.
+STD_THRESHOLD_LIST = sorted({0.15, 0.25, HIT_THRESHOLD, 0.40, 0.50, 0.70, 0.90})
 
 # spec = {None: kwargs} for a global filter, else {kilde: kwargs}.
 Row = namedtuple("Row", "m label spec")
@@ -648,8 +652,8 @@ def main():
                         "REJECTED excluded)")
     p.add_argument("--res-csv", required=True,
                    help="Result CSV from the model (pixel coordinates)")
-    p.add_argument("--threshold", type=float, default=STD_THRESHOLD,
-                   help=f"Overlap threshold for coverage (default: {STD_THRESHOLD})")
+    p.add_argument("--threshold", type=float, default=HIT_THRESHOLD,
+                   help=f"Overlap threshold for coverage (default: {HIT_THRESHOLD})")
     p.add_argument("--criterion", default=STD_CRITERION,
                    choices=sorted(CRITERIA),
                    help="Rule for whether a prediction and a ground-truth box "
@@ -659,7 +663,7 @@ def main():
                         f"(default: {STD_CRITERION})")
     p.add_argument("--threshold-list", default=None, metavar="T,T,...",
                    help="Thresholds in the threshold sweep, comma separated "
-                        "(default: 0.15,0.25,0.32,0.40,0.50,0.70,0.90)")
+                        f"(default: {','.join(f'{t:g}' for t in STD_THRESHOLD_LIST)})")
     p.add_argument("--criterion-diff", nargs=2, default=None,
                    metavar=("A", "B"),
                    help="Compare two match rules and show how many hits drop "
@@ -788,7 +792,7 @@ def main():
 
         thresholds = ([float(t) for t in args.threshold_list.split(",")]
                     if args.threshold_list
-                    else [0.15, 0.25, 0.32, 0.40, 0.50, 0.70, 0.90])
+                    else STD_THRESHOLD_LIST)
         _sweep_threshold(truth, pred, thresholds, args.threshold,
                        args.oversize_factor, args.include_unlabelled, processed,
                        criterion=args.criterion)

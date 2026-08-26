@@ -9,8 +9,12 @@ SLADD_DIR  = "sladdet"
 Y_ORIGIN     = "top"         
 
 # --- Evaluation ---
-# Share of the truth area required for a HIT. Manually validated, see
-# STD_THRESHOLD in filter_common.py.
+# Share of the truth area a prediction must cover to count as a HIT. Defined
+# once here; filter_common, evaluation, draw_from_csv and send_to_prod all read
+# it from this line, so run.py and the sweep measure the same thing.
+# Set by MANUAL review of borderline crops (filter_review.py --band areal LO HI),
+# not by geometry: false hits on the neighbouring line are rare (12 of 20019 on
+# uttrekk 4), so discarding real hits costs more. Do not change without a review.
 HIT_THRESHOLD      = 0.32
 
 # --- Colors (visualization.py) ---
