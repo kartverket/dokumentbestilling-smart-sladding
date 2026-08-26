@@ -94,6 +94,89 @@ def _render_page(doc, si):
     return Image.frombytes(mode, (pix.w, pix.h), pix.samples).convert("RGB")
 
 
+def _overlay(image):
+    """Fresh transparent layer over a rendered page: (base, overlay, drawer)."""
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    return base, overlay, ImageDraw.Draw(overlay)
+
+
+def _flatten(base, overlay):
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def _crop_box(image, rect, margin):
+    """rect grown by margin and clamped to the image, None if nothing is left.
+
+    margin is one number, or (x, y) where the page scale differs per axis.
+    """
+    mx, my = margin if isinstance(margin, tuple) else (margin, margin)
+    box = (max(0, int(rect[0] - mx)), max(0, int(rect[1] - my)),
+           min(image.width, int(rect[2] + mx)),
+           min(image.height, int(rect[3] + my)))
+    return box if box[2] > box[0] and box[3] > box[1] else None
+
+
+def _save_crop(image, rect, margin, path):
+    """Writes one crop; False when the box has no area left after clamping."""
+    box = _crop_box(image, rect, margin)
+    if box is None:
+        return False
+    image.crop(box).save(path)
+    return True
+
+
+def _write_manifest(out_dir, filename, rows, fields):
+    """Writes a review manifest under out_dir and returns its path."""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, filename)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    return path
+
+
+def iter_pdf_pages(folder, work, file_key=None, page_key=None, on_missing=None):
+    """Opens each PDF once and yields (name, page number, items, doc) per page.
+
+    work maps file name -> {page number: items}, where items is whatever the
+    caller needs on that page and comes straight back out. All pages of one
+    file arrive together, so a per-file cache can be rebuilt when the name
+    changes. file_key orders the files, page_key(name, si) orders one file's
+    pages; both fall back to natural order.
+
+    A file that is missing or unreadable, and a page number outside the
+    document, is reported and skipped. on_missing(name, items) then runs once
+    per skipped page, so the caller can count what it never got.
+    """
+    for name in sorted(work, key=file_key):
+        pages = work[name]
+        path = os.path.join(folder, name)
+        doc = problem = None
+        if not os.path.isfile(path):
+            problem = f"  ⚠ Cannot find {path}, skipping"
+        else:
+            try:
+                doc = fitz.open(path)
+            except Exception as e:
+                problem = f"  ⚠ Could not open {name}: {e!r}"
+        if problem:
+            print(problem)
+            for items in pages.values():
+                if on_missing:
+                    on_missing(name, items)
+            continue
+        try:
+            for si in sorted(pages, key=lambda s: page_key(name, s) if page_key else s):
+                if 1 <= si <= len(doc):
+                    yield name, si, pages[si], doc
+                elif on_missing:
+                    on_missing(name, pages[si])
+        finally:
+            doc.close()
+
+
 def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
                    only_lost=False, select=None, max_pages=None,
                    crop_margin=60.0):
@@ -188,18 +271,13 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
         crop_name.setdefault(row["_j"], []).append(row["utsnitt"])
 
     if manifest:
-        os.makedirs(out_dir, exist_ok=True)
-        manifest_path = os.path.join(out_dir, "lost.csv")
         field = ["nr", "fil", "side", "label_id", "reason", "coverage_pct",
                 "kilde", "conf",
                 "elongation", "kortside_pt", "langside_pt",
                 "pred_bredde_pt", "pred_hoyde_pt", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "dekkere_foer", "fasit_x0", "fasit_y0",
                 "utsnitt", "vurdering"]
-        with open(manifest_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=field, extrasaction="ignore")
-            w.writeheader()
-            w.writerows(manifest)
+        manifest_path = _write_manifest(out_dir, "lost.csv", manifest, field)
         print(f"  Manifest of lost boxes: {manifest_path}")
         print(f"    {len(manifest)} rows for {len(lost_ids)} lost boxes"
               + ("  (a box can have several removed covers)"
@@ -217,9 +295,7 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
         lost_per_page[(fb["doc_no"], fb["side"])] += 1
 
     pages = defaultdict(lambda: {"critical": 0, "redundant": 0, "oversladd": 0})
-    name_for_doc = {}
     for p in ds.pred:
-        name_for_doc.setdefault(p["doc_no"], p["navn"])
         if p["_kat"]:
             pages[(p["navn"], p["side"])][p["_kat"]] += 1
 
@@ -251,122 +327,103 @@ def generate_images(ds, folder, out_dir, filter_kwargs=None, per_source=None,
     per_page = defaultdict(list)
     for p in ds.pred:
         per_page[(p["navn"], p["side"])].append(p)
-    truth_indices_per_page = defaultdict(list)
+    truth_per_page = defaultdict(list)
     for j, fb in enumerate(ds.truth_boxes):
-        truth_indices_per_page[(fb["doc_no"], fb["side"])].append(j)
-    truth_per_page = truth_indices_per_page
+        truth_per_page[(fb["doc_no"], fb["side"])].append(j)
 
-    # Draw worst first so the lost pages are ready early, but group by file so
-    # each PDF is still opened only once.
+    # Worst page first, so the lost ones are ready early; iter_pdf_pages still
+    # opens each PDF once.
     rang = {(name, si): i for i, (_, _, _, name, si) in enumerate(relevant)}
-    per_file = defaultdict(list)
+    work = defaultdict(dict)
     for (_, _, _, name, si) in relevant:
-        per_file[name].append(si)
+        work[name][si] = per_page[(name, si)]
 
     tally = defaultdict(int)
     n_drawn = 0
-    for name in sorted(per_file,
-                       key=lambda n: min(rang[(n, s)] for s in per_file[n])):
-        path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            print(f"  ⚠ Cannot find {path}, skipping")
+    for name, si, page_pred, doc in iter_pdf_pages(
+            folder, work,
+            file_key=lambda n: min(rang[(n, s)] for s in work[n]),
+            page_key=lambda n, s: rang[(n, s)]):
+        if not page_pred:
             continue
-        try:
-            doc = fitz.open(path)
-        except Exception as e:
-            print(f"  ⚠ Could not open {name}: {e!r}")
-            continue
+        image = _render_page(doc, si)
+        base, overlay, drawer = _overlay(image)
+        sx = image.width / page_pred[0]["bw"]
+        sy = image.height / page_pred[0]["bh"]
 
-        for si in sorted(per_file[name], key=lambda s: rang[(name, s)]):
-            if not 1 <= si <= len(doc):
-                continue
-            page_pred = per_page[(name, si)]
-            if not page_pred:
-                continue
+        for j in truth_per_page.get((doc_no(name), si), ()):
+            fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
+            r = [fx0 * SCALE * sx, fy0 * SCALE * sy,
+                 fx1 * SCALE * sx, fy1 * SCALE * sy]
+            if j in lost_ids:
+                # Inflate a little, else the prediction hides it
+                outer = [r[0] - 6, r[1] - 6, r[2] + 6, r[3] + 6]
+                drawer.rectangle(outer, outline=LOST_TRUTH, width=5)
+                drawer.text((outer[0] + 2, max(outer[1] - 44, 2)),
+                            "LOST TRUTH", fill=LOST_TRUTH,
+                            font=_font_small())
+            else:
+                drawer.rectangle(r, outline=TRUTH, width=2)
 
-            image = _render_page(doc, si)
-            base = image.convert("RGBA")
-            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            drawer = ImageDraw.Draw(overlay)
-            sx = image.width / page_pred[0]["bw"]
-            sy = image.height / page_pred[0]["bh"]
-
-            for j in truth_per_page.get((doc_no(name), si), ()):
-                fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
-                r = [fx0 * SCALE * sx, fy0 * SCALE * sy,
-                     fx1 * SCALE * sx, fy1 * SCALE * sy]
-                if j in lost_ids:
-                    # Inflate a little, else the prediction hides it
-                    outer = [r[0] - 6, r[1] - 6, r[2] + 6, r[3] + 6]
-                    drawer.rectangle(outer, outline=LOST_TRUTH, width=5)
-                    drawer.text((outer[0] + 2, max(outer[1] - 44, 2)),
-                                "LOST TRUTH", fill=LOST_TRUTH,
-                                font=_font_small())
-                else:
-                    drawer.rectangle(r, outline=TRUTH, width=2)
-
-            for p in page_pred:
-                if p["_kat"] is None:
-                    px = p["px"]
-                    drawer.rectangle([px[0] * sx, px[1] * sy,
-                                      px[2] * sx, px[3] * sy],
-                                     outline=KEPT, width=1)
-
-            colors = {"critical": CRITICAL_REMOVED,
-                      "redundant": REDUNDANT_REMOVED,
-                      "oversladd": OVERSLADD_REMOVED}
-            has = set()
-            for p in page_pred:
-                if p["_kat"] is None:
-                    continue
+        for p in page_pred:
+            if p["_kat"] is None:
                 px = p["px"]
-                r = [px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy]
-                color = colors[p["_kat"]]
-                has.add(p["_kat"])
-                drawer.rectangle(r, outline=color, width=4)
-                mark = p["_kat"].upper()
-                if p["klasse"] == "SLURV":
-                    mark += "/SLURV"
-                _draw_text(drawer, r, f"{mark} [{p['kilde']}]", color, over=True)
-                _draw_text(drawer, r, "; ".join(p["_reasons"]), color, over=False)
-                if p["conf"] is not None:
-                    drawer.text((r[0] + 2, max(r[1] + 2, 2)),
-                                f"conf={p['conf']:.2f}", fill=color,
-                                font=_font_small())
+                drawer.rectangle([px[0] * sx, px[1] * sy,
+                                  px[2] * sx, px[3] * sy],
+                                 outline=KEPT, width=1)
 
-            image = Image.alpha_composite(base, overlay).convert("RGB")
+        colors = {"critical": CRITICAL_REMOVED,
+                  "redundant": REDUNDANT_REMOVED,
+                  "oversladd": OVERSLADD_REMOVED}
+        has = set()
+        for p in page_pred:
+            if p["_kat"] is None:
+                continue
+            px = p["px"]
+            r = [px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy]
+            color = colors[p["_kat"]]
+            has.add(p["_kat"])
+            drawer.rectangle(r, outline=color, width=4)
+            mark = p["_kat"].upper()
+            if p["klasse"] == "SLURV":
+                mark += "/SLURV"
+            _draw_text(drawer, r, f"{mark} [{p['kilde']}]", color, over=True)
+            _draw_text(drawer, r, "; ".join(p["_reasons"]), color, over=False)
+            if p["conf"] is not None:
+                drawer.text((r[0] + 2, max(r[1] + 2, 2)),
+                            f"conf={p['conf']:.2f}", fill=color,
+                            font=_font_small())
 
-            if crop_margin:
-                margin = crop_margin * SCALE
-                for j in truth_indices_per_page.get((doc_no(name), si), ()):
-                    if j not in lost_ids:
-                        continue
-                    fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
-                    box = (max(0, int(fx0 * SCALE * sx - margin)),
-                            max(0, int(fy0 * SCALE * sy - margin)),
-                            min(image.width, int(fx1 * SCALE * sx + margin)),
-                            min(image.height, int(fy1 * SCALE * sy + margin)))
-                    if box[2] <= box[0] or box[3] <= box[1]:
-                        continue
-                    ut = os.path.join(mapper["lost"], "utsnitt")
-                    os.makedirs(ut, exist_ok=True)
-                    for filename_u in crop_name.get(j, ()):
-                        image.crop(box).save(os.path.join(ut, filename_u))
-                        tally["utsnitt"] += 1
+        image = _flatten(base, overlay)
 
-            filename = f"{os.path.splitext(name)[0]}_side{si}.png"
-            if "critical" in has:
-                image.save(os.path.join(mapper["lost"], filename))
-                tally["lost"] += 1
-            if "redundant" in has:
-                image.save(os.path.join(mapper["redundant_fjernet"], filename))
-                tally["redundant_fjernet"] += 1
-            if "oversladd" in has:
-                image.save(os.path.join(mapper["oversladd_fjernet"], filename))
-                tally["oversladd_fjernet"] += 1
-            n_drawn += 1
+        if crop_margin:
+            margin = crop_margin * SCALE
+            for j in truth_per_page.get((doc_no(name), si), ()):
+                if j not in lost_ids:
+                    continue
+                fx0, fy0, fx1, fy1 = ds.truth_boxes[j]["box"]
+                box = _crop_box(image, [fx0 * SCALE * sx, fy0 * SCALE * sy,
+                                        fx1 * SCALE * sx, fy1 * SCALE * sy],
+                                margin)
+                if box is None:
+                    continue
+                ut = os.path.join(mapper["lost"], "utsnitt")
+                os.makedirs(ut, exist_ok=True)
+                for filename_u in crop_name.get(j, ()):
+                    image.crop(box).save(os.path.join(ut, filename_u))
+                    tally["utsnitt"] += 1
 
-        doc.close()
+        filename = f"{os.path.splitext(name)[0]}_side{si}.png"
+        if "critical" in has:
+            image.save(os.path.join(mapper["lost"], filename))
+            tally["lost"] += 1
+        if "redundant" in has:
+            image.save(os.path.join(mapper["redundant_fjernet"], filename))
+            tally["redundant_fjernet"] += 1
+        if "oversladd" in has:
+            image.save(os.path.join(mapper["oversladd_fjernet"], filename))
+            tally["oversladd_fjernet"] += 1
+        n_drawn += 1
 
     for name, path in mapper.items():
         if os.path.isdir(path) and not os.listdir(path):
@@ -503,93 +560,79 @@ def triage_bom(ds, folder, out_dir, select=None, max_pages=None, source=None,
     for fb in ds.truth_boxes:
         truth_per_page[(fb["doc_no"], fb["side"])].append(fb)
 
-    # Ranked order (begge pages first), but grouped per file to open each once.
+    # Ranked order (begge pages first); iter_pdf_pages still opens each PDF once.
     rang = {sort_key: i for i, (sort_key, _) in enumerate(ranked)}
-    per_file = defaultdict(list)
+    work = defaultdict(dict)
     for (name, si), _ in ranked:
-        per_file[name].append(si)
+        work[name][si] = per_page[(name, si)]
 
     tally = defaultdict(int)
     n_drawn = 0
-    for name in sorted(per_file,
-                       key=lambda n: min(rang[(n, s)] for s in per_file[n])):
-        path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            print(f"  ⚠ Cannot find {path}, skipping")
-            continue
-        try:
-            doc = fitz.open(path)
-        except Exception as e:
-            print(f"  ⚠ Could not open {name}: {e!r}")
-            continue
+    cache = cache_for = None
+    for name, si, page_pred, doc in iter_pdf_pages(
+            folder, work,
+            file_key=lambda n: min(rang[(n, s)] for s in work[n]),
+            page_key=lambda n, s: rang[(n, s)]):
+        if name != cache_for:
+            cache_for = name
+            cache = _read_ocr_cache(ocr_dir, name) if ocr_dir else None
+            if ocr_dir and cache is None:
+                print(f"  ⚠ No OCR cache for {name}, drawing without text layer")
+        image = _render_page(doc, si)
+        w0, h0 = image.width, image.height
+        k, tokens = 0, []
+        if cache:
+            rotations, tokens_per_page = cache
+            if si <= len(rotations):
+                k = rotations[si - 1] or 0
+                tokens = tokens_per_page[si - 1]
+            if k:
+                # Same rotation the pipeline OCR'd with (np.rot90 = CCW)
+                image = image.rotate(90 * k, expand=True)
+            image = Image.blend(
+                Image.new("RGB", image.size, (255, 255, 255)),
+                image, ocr_opacity)
+        base, overlay, drawer = _overlay(image)
+        sx = w0 / page_pred[0]["bw"]
+        sy = h0 / page_pred[0]["bh"]
+        if cache and tokens:
+            bw, bh = page_pred[0]["bw"], page_pred[0]["bh"]
+            rot_w, rot_h = (bh, bw) if k % 2 else (bw, bh)
+            _draw_tokens(drawer, tokens,
+                         base.width / rot_w, base.height / rot_h)
 
-        cache = _read_ocr_cache(ocr_dir, name) if ocr_dir else None
-        if ocr_dir and cache is None:
-            print(f"  ⚠ No OCR cache for {name}, drawing without text layer")
+        for fb in truth_per_page.get((doc_no(name), si), ()):
+            fx0, fy0, fx1, fy1 = fb["box"]
+            r = rotate_box([fx0 * SCALE * sx, fy0 * SCALE * sy,
+                            fx1 * SCALE * sx, fy1 * SCALE * sy], k, w0, h0)
+            drawer.rectangle(r, outline=TRUTH, width=2)
 
-        for si in sorted(per_file[name], key=lambda s: rang[(name, s)]):
-            if not 1 <= si <= len(doc):
-                continue
-            page_pred = per_page[(name, si)]
-            image = _render_page(doc, si)
-            w0, h0 = image.width, image.height
-            k, tokens = 0, []
-            if cache:
-                rotations, tokens_per_page = cache
-                if si <= len(rotations):
-                    k = rotations[si - 1] or 0
-                    tokens = tokens_per_page[si - 1]
-                if k:
-                    # Same rotation the pipeline OCR'd with (np.rot90 = CCW)
-                    image = image.rotate(90 * k, expand=True)
-                image = Image.blend(
-                    Image.new("RGB", image.size, (255, 255, 255)),
-                    image, ocr_opacity)
-            base = image.convert("RGBA")
-            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            drawer = ImageDraw.Draw(overlay)
-            sx = w0 / page_pred[0]["bw"]
-            sy = h0 / page_pred[0]["bh"]
-            if cache and tokens:
-                bw, bh = page_pred[0]["bw"], page_pred[0]["bh"]
-                rot_w, rot_h = (bh, bw) if k % 2 else (bw, bh)
-                _draw_tokens(drawer, tokens,
-                             base.width / rot_w, base.height / rot_h)
+        sources_here = set()
+        for p in page_pred:
+            px = p["px"]
+            r = rotate_box([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
+                           k, w0, h0)
+            if p["klasse"] == "BOM":
+                sources_here.add(p["kilde"])
+                drawer.rectangle(r, outline=MISS, width=4)
+                mark = f"BOM [{p['kilde']}]"
+                if p["conf"] is not None:
+                    mark += f" conf={p['conf']:.2f}"
+                _draw_text(drawer, r, mark, MISS, over=True)
+                _draw_text(drawer, r,
+                            f"{p['w']:.0f}x{p['h']:.0f}pt e={p['elongation']:.1f}",
+                            MISS, over=False)
+            else:
+                drawer.rectangle(r, outline=KEPT, width=1)
 
-            for fb in truth_per_page.get((doc_no(name), si), ()):
-                fx0, fy0, fx1, fy1 = fb["box"]
-                r = rotate_box([fx0 * SCALE * sx, fy0 * SCALE * sy,
-                                fx1 * SCALE * sx, fy1 * SCALE * sy], k, w0, h0)
-                drawer.rectangle(r, outline=TRUTH, width=2)
-
-            sources_here = set()
-            for p in page_pred:
-                px = p["px"]
-                r = rotate_box([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
-                               k, w0, h0)
-                if p["klasse"] == "BOM":
-                    sources_here.add(p["kilde"])
-                    drawer.rectangle(r, outline=MISS, width=4)
-                    mark = f"BOM [{p['kilde']}]"
-                    if p["conf"] is not None:
-                        mark += f" conf={p['conf']:.2f}"
-                    _draw_text(drawer, r, mark, MISS, over=True)
-                    _draw_text(drawer, r,
-                                f"{p['w']:.0f}x{p['h']:.0f}pt e={p['elongation']:.1f}",
-                                MISS, over=False)
-                else:
-                    drawer.rectangle(r, outline=KEPT, width=1)
-
-            image = Image.alpha_composite(base, overlay).convert("RGB")
-            filename = f"{os.path.splitext(name)[0]}_side{si}.png"
-            for k in sources_here:
-                subdir = os.path.join(out_dir, "bom", k)
-                os.makedirs(subdir, exist_ok=True)
-                image.save(os.path.join(subdir, filename))
-                tally[k] += 1
-            n_drawn += 1
-
-        doc.close()
+        image = _flatten(base, overlay)
+        filename = f"{os.path.splitext(name)[0]}_side{si}.png"
+        for source in sources_here:
+            subdir = os.path.join(out_dir, "bom", source)
+            os.makedirs(subdir, exist_ok=True)
+            image.save(os.path.join(subdir, filename))
+            tally[source] += 1
+        n_drawn += 1
 
     print(f"  Drew {n_drawn} pages to {os.path.join(out_dir, 'bom')}")
     for k in sorted(tally):
@@ -675,9 +718,8 @@ def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
     os.makedirs(dir_name, exist_ok=True)
 
     if out_csv:
-        import csv as _csv
         with open(out_csv, "w", newline="", encoding="utf-8") as f:
-            w = _csv.writer(f)
+            w = csv.writer(f)
             # The column is named "value", not after the field: for the areal
             # criterion field == "cov_area", which would appear twice.
             w.writerow(["utsnitt", "fil", "side", "fasit_idx", "vipper", "kilde",
@@ -694,36 +736,19 @@ def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
                             f"{p['w']:.1f}", f"{p['h']:.1f}"])
         print(f"  Metrics written to {out_csv}")
 
-    # ── Draw the crops, grouped per file to open each PDF once ──
-    per_file = defaultdict(list)
+    # ── Draw the crops; every pair on a page shares one render ──
+    work = defaultdict(lambda: defaultdict(list))
     for n, t in enumerate(selected, 1):
-        per_file[t[2]["navn"]].append((n, t))
+        work[t[2]["navn"]][t[2]["side"]].append((n, t))
 
     n_drawn = 0
-    for name in sorted(per_file):
-        path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            print(f"  ⚠ Cannot find {path}, skipping")
-            continue
-        try:
-            doc = fitz.open(path)
-        except Exception as e:
-            print(f"  ⚠ Could not open {name}: {e!r}")
-            continue
-        pages_cache = {}
-        for n, (value, m, p, j, fb) in sorted(per_file[name]):
-            si = p["side"]
-            if not 1 <= si <= len(doc):
-                continue
-            if si not in pages_cache:
-                pages_cache[si] = _render_page(doc, si)
-            image = pages_cache[si]
+    for name, si, items, doc in iter_pdf_pages(folder, work):
+        image = _render_page(doc, si)
+        for n, (value, m, p, j, fb) in sorted(items):
             sx = image.width / p["bw"]
             sy = image.height / p["bh"]
 
-            base = image.convert("RGBA")
-            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            drawer = ImageDraw.Draw(overlay)
+            base, overlay, drawer = _overlay(image)
 
             for other in pred_per_page.get((p["doc_no"], si), ()):
                 if other is p:
@@ -746,14 +771,15 @@ def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
             drawer.rectangle(fx, outline=BAND_TRUTH, width=3)
             drawer.rectangle(px, outline=BAND_PRED, width=3)
 
-            flat = Image.alpha_composite(base, overlay).convert("RGB")
+            flat = _flatten(base, overlay)
 
             margin = crop_margin * SCALE
-            u = [min(fx[0], px[0]) - margin * sx, min(fx[1], px[1]) - margin * sy,
-                 max(fx[2], px[2]) + margin * sx, max(fx[3], px[3]) + margin * sy]
-            u = [max(0, u[0]), max(0, u[1]),
-                 min(flat.width, u[2]), min(flat.height, u[3])]
-            crop = flat.crop([int(v) for v in u])
+            u = _crop_box(flat, [min(fx[0], px[0]), min(fx[1], px[1]),
+                                 max(fx[2], px[2]), max(fx[3], px[3])],
+                          (margin * sx, margin * sy))
+            if u is None:
+                continue
+            crop = flat.crop(u)
 
             # Metrics are burned in below the crop, so it stands alone
             text = (f"{criterion} {value:.3f}  |  dek_f={m['cov_area']:.2f} "
@@ -779,7 +805,6 @@ def band_review(ds, folder, out_dir, criterion, lo, hi, max_items=None,
                        f"{os.path.splitext(name)[0]}_s{si}_f{j}.png")
             bottom.save(os.path.join(dir_name, filename))
             n_drawn += 1
-        doc.close()
 
     print(f"\n  Drew {n_drawn} crops to {dir_name}/")
     print(f"  File names start with a sequence number and the {field} value, "
@@ -921,7 +946,6 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
         print(f"    Total coverage lost under the same filter: {m.lost}")
 
     # ── Manifest ──
-    os.makedirs(out_dir, exist_ok=True)
     rang = {"MISTET_DEKNING": 0, "": 1, "utenfor_scope": 2, "fortsatt_dekket": 3}
     discarded.sort(key=lambda r: (rang.get(r.get("_status", ""), 1),
                                   "; ".join(r["_reasons"]),
@@ -944,11 +968,8 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
             "vurdering": "",
         })
         r["_utsnitt"] = manifest[-1]["utsnitt"]
-    manifest_path = os.path.join(out_dir, "forkastede_sladdinger.csv")
-    with open(manifest_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(manifest[0]))
-        w.writeheader()
-        w.writerows(manifest)
+    manifest_path = _write_manifest(out_dir, "forkastede_sladdinger.csv",
+                                    manifest, list(manifest[0]))
     print(f"\n  Manifest: {manifest_path}")
 
     # ── Crops ──
@@ -970,41 +991,35 @@ def test_against_fasit(truth_csv, folder, out_dir, filter_kwargs, max_pages=None
     ut = os.path.join(out_dir, "utsnitt")
     os.makedirs(ut, exist_ok=True)
     n_drawn = missing = 0
+
+    work = defaultdict(lambda: defaultdict(list))
     for nr in sorted(per_doc):
         name = files.get(nr)
         if name is None or (select and os.path.basename(name) not in select_apply):
             missing += len(per_doc[nr])
             continue
-        try:
-            doc = fitz.open(os.path.join(folder, name))
-        except Exception as e:
-            print(f"  ⚠ Could not open {name}: {e!r}")
-            missing += len(per_doc[nr])
-            continue
         for r in per_doc[nr]:
-            si = r["side"]
-            if not 1 <= si <= len(doc):
-                missing += 1
-                continue
-            image = _render_page(doc, si)
-            overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-            drawer = ImageDraw.Draw(overlay)
+            work[name][r["side"]].append(r)
+
+    def count_missing(_name, rows):
+        nonlocal missing
+        missing += len(rows)
+
+    margin = crop_margin * SCALE
+    for name, si, rows, doc in iter_pdf_pages(folder, work, file_key=doc_no,
+                                              on_missing=count_missing):
+        image = _render_page(doc, si)
+        for r in rows:
+            base, overlay, drawer = _overlay(image)
             x0, y0, x1, y1 = r["box"]
             rr = [x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE]
             drawer.rectangle(rr, outline=CRITICAL_REMOVED, width=4)
             _draw_text(drawer, rr, "REJECTED BY FILTER", CRITICAL_REMOVED, True)
             _draw_text(drawer, rr, "; ".join(r["_reasons"]),
                         CRITICAL_REMOVED, False)
-            done = Image.alpha_composite(image.convert("RGBA"),
-                                           overlay).convert("RGB")
-            margin = crop_margin * SCALE
-            box = (max(0, int(rr[0] - margin)), max(0, int(rr[1] - margin)),
-                    min(done.width, int(rr[2] + margin)),
-                    min(done.height, int(rr[3] + margin)))
-            if box[2] > box[0] and box[3] > box[1]:
-                done.crop(box).save(os.path.join(ut, r["_utsnitt"]))
+            done = _flatten(base, overlay)
+            if _save_crop(done, rr, margin, os.path.join(ut, r["_utsnitt"])):
                 n_drawn += 1
-        doc.close()
 
     print(f"  Drew {n_drawn} crops to {ut}")
     if missing:
@@ -1168,17 +1183,12 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
             "_r": r,
         })
 
-    os.makedirs(out_dir, exist_ok=True)
-    manifest_path = os.path.join(out_dir, "uncovered.csv")
     field_csv = ["nr", "fil", "side", "group", "coverage_pct", "ml_generated",
                 "ml_status", "type", "upright", "fasit_bredde_pt",
                 "fasit_hoyde_pt", "beste_kilde", "beste_conf",
                 "beste_bredde_pt", "beste_hoyde_pt", "fasit_x0", "fasit_y0",
                 "utsnitt", "vurdering"]
-    with open(manifest_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=field_csv, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(manifest)
+    manifest_path = _write_manifest(out_dir, "uncovered.csv", manifest, field_csv)
     print(f"\n  Manifest: {manifest_path}  ({len(manifest)} rows)")
 
     page_dir = os.path.join(out_dir, "sider")
@@ -1191,84 +1201,65 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
         per_file[row["fil"]][row["side"]].append(row)
 
     n_pages = n_crop = 0
-    for file in sorted(per_file):
-        path = os.path.join(folder, file)
-        if not os.path.isfile(path):
-            print(f"  ⚠ Cannot find {path}, skipping")
-            continue
-        try:
-            doc = fitz.open(path)
-        except Exception as e:
-            print(f"  ⚠ Could not open {file}: {e!r}")
-            continue
-        for si, rows in sorted(per_file[file].items()):
-            if not 1 <= si <= len(doc):
+    for file, si, rows, doc in iter_pdf_pages(folder, per_file):
+        image = _render_page(doc, si)
+        page_rect = doc[si - 1].rect
+        skx = image.width / page_rect.width if page_rect.width else SCALE
+        sky = image.height / page_rect.height if page_rect.height else SCALE
+        base, overlay, drawer = _overlay(image)
+        dnr = doc_no(file)
+        chosen = {id(row["_r"]) for row in rows}
+
+        page_pred = per_page_pred.get((dnr, si), ())
+        for p2 in page_pred:
+            px = p2["px"]
+            sx2 = image.width / p2["bw"]
+            sy2 = image.height / p2["bh"]
+            drawer.rectangle([px[0] * sx2, px[1] * sy2,
+                              px[2] * sx2, px[3] * sy2],
+                             outline=KEPT, width=1)
+
+        for r2 in groups["udekket"] + groups["daarlig_dekket"] + groups["ok"]:
+            if (r2["doc_no"], r2["side"]) != (dnr, si) or id(r2) in chosen:
                 continue
-            image = _render_page(doc, si)
-            page_rect = doc[si - 1].rect
-            skx = image.width / page_rect.width if page_rect.width else SCALE
-            sky = image.height / page_rect.height if page_rect.height else SCALE
-            base = image.convert("RGBA")
-            overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            drawer = ImageDraw.Draw(overlay)
-            dnr = doc_no(file)
-            chosen = {id(row["_r"]) for row in rows}
+            fx0, fy0, fx1, fy1 = r2["box"]
+            drawer.rectangle([fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky],
+                             outline=TRUTH, width=2)
 
-            page_pred = per_page_pred.get((dnr, si), ())
-            for p2 in page_pred:
-                px = p2["px"]
-                sx2 = image.width / p2["bw"]
-                sy2 = image.height / p2["bh"]
-                drawer.rectangle([px[0] * sx2, px[1] * sy2,
-                                  px[2] * sx2, px[3] * sy2],
-                                 outline=KEPT, width=1)
+        # The selected ones: ground truth magenta, best suggestion orange
+        for row in rows:
+            r2 = row["_r"]
+            fx0, fy0, fx1, fy1 = r2["box"]
+            rr = [fx0 * skx - 6, fy0 * sky - 6,
+                  fx1 * skx + 6, fy1 * sky + 6]
+            drawer.rectangle(rr, outline=LOST_TRUTH, width=5)
+            mark = (f"{row['group'].upper()} {row['coverage_pct']:g}% "
+                     f"[{'ML' if r2['_ml'] else 'manual'}]")
+            _draw_text(drawer, rr, mark, LOST_TRUTH, over=True)
+            bp = r2["_beste_p"]
+            if bp is not None:
+                px = bp["px"]
+                sx2 = image.width / bp["bw"]
+                sy2 = image.height / bp["bh"]
+                rp = [px[0] * sx2, px[1] * sy2, px[2] * sx2, px[3] * sy2]
+                drawer.rectangle(rp, outline=MISS, width=3)
+                text = f"BEST SUGGESTION [{bp['kilde']}]"
+                if bp["conf"] is not None:
+                    text += f" conf={bp['conf']:.2f}"
+                _draw_text(drawer, rp, text, MISS, over=False)
 
-            for r2 in groups["udekket"] + groups["daarlig_dekket"] + groups["ok"]:
-                if (r2["doc_no"], r2["side"]) != (dnr, si) or id(r2) in chosen:
-                    continue
-                fx0, fy0, fx1, fy1 = r2["box"]
-                drawer.rectangle([fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky],
-                                 outline=TRUTH, width=2)
+        done = _flatten(base, overlay)
+        done.save(os.path.join(
+            page_dir, f"{os.path.splitext(file)[0]}_side{si}.png"))
+        n_pages += 1
 
-            # The selected ones: ground truth magenta, best suggestion orange
-            for row in rows:
-                r2 = row["_r"]
-                fx0, fy0, fx1, fy1 = r2["box"]
-                rr = [fx0 * skx - 6, fy0 * sky - 6,
-                      fx1 * skx + 6, fy1 * sky + 6]
-                drawer.rectangle(rr, outline=LOST_TRUTH, width=5)
-                mark = (f"{row['group'].upper()} {row['coverage_pct']:g}% "
-                         f"[{'ML' if r2['_ml'] else 'manual'}]")
-                _draw_text(drawer, rr, mark, LOST_TRUTH, over=True)
-                bp = r2["_beste_p"]
-                if bp is not None:
-                    px = bp["px"]
-                    sx2 = image.width / bp["bw"]
-                    sy2 = image.height / bp["bh"]
-                    rp = [px[0] * sx2, px[1] * sy2, px[2] * sx2, px[3] * sy2]
-                    drawer.rectangle(rp, outline=MISS, width=3)
-                    text = f"BEST SUGGESTION [{bp['kilde']}]"
-                    if bp["conf"] is not None:
-                        text += f" conf={bp['conf']:.2f}"
-                    _draw_text(drawer, rp, text, MISS, over=False)
-
-            done = Image.alpha_composite(base, overlay).convert("RGB")
-            done.save(os.path.join(
-                page_dir, f"{os.path.splitext(file)[0]}_side{si}.png"))
-            n_pages += 1
-
-            margin = crop_margin * skx
-            for row in rows:
-                fx0, fy0, fx1, fy1 = row["_r"]["box"]
-                box = (max(0, int(fx0 * skx - margin)),
-                        max(0, int(fy0 * sky - margin)),
-                        min(done.width, int(fx1 * skx + margin)),
-                        min(done.height, int(fy1 * sky + margin)))
-                if box[2] > box[0] and box[3] > box[1]:
-                    done.crop(box).save(
-                        os.path.join(crop_dir, row["utsnitt"]))
-                    n_crop += 1
-        doc.close()
+        margin = crop_margin * skx
+        for row in rows:
+            fx0, fy0, fx1, fy1 = row["_r"]["box"]
+            rect = [fx0 * skx, fy0 * sky, fx1 * skx, fy1 * sky]
+            if _save_crop(done, rect, margin,
+                          os.path.join(crop_dir, row["utsnitt"])):
+                n_crop += 1
 
     print(f"  Drew {n_pages} pages to {page_dir}")
     print(f"  {n_crop} crops in {crop_dir}, same order as uncovered.csv, "
