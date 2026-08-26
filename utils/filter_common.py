@@ -20,6 +20,8 @@ import os
 import re
 import sys
 from collections import defaultdict
+from functools import lru_cache
+from typing import NamedTuple
 
 _APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
 if _APP not in sys.path:
@@ -651,23 +653,191 @@ def pareto_front(rows, target=lambda r: (r.m.lost, r.m.ov_rm)):
     return front
 
 
-# ── Filtering ────────────────────────────────────────────────
+# ── Filter parameter registry ────────────────────────────────
 
-GEOMETRY_PARAMETERS = (
-    "min_elongation", "max_elongation", "max_height", "min_height",
-    "max_width", "min_width", "min_short_side", "max_short_side",
-    "min_long_side", "max_long_side", "max_area", "min_area_px",
-    "conf_threshold")
+class FilterParam(NamedTuple):
+    """One filter parameter, described once for every consumer.
 
+    filter_sweep and filter_review build their short codes, CLI flags, labels
+    and directory names from FILTER_PARAMS instead of each keeping its own copy
+    of the list, which is how the codes drifted apart in the first place.
+
+    Naming:
+        name      keyword the filter functions take
+        code      short code in a --per-source spec ("yolo:kmin=5")
+        flag      CLI flag in filter_review.py
+        label     format template for the human-readable filter label
+        dir_code  short code in output directory names. Eight of these do NOT
+                  match `code`: eM/hm/bm/km/kM/lm/lM/apx against emaks/hmin/
+                  bmin/kmin/kmaks/lmin/lmaks/amin. They are kept as they are so
+                  folders from earlier runs still sort next to new ones. Set
+                  dir_code = code here to unify them, at the price of new
+                  folder names.
+
+    Argument handling:
+        group     "geometry" or "ocr". The OCR rules run first and are not
+                  covered by the conf gate, as in prod
+        arg       "value" takes a number, "flag" is store_const 1, "optional"
+                  takes an optional number with const 1
+        unit      what the number means; doubles as the argparse metavar
+        help      argparse help text
+
+    Geometry comparison, used by rejection_reasons and compile_filter:
+        key       field on the prediction to read. None for the OCR rules, and
+                  for conf_threshold, which is a gate rather than a bound
+        is_min    True rejects below the limit, False rejects above it
+        noun      what the value is called in a rejection reason
+        fmt       format spec for the value in that reason
+        suffix    written straight after the value in that reason
+    """
+    name: str
+    code: str
+    flag: str
+    label: str
+    dir_code: str
+    group: str
+    arg: str
+    unit: str
+    help: str
+    key: str = None
+    is_min: bool = False
+    noun: str = ""
+    fmt: str = ""
+    suffix: str = ""
+
+
+FILTER_PARAMS = (
+    FilterParam("min_elongation", "e", "--elongation", "e≥{:g}", "e",
+                "geometry", "value", "RATIO",
+                "MIN_ELONGATION",
+                key="elongation", is_min=True, noun="elong", fmt=".1f"),
+    FilterParam("max_elongation", "emaks", "--max-elongation", "e≤{:g}", "eM",
+                "geometry", "value", "RATIO",
+                "Max elongation, removes thin, long strokes",
+                key="elongation", noun="elong", fmt=".1f"),
+    FilterParam("max_height", "h", "--max-height", "h≤{:g}", "h",
+                "geometry", "value", "PT",
+                "Max box height in points",
+                key="h", noun="height", fmt=".0f"),
+    FilterParam("min_height", "hmin", "--min-height", "h≥{:g}", "hm",
+                "geometry", "value", "PT",
+                "Min box height in points",
+                key="h", is_min=True, noun="height", fmt=".1f"),
+    FilterParam("max_width", "b", "--max-width", "b≤{:g}", "b",
+                "geometry", "value", "PT",
+                "Max box width in points",
+                key="w", noun="width", fmt=".0f"),
+    FilterParam("min_width", "bmin", "--min-width", "b≥{:g}", "bm",
+                "geometry", "value", "PT",
+                "Min box width in points",
+                key="w", is_min=True, noun="width", fmt=".1f"),
+    FilterParam("min_short_side", "kmin", "--min-short-side", "short≥{:g}", "km",
+                "geometry", "value", "PT",
+                "Min short side in points (orientation independent, does not "
+                "hit upright boxes the way --min-width does)",
+                key="short_side", is_min=True, noun="short side", fmt=".1f"),
+    FilterParam("max_short_side", "kmaks", "--max-short-side", "short≤{:g}", "kM",
+                "geometry", "value", "PT",
+                "Max short side in points",
+                key="short_side", noun="short side", fmt=".1f"),
+    FilterParam("min_long_side", "lmin", "--min-long-side", "long≥{:g}", "lm",
+                "geometry", "value", "PT",
+                "Min long side in points. Too short for 5 digits",
+                key="long_side", is_min=True, noun="long side", fmt=".1f"),
+    FilterParam("max_long_side", "lmaks", "--max-long-side", "long≤{:g}", "lM",
+                "geometry", "value", "PT",
+                "Max long side in points",
+                key="long_side", noun="long side", fmt=".1f"),
+    FilterParam("max_area", "a", "--max-area", "a≤{:g}", "a",
+                "geometry", "value", "PT2",
+                "Max box area in pt²",
+                key="area", noun="area", fmt=".0f"),
+    FilterParam("min_area_px", "amin", "--min-area-px", "apx≥{:g}", "apx",
+                "geometry", "value", "PX2",
+                "Min box area in PIXELS² (like MIN_BOX_AREA)",
+                key="areal_px", is_min=True, noun="area", fmt=".0f", suffix="px²"),
+    FilterParam("conf_threshold", "c", "--conf-threshold", "c≥{:g}→keep", "c",
+                "geometry", "value", "CONF",
+                "conf ≥ this value is kept regardless of geometry"),
+
+    FilterParam("min_digits", "smin", "--min-digits", "digits≥{:g}", "smin",
+                "ocr", "value", "N",
+                "Require at least N digits in the box (prod today: 1)"),
+    FilterParam("max_letters", "bmaks", "--max-letters", "letters≤{:g}", "bmaks",
+                "ocr", "value", "N",
+                "Allow at most N letters in the box (prod today: 1)"),
+    FilterParam("min_digits_run", "rmin", "--min-digits-run", "run≥{:g}", "rmin",
+                "ocr", "value", "N",
+                "Require the longest digit run over the box to be ≥ N"),
+    FilterParam("require_fnr_candidate", "fnr", "--require-fnr-candidate",
+                "fnr-candidate", "fnr", "ocr", "flag", "",
+                "Require an 11-digit run with valid fnr shape on the line "
+                "(without mod11)"),
+    FilterParam("reject_decimal", "des", "--reject-decimal", "no-decimal", "des",
+                "ocr", "flag", "",
+                "Reject boxes with a decimal separator in the number"),
+    FilterParam("rec_veto", "rveto", "--rec-veto", "rec≥{:g}→applies", "rveto",
+                "ocr", "value", "REC",
+                "Turn the OCR rules on only when rec_min ≥ V. Below V Paddle "
+                "read badly, and a missing fnr proves nothing."),
+    FilterParam("ocr_conf_exempt", "cfritak", "--ocr-conf-exempt",
+                "c≥{:g}→OCR-exempt", "cfritak", "ocr", "value", "CONF",
+                "The OCR rules yield for boxes with detection conf ≥ V: a "
+                "confident YOLO detection beats text evidence."),
+    FilterParam("reject_00_run", "r00", "--reject-00-run", "no-00-run", "r00",
+                "ocr", "flag", "",
+                "Reject boxes where a 10-12 digit run starts with 00 — orgnr "
+                "padded to fnr width; day 00 is invalid in an fnr"),
+    FilterParam("reject_orgnr", "orgnr", "--reject-orgnr", "no-orgnr", "orgnr",
+                "ocr", "flag", "",
+                "Reject boxes with a valid orgnr mod11 (9 digits starting with "
+                "8/9, possibly 00-padded)"),
+    FilterParam("reject_org_ord", "orgord", "--reject-org-ord",
+                "no-org-word({:g})", "orgord", "ocr", "value", "{1,2}",
+                "Reject boxes with a company-form word nearby (AS, Borettslag, "
+                "Org.nr, …). 1=always, 2=only when the box also lacks an fnr "
+                "candidate"),
+    FilterParam("line_veto", "lveto", "--line-veto", "linerec≥{:g}→applies",
+                "lveto", "ocr", "value", "REC",
+                "Turn the OCR rules on only when rec_min_linje ≥ V, fnr "
+                "candidate and run length depend on the WHOLE line being read "
+                "correctly, not just the box"),
+    FilterParam("reject_run_6_10", "run610", "--reject-run-6-10", "no-run-6-10",
+                "run610", "ocr", "optional", "MAX",
+                "Reject boxes over digit runs of 6..MAX (with gaps); without a "
+                "value = 6..10. Use 9: 10-runs are often fnr with a "
+                "single-digit day/month or a lost char"),
+    FilterParam("without_text_conf", "utconf", "--without-text-conf",
+                "noText-c≥{:g}", "utconf", "ocr", "value", "CONF",
+                "Boxes WITHOUT text (har_tokens=0) require conf ≥ V — stricter "
+                "than prod's YOLO_CONF_NO_TEXT (0.40)"),
+    FilterParam("max_gap", "luke", "--max-gap", "gap<{:g}", "luke",
+                "ocr", "value", "WIDTHS",
+                "Reject paddle/begge boxes where the largest physical gap in "
+                "the 11-digit window is ≥ V digit widths, windows stitched "
+                "across a column gap"),
+    FilterParam("reject_decimal_gap", "desluke", "--reject-decimal-gap",
+                "no-decimal-gap", "desluke", "ocr", "flag", "",
+                "Reject paddle/begge boxes where the 11-window is stitched "
+                "over a decimal separator (. or ,)"),
+)
+
+PARAM_BY_NAME = {p.name: p for p in FILTER_PARAMS}
+PARAM_BY_CODE = {p.code: p for p in FILTER_PARAMS}
+
+GEOMETRY_PARAMETERS = tuple(p.name for p in FILTER_PARAMS if p.group == "geometry")
 # Stricter variants of lenient_check; see _ocr_reason for the semantics.
-OCR_PARAMS = (
-    "min_digits", "max_letters", "min_digits_run", "require_fnr_candidate",
-    "reject_decimal", "rec_veto", "ocr_conf_exempt", "reject_00_run",
-    "reject_orgnr", "reject_org_ord", "line_veto", "reject_run_6_10",
-    "without_text_conf", "max_gap", "reject_decimal_gap")
-
+OCR_PARAMS = tuple(p.name for p in FILTER_PARAMS if p.group == "ocr")
 FILTER_PARAMETERS = GEOMETRY_PARAMETERS + OCR_PARAMS
 
+# Geometry rules that are one comparison against one field. min_area_px is held
+# out of the loop because it is checked before the conf gate, not after it.
+_AREA_CHECK = PARAM_BY_NAME["min_area_px"]
+_GEOMETRY_CHECKS = tuple(p for p in FILTER_PARAMS
+                         if p.key and p.name != "min_area_px")
+
+
+# ── Filtering ────────────────────────────────────────────────
 
 def _ocr_reason(p, min_digits=None, max_letters=None, min_digits_run=None,
                require_fnr_candidate=None, reject_decimal=None, rec_veto=None,
@@ -745,98 +915,103 @@ def _ocr_reason(p, min_digits=None, max_letters=None, min_digits_run=None,
     return None
 
 
-def rejection_reasons(p, min_elongation=None, max_elongation=None,
-                   max_height=None, min_height=None,
-                   max_width=None, min_width=None,
-                   min_short_side=None, max_short_side=None,
-                   min_long_side=None, max_long_side=None,
-                   max_area=None, min_area_px=None, conf_threshold=None,
-                   **ocr):
+def _split_parameters(kwargs):
+    """Splits a flat filter config into (geometry, ocr), dropping unset values."""
+    geometry, ocr = {}, {}
+    for name, value in kwargs.items():
+        if value is None:
+            continue
+        param = PARAM_BY_NAME.get(name)
+        if param is None:
+            raise TypeError(f"Unknown filter parameter {name!r}. "
+                            f"Valid: {', '.join(FILTER_PARAMETERS)}")
+        (geometry if param.group == "geometry" else ocr)[name] = value
+    return geometry, ocr
+
+
+def _geometry_reason(check, p, limit):
+    """Text for a failed geometry comparison, or None if the box passes it."""
+    value = p[check.key]
+    if (value < limit) if check.is_min else (value > limit):
+        return (f"{check.noun} {value:{check.fmt}}{check.suffix} "
+                f"{'<' if check.is_min else '>'} {limit:g}")
+    return None
+
+
+def rejection_reasons(p, **kwargs):
     """Reasons the box is filtered out; an empty list means it is kept.
 
     min_area_px is in PIXELS² to match MIN_BOX_AREA, and is checked BEFORE the
     conf gate since the prod noise floor applies to every box. The OCR rules run
     first of all and are NOT covered by the conf gate, as in prod.
+
+    compile_filter answers the same question without building text. Both walk
+    _GEOMETRY_CHECKS, so the two cannot drift apart.
     """
-    reasons = []
+    geometry, ocr = _split_parameters(kwargs)
     if reason := _ocr_reason(p, **ocr):
-        reasons.append(reason)
-        return reasons
-    if min_area_px is not None and p["areal_px"] < min_area_px:
-        reasons.append(f"area {p['areal_px']:.0f}px² < {min_area_px:g}")
-        return reasons
-    # High confidence: trust the prediction and skip the rest of the geometry
+        return [reason]
+    min_area = geometry.get("min_area_px")
+    if min_area is not None:
+        if reason := _geometry_reason(_AREA_CHECK, p, min_area):
+            return [reason]
+    conf_threshold = geometry.get("conf_threshold")
     if conf_threshold is not None and p.get("conf") is not None \
             and p["conf"] >= conf_threshold:
         return []
-    if min_elongation is not None and p["elongation"] < min_elongation:
-        reasons.append(f"elong {p['elongation']:.1f} < {min_elongation:g}")
-    if max_elongation is not None and p["elongation"] > max_elongation:
-        reasons.append(f"elong {p['elongation']:.1f} > {max_elongation:g}")
-    if max_height is not None and p["h"] > max_height:
-        reasons.append(f"height {p['h']:.0f} > {max_height:g}")
-    if min_height is not None and p["h"] < min_height:
-        reasons.append(f"height {p['h']:.1f} < {min_height:g}")
-    if max_width is not None and p["w"] > max_width:
-        reasons.append(f"width {p['w']:.0f} > {max_width:g}")
-    if min_width is not None and p["w"] < min_width:
-        reasons.append(f"width {p['w']:.1f} < {min_width:g}")
-    if min_short_side is not None and p["short_side"] < min_short_side:
-        reasons.append(f"short side {p['short_side']:.1f} < {min_short_side:g}")
-    if max_short_side is not None and p["short_side"] > max_short_side:
-        reasons.append(f"short side {p['short_side']:.1f} > {max_short_side:g}")
-    if min_long_side is not None and p["long_side"] < min_long_side:
-        reasons.append(f"long side {p['long_side']:.1f} < {min_long_side:g}")
-    if max_long_side is not None and p["long_side"] > max_long_side:
-        reasons.append(f"long side {p['long_side']:.1f} > {max_long_side:g}")
-    if max_area is not None and p["area"] > max_area:
-        reasons.append(f"area {p['area']:.0f} > {max_area:g}")
+    reasons = []
+    for check in _GEOMETRY_CHECKS:
+        limit = geometry.get(check.name)
+        if limit is not None:
+            if reason := _geometry_reason(check, p, limit):
+                reasons.append(reason)
     return reasons
 
 
-def is_filtered(p, min_elongation=None, max_elongation=None,
-                max_height=None, min_height=None,
-                max_width=None, min_width=None,
-                min_short_side=None, max_short_side=None,
-                min_long_side=None, max_long_side=None,
-                max_area=None, min_area_px=None, conf_threshold=None,
-                **ocr):
-    """Fast variant of rejection_reasons that builds no text."""
-    if ocr and _ocr_reason(p, **ocr):
-        return True
-    if min_area_px is not None and p["areal_px"] < min_area_px:
-        return True
-    if conf_threshold is not None and p["conf"] is not None \
-            and p["conf"] >= conf_threshold:
+# Cached on the sorted parameters so is_filtered stays cheap in a loop; a sweep
+# goes through make_filter and compiles once anyway.
+@lru_cache(maxsize=4096)
+def _compile_filter(items):
+    geometry, ocr = _split_parameters(dict(items))
+    min_area = geometry.get("min_area_px")
+    conf_threshold = geometry.get("conf_threshold")
+    checks = tuple((c.key, c.is_min, geometry[c.name]) for c in _GEOMETRY_CHECKS
+                   if c.name in geometry)
+
+    def removed(p):
+        if ocr and _ocr_reason(p, **ocr):
+            return True
+        if min_area is not None and p[_AREA_CHECK.key] < min_area:
+            return True
+        if conf_threshold is not None and p.get("conf") is not None \
+                and p["conf"] >= conf_threshold:
+            return False
+        for key, is_min, limit in checks:
+            value = p[key]
+            if (value < limit) if is_min else (value > limit):
+                return True
         return False
-    if min_elongation is not None and p["elongation"] < min_elongation:
-        return True
-    if max_elongation is not None and p["elongation"] > max_elongation:
-        return True
-    if max_height is not None and p["h"] > max_height:
-        return True
-    if min_height is not None and p["h"] < min_height:
-        return True
-    if max_width is not None and p["w"] > max_width:
-        return True
-    if min_width is not None and p["w"] < min_width:
-        return True
-    if min_short_side is not None and p["short_side"] < min_short_side:
-        return True
-    if max_short_side is not None and p["short_side"] > max_short_side:
-        return True
-    if min_long_side is not None and p["long_side"] < min_long_side:
-        return True
-    if max_long_side is not None and p["long_side"] > max_long_side:
-        return True
-    if max_area is not None and p["area"] > max_area:
-        return True
-    return False
+
+    return removed
+
+
+def compile_filter(kwargs):
+    """Predicate p -> bool for one filter config, resolved once.
+
+    A sweep runs the same config over every prediction, so the parameters are
+    looked up here and the closure walks only the checks that are actually set.
+    """
+    return _compile_filter(tuple(sorted(kwargs.items())))
+
+
+def is_filtered(p, **kwargs):
+    """Whether the filter drops this box; rejection_reasons without the text."""
+    return compile_filter(kwargs)(p)
 
 
 def make_filter(**kwargs):
     """Predicate p -> bool for one shared filter config."""
-    return lambda p: is_filtered(p, **kwargs)
+    return compile_filter(kwargs)
 
 
 def make_filter_per_source(per_source, only_source=None):
@@ -845,17 +1020,23 @@ def make_filter_per_source(per_source, only_source=None):
     per_source:   {kilde: {filter params}}; a missing kilde is not filtered.
     only_source:  filter only this kilde, leaving the others untouched.
     """
+    compiled = {k: compile_filter(kw) for k, kw in per_source.items() if kw}
+    only = only_source.lower() if only_source is not None else None
+
     def _removed(p):
         source = p["kilde"].lower()
-        if only_source is not None and source != only_source.lower():
+        if only is not None and source != only:
             return False
-        kw = per_source.get(source)
-        return is_filtered(p, **kw) if kw else False
+        removed = compiled.get(source)
+        return removed(p) if removed else False
     return _removed
 
 
 def parse_per_source(spec_list):
-    """Parses "kilde:e=V,h=V,b=V,c=V,..." -> {kilde: {params}}; keys in param_map.
+    """Parses "kilde:e=V,h=V,b=V,c=V,..." -> {kilde: {params}}.
+
+    The keys are the short codes in FILTER_PARAMS; see that registry for the
+    full list and the unit of each one.
 
     Units: h/hmin/b/bmin in pt, a in pt², amin in px² (like MIN_BOX_AREA).
     The OCR rules apply to kilde "yolo" only and the window rules (luke, desluke)
@@ -865,24 +1046,6 @@ def parse_per_source(spec_list):
     (1 = 6..10), luke = reject a gap of >= V digit widths, utconf = boxes without
     text need conf >= V (prod 0.40), orgord = 2 rejects only without fnr candidate.
     """
-    param_map = {
-        "e": "min_elongation",      "emaks": "max_elongation",
-        "h": "max_height",          "hmin": "min_height",
-        "b": "max_width",         "bmin": "min_width",
-        "kmin": "min_short_side",     "kmaks": "max_short_side",
-        "lmin": "min_long_side",     "lmaks": "max_long_side",
-        "a": "max_area",          "amin": "min_area_px",
-        "c": "conf_threshold",
-        "smin": "min_digits",       "bmaks": "max_letters",
-        "rmin": "min_digits_run",   "fnr": "require_fnr_candidate",
-        "des": "reject_decimal",     "rveto": "rec_veto",
-        "cfritak": "ocr_conf_exempt",
-        "r00": "reject_00_run",      "orgnr": "reject_orgnr",
-        "orgord": "reject_org_ord",
-        "lveto": "line_veto",      "run610": "reject_run_6_10",
-        "utconf": "without_text_conf",
-        "luke": "max_gap",        "desluke": "reject_decimal_gap",
-    }
     result = {}
     for spec in spec_list:
         if ":" not in spec:
@@ -898,10 +1061,10 @@ def parse_per_source(spec_list):
                 raise ValueError(f"Invalid parameter: {bit!r} in {spec!r}")
             key, value = bit.split("=", 1)
             key = key.strip().lower()
-            if key not in param_map:
+            if key not in PARAM_BY_CODE:
                 raise ValueError(f"Unknown parameter {key!r} in {spec!r}. "
-                                 f"Valid: {', '.join(param_map)}")
-            kwargs[param_map[key]] = float(value)
+                                 f"Valid: {', '.join(PARAM_BY_CODE)}")
+            kwargs[PARAM_BY_CODE[key].name] = float(value)
         result[source.strip().lower()] = kwargs
     return result
 

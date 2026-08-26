@@ -34,7 +34,7 @@ from filter_common import (CRITERIA, CRITERION_FIELDS, CRITERION_LOW_IS_GOOD,
                            match_metrics,
                            make_filter, make_filter_per_source, read_truth_boxes, read_processed_docs,
                            read_truth_rows, read_predictions, parse_per_source,
-                           write_summary, OCR_PARAMS, GEOMETRY_PARAMETERS)
+                           write_summary, FILTER_PARAMS, FILTER_PARAMETERS)
 from geometry import intersection_area
 
 # ── Colors ────────────────────────────────────────────────────
@@ -64,31 +64,9 @@ def _draw_text(drawer, r, text, color, over=True):
 # ── Labels ─────────────────────────────────────────────────
 
 def _label(kwargs):
-    parts = []
-    for spec_key, mal in (("min_elongation", "e≥{:g}"), ("max_elongation", "e≤{:g}"),
-                        ("max_height", "h≤{:g}"), ("min_height", "h≥{:g}"),
-                        ("max_width", "b≤{:g}"), ("min_width", "b≥{:g}"),
-                        ("min_short_side", "short≥{:g}"), ("max_short_side", "short≤{:g}"),
-                        ("min_long_side", "long≥{:g}"), ("max_long_side", "long≤{:g}"),
-                        ("max_area", "a≤{:g}"), ("min_area_px", "apx≥{:g}"),
-                        ("conf_threshold", "c≥{:g}→keep"),
-                        ("min_digits", "digits≥{:g}"),
-                        ("max_letters", "letters≤{:g}"),
-                        ("min_digits_run", "run≥{:g}"),
-                        ("require_fnr_candidate", "fnr-candidate"),
-                        ("reject_decimal", "no-decimal"),
-                        ("rec_veto", "rec≥{:g}→applies"),
-                        ("ocr_conf_exempt", "c≥{:g}→OCR-exempt"),
-                        ("reject_00_run", "no-00-run"),
-                        ("reject_orgnr", "no-orgnr"),
-                        ("reject_org_ord", "no-org-word({:g})"),
-                        ("line_veto", "linerec≥{:g}→applies"),
-                        ("reject_run_6_10", "no-run-6-10"),
-                        ("without_text_conf", "noText-c≥{:g}"),
-                        ("max_gap", "gap<{:g}"),
-                        ("reject_decimal_gap", "no-decimal-gap")):
-        if kwargs.get(spec_key) is not None:
-            parts.append(mal.format(kwargs[spec_key]))
+    """Human-readable filter, e.g. "e≥2, h≤20, no-orgnr"."""
+    parts = [fp.label.format(kwargs[fp.name]) for fp in FILTER_PARAMS
+             if kwargs.get(fp.name) is not None]
     return ", ".join(parts) if parts else "no filter"
 
 
@@ -97,27 +75,10 @@ def _label_per_source(per_source):
 
 
 def _dir_name(kwargs):
-    parts = []
-    for spec_key, short in (("min_elongation", "e"), ("max_elongation", "eM"),
-                         ("max_height", "h"), ("min_height", "hm"),
-                         ("max_width", "b"), ("min_width", "bm"),
-                         ("min_short_side", "km"), ("max_short_side", "kM"),
-                         ("min_long_side", "lm"), ("max_long_side", "lM"),
-                         ("max_area", "a"), ("min_area_px", "apx"),
-                         ("conf_threshold", "c"),
-                         ("min_digits", "smin"), ("max_letters", "bmaks"),
-                         ("min_digits_run", "rmin"),
-                         ("require_fnr_candidate", "fnr"),
-                         ("reject_decimal", "des"), ("rec_veto", "rveto"),
-                         ("ocr_conf_exempt", "cfritak"),
-                         ("reject_00_run", "r00"), ("reject_orgnr", "orgnr"),
-                         ("reject_org_ord", "orgord"),
-                         ("line_veto", "lveto"), ("reject_run_6_10", "run610"),
-                         ("without_text_conf", "utconf"),
-                         ("max_gap", "luke"),
-                         ("reject_decimal_gap", "desluke")):
-        if kwargs.get(spec_key) is not None:
-            parts.append(f"{short}{kwargs[spec_key]:g}")
+    """Output folder for one filter. Uses dir_code, which is shorter than the
+    --per-source code and does not always match it; see FILTER_PARAMS."""
+    parts = [f"{fp.dir_code}{kwargs[fp.name]:g}" for fp in FILTER_PARAMS
+             if kwargs.get(fp.name) is not None]
     return "_".join(parts) if parts else "ingen_filter"
 
 
@@ -1348,104 +1309,25 @@ def main():
                         "or number per line). Without it the documents in the "
                         "result CSV are assumed, and a document where the model "
                         "found nothing counts as not run.")
-    filt = p.add_argument_group("Filter parameters (give at least one, "
-                                "or use --per-source/--sweep)")
-    filt.add_argument("--elongation", type=float, default=None,
-                      dest="min_elongation", help="MIN_ELONGATION")
-    filt.add_argument("--max-height", type=float, default=None,
-                      dest="max_height", help="Max box height in points")
-    filt.add_argument("--max-width", type=float, default=None,
-                      dest="max_width", help="Max box width in points")
-    filt.add_argument("--max-area", type=float, default=None,
-                      dest="max_area", help="Max box area in pt²")
-    filt.add_argument("--max-elongation", type=float, default=None,
-                      dest="max_elongation",
-                      help="Max elongation, removes thin, long strokes")
-    filt.add_argument("--min-height", type=float, default=None, dest="min_height",
-                      help="Min box height in points")
-    filt.add_argument("--min-width", type=float, default=None, dest="min_width",
-                      help="Min box width in points")
-    filt.add_argument("--min-short-side", type=float, default=None,
-                      dest="min_short_side",
-                      help="Min short side in points (orientation independent, "
-                           "does not hit upright boxes the way --min-width does)")
-    filt.add_argument("--max-short-side", type=float, default=None,
-                      dest="max_short_side", help="Max short side in points")
-    filt.add_argument("--min-long-side", type=float, default=None,
-                      dest="min_long_side",
-                      help="Min long side in points. Too short for 5 digits")
-    filt.add_argument("--max-long-side", type=float, default=None,
-                      dest="max_long_side", help="Max long side in points")
-    filt.add_argument("--min-area-px", type=float, default=None,
-                      dest="min_area_px",
-                      help="Min box area in PIXELS² (like MIN_BOX_AREA)")
-    filt.add_argument("--conf-threshold", type=float, default=None, dest="conf_threshold",
-                      help="conf ≥ this value is kept regardless of geometry")
+    groups = {
+        "geometry": p.add_argument_group(
+            "Filter parameters (give at least one, or use --per-source/--sweep)"),
+        "ocr": p.add_argument_group(
+            "OCR features (stricter lenient_check; hits only kilde «yolo» with "
+            "text in the box. See _ocr_reason in filter_common.py)"),
+    }
+    # One flag per entry in FILTER_PARAMS, so a new parameter needs no edit here.
+    for fp in FILTER_PARAMS:
+        if fp.arg == "flag":
+            groups[fp.group].add_argument(
+                fp.flag, action="store_const", const=1, default=None,
+                dest=fp.name, help=fp.help)
+        else:
+            groups[fp.group].add_argument(
+                fp.flag, type=float, default=None, dest=fp.name,
+                metavar=fp.unit, help=fp.help,
+                **({"nargs": "?", "const": 1} if fp.arg == "optional" else {}))
 
-    ocr = p.add_argument_group(
-        "OCR features (stricter lenient_check; hits only kilde «yolo» with "
-        "text in the box. See _ocr_reason in filter_common.py)")
-    ocr.add_argument("--min-digits", type=float, default=None,
-                     dest="min_digits",
-                     help="Require at least N digits in the box (prod today: 1)")
-    ocr.add_argument("--max-letters", type=float, default=None,
-                     dest="max_letters",
-                     help="Allow at most N letters in the box (prod today: 1)")
-    ocr.add_argument("--min-digits-run", type=float, default=None,
-                     dest="min_digits_run",
-                     help="Require the longest digit run over the box to be ≥ N")
-    ocr.add_argument("--require-fnr-candidate", action="store_const", const=1,
-                     default=None, dest="require_fnr_candidate",
-                     help="Require an 11-digit run with valid fnr shape on the "
-                          "line (without mod11)")
-    ocr.add_argument("--reject-decimal", action="store_const", const=1,
-                     default=None, dest="reject_decimal",
-                     help="Reject boxes with a decimal separator in the number")
-    ocr.add_argument("--rec-veto", type=float, default=None, dest="rec_veto",
-                     help="Turn the OCR rules on only when rec_min ≥ V. Below V "
-                          "Paddle read badly, and a missing fnr proves nothing.")
-    ocr.add_argument("--ocr-conf-exempt", type=float, default=None,
-                     dest="ocr_conf_exempt",
-                     help="The OCR rules yield for boxes with detection conf "
-                          "≥ V: a confident YOLO detection beats text evidence.")
-    ocr.add_argument("--reject-00-run", action="store_const", const=1,
-                     default=None, dest="reject_00_run",
-                     help="Reject boxes where a 10-12 digit run starts with 00 "
-                          "— orgnr padded to fnr width; day 00 is invalid in "
-                          "an fnr")
-    ocr.add_argument("--reject-orgnr", action="store_const", const=1,
-                     default=None, dest="reject_orgnr",
-                     help="Reject boxes with a valid orgnr mod11 (9 digits "
-                          "starting with 8/9, possibly 00-padded)")
-    ocr.add_argument("--reject-org-ord", type=float, default=None,
-                     dest="reject_org_ord", metavar="{1,2}",
-                     help="Reject boxes with a company-form word nearby "
-                          "(AS, Borettslag, Org.nr, …). 1=always, 2=only when "
-                          "the box also lacks an fnr candidate")
-    ocr.add_argument("--line-veto", type=float, default=None,
-                     dest="line_veto",
-                     help="Turn the OCR rules on only when rec_min_linje ≥ V, "
-                          "fnr candidate and run length depend on the WHOLE "
-                          "line being read correctly, not just the box")
-    ocr.add_argument("--reject-run-6-10", type=float, nargs="?", const=1,
-                     default=None, dest="reject_run_6_10", metavar="MAX",
-                     help="Reject boxes over digit runs of 6..MAX (with gaps); "
-                          "without a value = 6..10. Use 9: 10-runs are often "
-                          "fnr with a single-digit day/month or a lost char")
-    ocr.add_argument("--without-text-conf", type=float, default=None,
-                     dest="without_text_conf",
-                     help="Boxes WITHOUT text (har_tokens=0) require conf ≥ V "
-                          "— stricter than prod's YOLO_CONF_NO_TEXT (0.40)")
-
-    ocr.add_argument("--max-gap", type=float, default=None,
-                     dest="max_gap", metavar="WIDTHS",
-                     help="Reject paddle/begge boxes where the largest physical "
-                          "gap in the 11-digit window is ≥ V digit widths, "
-                          "windows stitched across a column gap")
-    ocr.add_argument("--reject-decimal-gap", action="store_const", const=1,
-                     default=None, dest="reject_decimal_gap",
-                     help="Reject paddle/begge boxes where the 11-window is "
-                          "stitched over a decimal separator (. or ,)")
     p.add_argument("--per-source", nargs="+", metavar="SPEC",
                    help='Independent filters per kilde: "kilde:e=V,h=V,b=V,a=V,c=V"')
     p.add_argument("--against-truth", action="store_true", dest="against_truth",
@@ -1512,7 +1394,7 @@ def main():
                    help="Restrict to these PDF files")
     args = p.parse_args()
 
-    kw_every = {n: getattr(args, n) for n in GEOMETRY_PARAMETERS + OCR_PARAMS
+    kw_every = {n: getattr(args, n) for n in FILTER_PARAMETERS
                if getattr(args, n) is not None}
 
     if args.uncovered:

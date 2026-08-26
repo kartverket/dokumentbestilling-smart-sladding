@@ -24,7 +24,8 @@ from itertools import product
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from filter_common import (RECOMMENDED_THRESHOLDS, CRITERIA, STD_CRITERION,
+from filter_common import (FILTER_PARAMS, RECOMMENDED_THRESHOLDS, CRITERIA,
+                           STD_CRITERION,
                            STD_SLOPPINESS_FACTOR, HIT_THRESHOLD, baseline,
                            build_dataset, measure_filter, make_filter,
                            make_filter_per_source, read_truth_boxes, read_processed_docs, read_predictions,
@@ -97,57 +98,15 @@ def _hidden_text(n, max_lost, max_lost_pct, min_ov_lost):
     return f"  ({n} rows hidden: {' or '.join(requirements)})"
 
 
-# (short per-kilde code, long CLI flag) per filter parameter
-PARAM_CODES = (
-    ("min_elongation", "e", "--elongation"),
-    ("max_elongation", "emaks", "--max-elongation"),
-    ("max_height", "h", "--max-height"),
-    ("min_height", "hmin", "--min-height"),
-    ("max_width", "b", "--max-width"),
-    ("min_width", "bmin", "--min-width"),
-    ("min_short_side", "kmin", "--min-short-side"),
-    ("max_short_side", "kmaks", "--max-short-side"),
-    ("min_long_side", "lmin", "--min-long-side"),
-    ("max_long_side", "lmaks", "--max-long-side"),
-    ("max_area", "a", "--max-area"),
-    ("min_area_px", "amin", "--min-area-px"),
-    ("conf_threshold", "c", "--conf-threshold"),
-    ("min_digits", "smin", "--min-digits"),
-    ("max_letters", "bmaks", "--max-letters"),
-    ("min_digits_run", "rmin", "--min-digits-run"),
-    ("require_fnr_candidate", "fnr", "--require-fnr-candidate"),
-    ("reject_decimal", "des", "--reject-decimal"),
-    ("rec_veto", "rveto", "--rec-veto"),
-    ("ocr_conf_exempt", "cfritak", "--ocr-conf-exempt"),
-    ("reject_00_run", "r00", "--reject-00-run"),
-    ("reject_orgnr", "orgnr", "--reject-orgnr"),
-    ("reject_org_ord", "orgord", "--reject-org-ord"),
-    ("line_veto", "lveto", "--line-veto"),
-    ("reject_run_6_10", "run610", "--reject-run-6-10"),
-    ("without_text_conf", "utconf", "--without-text-conf"),
-    ("max_gap", "luke", "--max-gap"),
-    ("reject_decimal_gap", "desluke", "--reject-decimal-gap"),
-)
-
-
-# store_const flags that take no value
-_FLAG_WITHOUT_VALUE = frozenset(("require_fnr_candidate", "reject_decimal",
-                               "reject_00_run", "reject_orgnr",
-                               "reject_decimal_gap"))
-
-
 def review_command(spec):
     """Rebuilds the filter as arguments to filter_review.py."""
     def _pair(kw):
-        return ",".join(f"{short}={kw[name]:g}"
-                        for name, short, _flag in PARAM_CODES
-                        if kw.get(name) is not None)
+        return ",".join(f"{fp.code}={kw[fp.name]:g}" for fp in FILTER_PARAMS
+                        if kw.get(fp.name) is not None)
     if None in spec:
         kw = spec[None]
-        parts = [flag if name in _FLAG_WITHOUT_VALUE
-                 else f"{flag} {kw[name]:g}"
-                 for name, _short, flag in PARAM_CODES
-                 if kw.get(name) is not None]
+        parts = [fp.flag if fp.arg == "flag" else f"{fp.flag} {kw[fp.name]:g}"
+                 for fp in FILTER_PARAMS if kw.get(fp.name) is not None]
         return " ".join(parts) or "(no filter)"
     parts = [f'"{k}:{_pair(kw)}"' for k, kw in sorted(spec.items()) if _pair(kw)]
     return ("--per-source " + " ".join(parts)) if parts else "(no filter)"
@@ -206,8 +165,8 @@ def _sweep_combinations(ds, elong_v, height_v, width_v, conf_v, cost,
         rows.append(Row(m, label, {only_source: kw} if only_source else {None: kw}))
         if csv_rows is not None:
             row = {"scope": only_source or "all"}
-            for name, _short, _flag in PARAM_CODES:
-                row[name] = kw.get(name)
+            for fp in FILTER_PARAMS:
+                row[fp.name] = kw.get(fp.name)
             csv_rows.append({
                 **row,
                 "lost": m.lost, "lost_pct": round(m.lost_pct, 4),

@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from filter_common import (INVALID_LABELS_FILE, MISSING_LABELS_FILE,
                            MISSING_LABEL_FIELD, doc_no, label_row_from_prediction,
                            missing_label_id, read_invalid_label_ids,
-                           read_missing_label_rows, area, overlap,
+                           read_missing_label_rows, area, intersection_area,
                            _label_box, _label_key)
 
 # Of the box you picked. A hand-drawn sladding rarely lines up with the digits,
@@ -134,7 +134,7 @@ def _covering_label(truth_csv, doc, side, box):
         fb = _label_box(r)
         if not fb:
             continue
-        cover = overlap(box, fb) / own
+        cover = intersection_area(box, fb) / own
         if cover >= MIN_COVER:
             scored.append((cover, r))
     scored.sort(key=lambda t: -t[0])
