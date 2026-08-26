@@ -193,10 +193,10 @@ Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
 
 - Svar «ja» når tallet er eller sannsynligvis er et fødselsnummer.
 - Svar «nei» BARE når du tydelig ser at tallet er noe annet: kontonummer, organisasjonsnummer, koordinat, beløp, dato alene, matrikkel-/saks-/dokumentnummer, og skriv hva det er i «holdepunkt».
-- Å si nei på et fødselsnummer er 100 ganger verre enn å si ja på et annet tall. Når du er i tvil, svar «ja» og skriv hvorfor i begrunnelsen.
+- Å si nei på et fødselsnummer er 100 ganger verre enn å si ja på et annet tall. Når du er i tvil, svar «ja».
 
 Svar kun med JSON:
-{"tall": "tallene du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja", "begrunnelse": "maks 10 ord"}\
+{"tall": "tallene du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja"}\
 """
 
 

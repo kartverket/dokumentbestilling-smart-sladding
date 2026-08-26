@@ -246,7 +246,7 @@ def hoved(keep):
         # The prompt must actually ask for every field the judge PARSES.
         print("\n[0] the prompt asks for the fields we parse")
         from vlm_judge import STD_PROMPT
-        for field in ("svar", "tall", "holdepunkt", "begrunnelse"):
+        for field in ("svar", "tall", "holdepunkt"):
             cross(f'"{field}"' in STD_PROMPT,
                   f"the JSON template asks for «{field}»")
         # Autoregressive: what the model writes before «svar» is computation
