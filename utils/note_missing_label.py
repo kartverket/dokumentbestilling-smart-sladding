@@ -38,6 +38,7 @@ Kjør:
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
@@ -69,23 +70,35 @@ def _from_png(path):
     return nr, int(m.group(2))
 
 
-def _find_res_csv(png_path):
-    """resultat.csv from the run the image belongs to.
+def _sources_near(png_path):
+    """(result CSV, labels CSV) for the run an image belongs to.
 
-    Error images live in <run>/error_images/<bom|oversladd>/, so the CSV is a
-    couple of levels up. Searched rather than assumed, since --png-dir can be
-    pointed anywhere.
+    Two layouts, both found by walking up. Error images from valider_full sit
+    in <run>/error_images/<bom|oversladd>/ with resultat.csv a couple of
+    levels above. Candidate images from vlm_judge sit in
+    <export>/<judgements>/manglende_kandidater/, and the export directory
+    holds utvalg.json, which names both CSVs. Searched rather than assumed,
+    since --png-dir can be pointed anywhere.
     """
     d = os.path.dirname(os.path.abspath(png_path))
     for _ in range(4):
-        candidate = os.path.join(d, "resultat.csv")
-        if os.path.isfile(candidate):
-            return candidate
+        # utvalg.json first: it names both files, resultat.csv only itself.
+        sidecar = os.path.join(d, "utvalg.json")
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, encoding="utf-8") as f:
+                    j = json.load(f)
+                return j.get("res_csv"), j.get("fasit_csv")
+            except (ValueError, OSError):
+                pass
+        res = os.path.join(d, "resultat.csv")
+        if os.path.isfile(res):
+            return res, None
         parent = os.path.dirname(d)
         if parent == d:
             break
         d = parent
-    return None
+    return None, None
 
 
 def _labels_on_page(truth_csv, doc, side):
@@ -228,9 +241,13 @@ def main():
         png_doc, png_side = _from_png(a.png)
         a.doc = a.doc if a.doc is not None else png_doc
         a.side = a.side if a.side is not None else png_side
-        a.res_csv = a.res_csv or _find_res_csv(a.png)
+        if not a.res_csv or not a.truth_csv:
+            res, truth = _sources_near(a.png)
+            a.res_csv = a.res_csv or res
+            a.truth_csv = a.truth_csv or truth
         if not a.res_csv:
-            sys.exit(f"Found no resultat.csv above {a.png}. Give --res-csv.")
+            sys.exit(f"Found neither resultat.csv nor utvalg.json above "
+                     f"{a.png}. Give --res-csv.")
     if not a.res_csv or a.doc is None or a.side is None:
         sys.exit("Need --png, or --res-csv with --doc and --side.")
 
