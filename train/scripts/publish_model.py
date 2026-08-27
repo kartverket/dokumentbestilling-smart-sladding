@@ -279,10 +279,9 @@ def main():
                  f"      Use another --name, or --overwrite to replace it.")
 
     dataset_dir = Path(args.dataset).resolve() if args.dataset else None
-    if run:
-        arguments, checkpoint_metrics, checkpoint_time = read_yaml(run / "args.yaml"), {}, None
-    else:
-        arguments, checkpoint_metrics, checkpoint_time = read_checkpoint(source)
+    checkpoint_args, checkpoint_metrics, checkpoint_time = read_checkpoint(source)
+    arguments = read_yaml(run / "args.yaml") if run else checkpoint_args
+    # The mtime is only a fallback: copying a checkpoint around rewrites it.
     trained_at = checkpoint_time or datetime.fromtimestamp(source.stat().st_mtime).astimezone()
     extra = dict(kv.split("=", 1) for kv in args.info if "=" in kv and kv.split("=", 1)[1])
 
