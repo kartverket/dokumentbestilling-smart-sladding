@@ -126,7 +126,9 @@ and returns the sladd boxes as JSON.
 Optional query parameters: `elektronisk_tinglyst=true` skips YOLO entirely,
 `rettsstiftelsestyper=SR_JOU,SE_SEK` (comma-separated grunnbok codes) enables
 the per-document-type rule profiles, and `vlm=false` turns the VLM verifier off
-for one request when the container runs with it on.
+for one request when the container runs with it on. `filrevisjonid=883421`
+names the document in the application log; the batch job sends it with every
+call.
 
 #### Response format
 

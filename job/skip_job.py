@@ -54,12 +54,21 @@ def hentDokumenterTilSladding():
             logging.error(f'Error: {str(e)}')
             continue
 
+        rettsstiftelsestyper = document.get('rettsstiftelsestyper')
+        filrevisjonid = document.get('filRevisjonId')
+        if not rettsstiftelsestyper:
+            logging.warning(f'Document {docid} has no rettsstiftelsestyper, no rule profile will apply')
+
         model_url = f'{model_base_url()}/model'
 
         try:
             response = requests.post(
                 model_url,
-                params={'elektronisk_tinglyst': str(er_elektronisk_tinglyst).lower()},
+                params={
+                    'elektronisk_tinglyst': str(er_elektronisk_tinglyst).lower(),
+                    'rettsstiftelsestyper': rettsstiftelsestyper,
+                    'filrevisjonid': filrevisjonid,
+                },
                 data=pdf_bytes,
                 headers={
                     'Content-Type': 'application/pdf',

@@ -32,6 +32,8 @@ def get_bounding_boxes():
     if not request.data:
         return jsonify({'error': 'No data provided in the request body'}), 400
 
+    filrevisjonid = request.args.get('filrevisjonid') or None
+
     try:
         elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
         # Comma-separated XX_YYY codes from the grunnbok, e.g.
@@ -47,12 +49,16 @@ def get_bounding_boxes():
         vlm = VLM if request.args.get('vlm', 'true').lower() != 'false' else None
         pdf_file_stream = request.get_data()
         bounding_boxes_result = model_main.run_model_on_pdf_bytes(
-            pdf_file_stream, elektronisk_tinglyst=elektronisk_tinglyst,
+            pdf_file_stream, name=filrevisjonid,
+            elektronisk_tinglyst=elektronisk_tinglyst,
             rettsstiftelsestyper=rettsstiftelsestyper, vlm=vlm)
 
+        logging.info(f'Document {filrevisjonid}: {len(bounding_boxes_result)} '
+                     f'boxes, rettsstiftelsestyper={",".join(rettsstiftelsestyper) or "none"}')
         return jsonify(bounding_boxes_result)
 
     except Exception as e:
+        logging.exception(f'Document {filrevisjonid}: model failed')
         return jsonify({'error': str(e)}), 500
 
 
