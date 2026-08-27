@@ -39,22 +39,33 @@ RULES="yes"
 PROCESSES=""
 EXTRA_FLAGS=()
 
+# The script has no positional arguments, so a bare word can only be the value
+# of the run.py flag in front of it. Without this «--vlm-model qwen» fails on
+# «qwen» instead of reaching run.py.
+AFTER_FLAG=0
+
 for arg in "$@"; do
     case "$arg" in
-        model=*)  MODEL="${arg#model=}" ;;
-        uttrekk=*) UTTREKK_NR="${arg#uttrekk=}" ;;
-        list=*)   LIST="${arg#list=}" ;;
-        name=*)    NAME="${arg#name=}" ;;
-        precache=*) PRECACHE="${arg#precache=}" ;;
-        metadata=*) METADATA="${arg#metadata=}" ;;
-        rules=*)   RULES="${arg#rules=}" ;;
-        images=*)  IMAGES="${arg#images=}" ;;
-        processes=*) PROCESSES="${arg#processes=}" ;;
-        -*)        EXTRA_FLAGS+=("$arg") ;;
+        model=*)  MODEL="${arg#model=}"; AFTER_FLAG=0 ;;
+        uttrekk=*) UTTREKK_NR="${arg#uttrekk=}"; AFTER_FLAG=0 ;;
+        list=*)   LIST="${arg#list=}"; AFTER_FLAG=0 ;;
+        name=*)    NAME="${arg#name=}"; AFTER_FLAG=0 ;;
+        precache=*) PRECACHE="${arg#precache=}"; AFTER_FLAG=0 ;;
+        metadata=*) METADATA="${arg#metadata=}"; AFTER_FLAG=0 ;;
+        rules=*)   RULES="${arg#rules=}"; AFTER_FLAG=0 ;;
+        images=*)  IMAGES="${arg#images=}"; AFTER_FLAG=0 ;;
+        processes=*) PROCESSES="${arg#processes=}"; AFTER_FLAG=0 ;;
+        -*)        EXTRA_FLAGS+=("$arg"); AFTER_FLAG=1 ;;
         *)
-            echo "ERROR: Unknown parameter: $arg"
-            echo "Valid: model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
-            exit 1
+            if [[ "$AFTER_FLAG" == 1 ]]; then
+                EXTRA_FLAGS+=("$arg")
+                AFTER_FLAG=0
+            else
+                echo "ERROR: Unknown parameter: $arg"
+                echo "Valid: model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
+                echo "run.py flags are passed on as they are, e.g. --vlm --vlm-concurrent 1"
+                exit 1
+            fi
             ;;
     esac
 done
