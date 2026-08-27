@@ -30,10 +30,11 @@ import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.normpath(os.path.join(_HERE, "..", "app")))
 
 import fitz
-from PIL import Image, ImageDraw
 
 from filter_common import (CRITERIA, PDF_DPI, SCALE, STD_CRITERION,
                            STD_SLOPPINESS_FACTOR, HIT_THRESHOLD, build_dataset,
@@ -41,14 +42,9 @@ from filter_common import (CRITERIA, PDF_DPI, SCALE, STD_CRITERION,
                            read_processed_docs, read_predictions,
                            write_summary)
 from filter_review import _read_ocr_cache, rotate_box, _render_page
+from config import VLM_MARGIN_PT, VLM_MAX_PX
+from vlm_client import crop_with_marker
 
-MARKER = (230, 20, 20)        # red frame around the box being judged
-MARKER_WIDTH = 3
-MARKER_SPACE = 3               # px outside the box, so digits stay visible
-
-STD_MARGIN = 60.0             # context margin in PDF points
-# The smaller max-px, the faster the model (but lower quality image is used)
-STD_MAX_PX = 800             # crops wider than this are scaled down
 STD_WORKERS = max(1, min(8, (os.cpu_count() or 2) - 1))
 
 MANIFEST_FIELD = [
@@ -221,47 +217,22 @@ def _job_for_file(task):
             px = p["px"]
             r = rotate_box([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
                            k, w0, h0)
-            # A label drawn past the page edge, an odd CropBox: one strange
-            # row must not sink an export of tens of thousands of boxes.
-            if (r[2] <= 0 or r[3] <= 0
-                    or r[0] >= image.width or r[1] >= image.height):
+            ut, m = crop_with_marker(image, r, mx, margin_up=m_up,
+                                     margin_down=m_ned, max_px=max_px,
+                                     full_width=full_width, from_top=from_top)
+            if ut is None:
+                # A label drawn past the page edge, an odd CropBox: one strange
+                # row must not sink an export of tens of thousands of boxes.
                 dropped += 1
-                warnings.append(
-                    f"{name} p{si}: box outside the page "
-                    f"({r[0]:.0f},{r[1]:.0f},{r[2]:.0f},{r[3]:.0f} "
-                    f"in {image.width}x{image.height}), skipped")
+                if m == "outside":
+                    warnings.append(
+                        f"{name} p{si}: box outside the page "
+                        f"({r[0]:.0f},{r[1]:.0f},{r[2]:.0f},{r[3]:.0f} "
+                        f"in {image.width}x{image.height}), skipped")
+                elif m == "marker":
+                    warnings.append(f"{name} p{si}: marker has no area after "
+                                     f"clipping, skipped")
                 continue
-            left = 0 if full_width else max(0, int(r[0] - mx))
-            right = (image.width if full_width
-                     else min(image.width, int(r[2] + mx)))
-            top = 0 if from_top else max(0, int(r[1] - m_up))
-            box = (left, top, right,
-                    min(image.height, int(r[3] + m_ned)))
-            if box[2] <= box[0] or box[3] <= box[1]:
-                dropped += 1
-                continue
-            ut = image.crop(box).convert("RGB")
-
-            m = [r[0] - box[0], r[1] - box[1],
-                 r[2] - box[0], r[3] - box[1]]
-            if max_px and ut.width > max_px:
-                f = max_px / ut.width
-                ut = ut.resize((max_px, max(1, int(ut.height * f))),
-                               Image.LANCZOS)
-                m = [v * f for v in m]
-            # A 3 px frame disappears in a full-page crop; the padding grows
-            # with the line so the digits stay visible.
-            stroke = max(MARKER_WIDTH, round(ut.width / 400))
-            pad = stroke + 2
-            m = [max(0, m[0] - pad), max(0, m[1] - pad),
-                 min(ut.width - 1, m[2] + pad),
-                 min(ut.height - 1, m[3] + pad)]
-            if m[2] <= m[0] or m[3] <= m[1]:
-                dropped += 1
-                warnings.append(f"{name} p{si}: marker has no area after "
-                                 f"clipping, skipped")
-                continue
-            ImageDraw.Draw(ut).rectangle(m, outline=MARKER, width=stroke)
 
             base = os.path.splitext(os.path.basename(name))[0]
             filename = f"{p['_nr']:05d}_{p['klasse']}_{base}_s{si}.png"
@@ -306,9 +277,9 @@ def _job_for_file(task):
     return rows, warnings, dropped
 
 
-def export(ds, selected, folder, out_dir, margin_x=STD_MARGIN,
-              margin_y=STD_MARGIN, full_width=False, from_top=False,
-              max_px=STD_MAX_PX, ocr_dir=None, roter=True, workers=1,
+def export(ds, selected, folder, out_dir, margin_x=VLM_MARGIN_PT,
+              margin_y=VLM_MARGIN_PT, full_width=False, from_top=False,
+              max_px=VLM_MAX_PX, ocr_dir=None, roter=True, workers=1,
               n_lines=0):
     """Renders, crops and writes the manifest. Returns the manifest rows.
 
@@ -421,9 +392,9 @@ def main():
     p.add_argument("--source", nargs="+", default=None, metavar="KILDE",
                    help="Limit to these sources (yolo/paddle/begge)")
 
-    p.add_argument("--margin", type=float, default=STD_MARGIN, metavar="PT",
+    p.add_argument("--margin", type=float, default=VLM_MARGIN_PT, metavar="PT",
                    help=f"Context margin around the box in points "
-                        f"(default {STD_MARGIN:g}). Overridden per axis by "
+                        f"(default {VLM_MARGIN_PT:g}). Overridden per axis by "
                         f"--margin-x/--margin-y.")
     p.add_argument("--margin-x", type=float, default=None, metavar="PT",
                    help="Sideways margin. The ledetekst that reveals what the "
@@ -447,9 +418,9 @@ def main():
                    help="Take the whole page width instead of --margin-x. "
                         "Always catches the full line, at the cost of "
                         "resolution after downscaling, consider --max-px.")
-    p.add_argument("--max-px", type=int, default=STD_MAX_PX, metavar="PX",
+    p.add_argument("--max-px", type=int, default=VLM_MAX_PX, metavar="PX",
                    help=f"Scale down crops wider than this "
-                        f"(default {STD_MAX_PX}). 0 = no scaling.")
+                        f"(default {VLM_MAX_PX}). 0 = no scaling.")
     p.add_argument("--ocr-cache", default=None, metavar="STI",
                    help="OCR cache directory ($SLADD_CACHE/uttrekk_N/ocr). "
                         "Fills ocr_tekst/ocr_linje in the manifest and "

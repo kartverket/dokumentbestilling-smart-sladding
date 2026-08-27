@@ -158,7 +158,8 @@ VLM_MAX_TOKENS = 150
 # «paddle» — judging the other two costs GPU and buys nothing.
 VLM_SOURCES = ("yolo",)
 
-# Crop geometry. Must match utils/vlm_export.py, or prod shows the model other
-# images than the runs it was measured on.
+# Crop geometry, read by prod and by utils/vlm_export.py alike. The crop is
+# cut in vlm_client.crop_with_marker; change either and prod shows the model
+# other images than the runs it was measured on.
 VLM_MARGIN_PT = 60.0           # context around the box, in PDF points
-VLM_MAX_PX = 800               # wider crops are scaled down
+VLM_MAX_PX = 800               # px crop width cap; lower is faster, coarser

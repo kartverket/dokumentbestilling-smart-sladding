@@ -1,9 +1,9 @@
-"""OpenAI-compatible VLM client: prompt, call, answer parsing, fnr guard.
+"""OpenAI-compatible VLM client: crop, prompt, call, answer parsing, fnr guard.
 
 Shared by the pilot tooling in utils/ and by the verifier that runs inside
-the pipeline (vlm_verifier.py), so prod and the offline runs judge with the
-exact same prompt and parse the answers the same way. Lives in app/ because
-only app/*.py is copied into the container.
+the pipeline (vlm_verifier.py), so prod and the offline runs cut the same
+crop, judge with the same prompt and parse the answers the same way. Lives in
+app/ because only app/*.py is copied into the container.
 
 The endpoint is /v1/chat/completions, which llama-server, vLLM and LM Studio
 all offer, so the model is switched with a URL and a name instead of a code
@@ -22,6 +22,9 @@ import re
 import urllib.error
 import urllib.request
 
+import numpy as np
+from PIL import Image, ImageDraw
+
 from paddle_ocr_model_fnr import find_fnr
 
 # The container runs with HTTP_PROXY set for the outside world, and urllib
@@ -37,6 +40,68 @@ STD_TIMEOUT = 120
 # Roughly double a full answer. A truncated answer is unparsable and
 # becomes «ja», never «nei», so the cap costs recall nothing when it bites.
 STD_MAX_TOKENS = 150
+
+MARKER = (230, 20, 20)   # red frame around the box being judged
+MARKER_WIDTH = 3         # px, grown with the crop width
+
+
+# ── Crop ────────────────────────────────────────────────
+
+def crop_with_marker(image, box, margin_px, margin_up=None, margin_down=None,
+                     max_px=None, full_width=False, from_top=False):
+    """Cut the crop around `box` and draw the red frame on it.
+
+    The one definition of the image the model is shown. Prod and
+    utils/vlm_export.py both come through here, or prod would judge other
+    images than the runs the thresholds were measured on.
+
+    `image` is the page as the OCR saw it (already rotated) and `box` its
+    coordinates in that same pixel space. `margin_px` is the context to each
+    side; `margin_up` and `margin_down` default to it. `full_width` takes the
+    whole page width instead of the horizontal margin, `from_top` starts the
+    crop at the top of the page.
+
+    Returns (crop, marker): the RGB crop and the frame coordinates inside it.
+    On an edge case it returns (None, reason) instead, where reason is
+    "outside" (the box is off the page), "empty" (nothing left after clipping)
+    or "marker" (the frame has no area left). The callers differ in what they
+    do with those, so neither is handled here.
+    """
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(np.asarray(image))
+    x0, y0, x1, y1 = box
+    if x1 <= 0 or y1 <= 0 or x0 >= image.width or y0 >= image.height:
+        return None, "outside"
+
+    up = margin_px if margin_up is None else margin_up
+    down = margin_px if margin_down is None else margin_down
+    left = 0 if full_width else max(0, int(x0 - margin_px))
+    right = (image.width if full_width
+             else min(image.width, int(x1 + margin_px)))
+    top = 0 if from_top else max(0, int(y0 - up))
+    bottom = min(image.height, int(y1 + down))
+    if right <= left or bottom <= top:
+        return None, "empty"
+
+    ut = image.crop((left, top, right, bottom)).convert("RGB")
+    m = [x0 - left, y0 - top, x1 - left, y1 - top]
+    if max_px and ut.width > max_px:
+        f = max_px / ut.width
+        ut = ut.resize((max_px, max(1, int(ut.height * f))), Image.LANCZOS)
+        m = [v * f for v in m]
+    # A 3 px frame disappears in a wide crop; the padding grows with the line
+    # so the digits stay visible.
+    stroke = max(MARKER_WIDTH, round(ut.width / 400))
+    pad = stroke + 2
+    m = [max(0, m[0] - pad), max(0, m[1] - pad),
+         min(ut.width - 1, m[2] + pad), min(ut.height - 1, m[3] + pad)]
+    if m[2] <= m[0] or m[3] <= m[1]:
+        return None, "marker"
+    ImageDraw.Draw(ut).rectangle(m, outline=MARKER, width=stroke)
+    return ut, m
+
+
+# ── Prompt ────────────────────────────────────────────
 
 # Set to None if the endpoint rejects the field — shared across the threads.
 _THINKING = {"value": "none"}

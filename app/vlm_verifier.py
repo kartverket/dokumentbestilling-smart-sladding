@@ -15,8 +15,10 @@ Two guards sit in front of the «nei»:
             five-digit run, overrules the «nei». The model reads better than
             it infers, so the code does the inferring.
 
-The crop geometry mirrors utils/vlm_export.py, or the model would see other
-images in prod than in the runs it was measured on.
+The crop itself is vlm_client.crop_with_marker, shared with
+utils/vlm_export.py, and the geometry is VLM_MARGIN_PT/VLM_MAX_PX in config:
+if prod and the export drift apart the model sees other images in prod than in
+the runs it was measured on.
 """
 
 import base64
@@ -25,19 +27,14 @@ import os
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
-from PIL import Image, ImageDraw
-
 from config import (PDF_DPI, VLM_API_KEY, VLM_CONCURRENT, VLM_ENABLED,
                     VLM_MARGIN_PT, VLM_MAX_PX, VLM_MAX_TOKENS, VLM_MODEL,
                     VLM_SOURCES, VLM_TIMEOUT, VLM_URL)
 import vlm_cache
 from vlm_client import (STD_PROMPT, _THINKING, _build_melding, call_model,
-                        fnr_protects, parse_answer)
+                        crop_with_marker, fnr_protects, parse_answer)
 
 SCALE = PDF_DPI / 72.0            # PDF points -> pixels
-MARKER = (230, 20, 20)            # red frame around the box being judged
-MARKER_WIDTH = 3                  # px, grown with the crop width
 
 
 class VlmConfig:
@@ -86,41 +83,16 @@ def config_from_env():
 
 
 def _crop(image, box, margin_px, max_px):
-    """Crop around the box with a red frame on it, as PNG bytes.
+    """The crop the model is sent, as PNG bytes.
 
     `image` is the page as the OCR saw it (already rotated), `box` its
     coordinates in that same pixel space. Returns None when the box falls
     outside the page or has no area left after clipping — the caller then
     keeps the box unjudged.
     """
-    if not isinstance(image, Image.Image):
-        image = Image.fromarray(np.asarray(image))
-    x0, y0, x1, y1 = box
-    if x1 <= 0 or y1 <= 0 or x0 >= image.width or y0 >= image.height:
+    ut, _marker = crop_with_marker(image, box, margin_px, max_px=max_px)
+    if ut is None:
         return None
-    left = max(0, int(x0 - margin_px))
-    top = max(0, int(y0 - margin_px))
-    right = min(image.width, int(x1 + margin_px))
-    bottom = min(image.height, int(y1 + margin_px))
-    if right <= left or bottom <= top:
-        return None
-
-    ut = image.crop((left, top, right, bottom)).convert("RGB")
-    m = [x0 - left, y0 - top, x1 - left, y1 - top]
-    if max_px and ut.width > max_px:
-        f = max_px / ut.width
-        ut = ut.resize((max_px, max(1, int(ut.height * f))), Image.LANCZOS)
-        m = [v * f for v in m]
-    # A 3 px frame disappears in a wide crop; the padding grows with the line
-    # so the digits stay visible.
-    stroke = max(MARKER_WIDTH, round(ut.width / 400))
-    pad = stroke + 2
-    m = [max(0, m[0] - pad), max(0, m[1] - pad),
-         min(ut.width - 1, m[2] + pad), min(ut.height - 1, m[3] + pad)]
-    if m[2] <= m[0] or m[3] <= m[1]:
-        return None
-    ImageDraw.Draw(ut).rectangle(m, outline=MARKER, width=stroke)
-
     buffer = io.BytesIO()
     ut.save(buffer, format="PNG")
     return buffer.getvalue()
