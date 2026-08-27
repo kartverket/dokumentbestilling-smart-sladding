@@ -21,6 +21,16 @@ LOG_BACKUP_DAYS = int(os.getenv('LOG_BACKUP_DAYS', '30'))
 VLM = vlm_verifier.config_from_env()
 
 
+def _log_safe(value, max_len=100):
+    """A query-string value as one log line.
+
+    max_len is in characters. A newline in a parameter would otherwise split
+    the line in two and let the second half imitate a real log entry.
+    """
+    text = " ".join(str(value).split()) if value else ""
+    return text[:max_len] if text else "none"
+
+
 @app.route('/health')
 def health():
     return jsonify(health="healthy")
@@ -39,9 +49,12 @@ def get_bounding_boxes():
         # Comma-separated XX_YYY codes from the grunnbok, e.g.
         # ?rettsstiftelsestyper=SR_JOU,SR_BSK enables per-document-type rule
         # profiles (see KOORDFAM_CODES in config). Omitted/empty = global.
-        rettsstiftelsestyper = [k.strip() for k in
-                                request.args.get('rettsstiftelsestyper', '')
-                                .split(',') if k.strip()]
+        # getlist, because a caller that sends the codes as a JSON array gets
+        # one param per code, and args.get would keep only the first.
+        rettsstiftelsestyper = [
+            code.strip()
+            for value in request.args.getlist('rettsstiftelsestyper')
+            for code in value.split(',') if code.strip()]
         # ?vlm=false turns the verifier off for one request even when the
         # container runs with it on, so the two can be compared on the same
         # document without a redeploy. It can never turn it on: without an
@@ -53,12 +66,13 @@ def get_bounding_boxes():
             elektronisk_tinglyst=elektronisk_tinglyst,
             rettsstiftelsestyper=rettsstiftelsestyper, vlm=vlm)
 
-        logging.info(f'Document {filrevisjonid}: {len(bounding_boxes_result)} '
-                     f'boxes, rettsstiftelsestyper={",".join(rettsstiftelsestyper) or "none"}')
+        logging.info(f'Document {_log_safe(filrevisjonid)}: '
+                     f'{len(bounding_boxes_result)} boxes, rettsstiftelsestyper='
+                     f'{_log_safe(",".join(rettsstiftelsestyper))}')
         return jsonify(bounding_boxes_result)
 
     except Exception as e:
-        logging.exception(f'Document {filrevisjonid}: model failed')
+        logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')
         return jsonify({'error': str(e)}), 500
 
 
