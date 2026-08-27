@@ -125,6 +125,7 @@ def _process_from_cache(pdf_path, ocr_cache, yolo_cache, elektronisk_tinglyst,
     """
     name = os.path.basename(pdf_path)
     start = time.perf_counter()
+    stats = {}
     try:
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
@@ -133,13 +134,62 @@ def _process_from_cache(pdf_path, ocr_cache, yolo_cache, elektronisk_tinglyst,
             elektronisk_tinglyst=elektronisk_tinglyst, only_yolo=only_yolo,
             cache_dir=ocr_cache, yolo_cache_dir=yolo_cache,
             only_cache=True, rettsstiftelsestyper=rettsstiftelsestyper,
-            postfilter=postfilter, vlm=vlm)
+            postfilter=postfilter, vlm=vlm, stats=stats)
         if result is None:
-            return ("miss", name, None, 0.0)
+            return ("miss", name, None, 0.0, None)
         pages = _pages_from_result(result, pdf_bytes)
-        return ("ok", name, pages, time.perf_counter() - start)
+        return ("ok", name, pages, time.perf_counter() - start, stats)
     except Exception:
-        return ("feil", name, traceback.format_exc(), 0.0)
+        return ("feil", name, traceback.format_exc(), 0.0, None)
+
+
+_PHASES = ("render", "orientation", "ocr", "yolo+match", "vlm", "postprocessing")
+
+
+def _time_report(phase_time, wall_time, count, processes):
+    """Phase timings summed over every document, as report lines.
+
+    With several worker processes the phases add up to more than the wall
+    clock, so both numbers are printed.
+    """
+    total = sum(phase_time.values())
+    lines = ["Time breakdown:"]
+    rest = [p for p in sorted(phase_time) if p not in _PHASES]
+    for phase in list(_PHASES) + rest:
+        sec = phase_time.get(phase)
+        if not sec:
+            continue
+        lines.append(f"  {phase:<18}{sec:9.1f} s{sec / total * 100:7.1f}%")
+    lines.append(f"  {'Sum of phases':<18}{total:9.1f} s")
+    lines.append(f"  {'Wall clock':<18}{wall_time:9.1f} s"
+                 + (f"   ({processes} processes)" if processes > 1 else ""))
+    if count:
+        lines.append(f"  {'Per document':<18}{wall_time / count:9.2f} s"
+                     f"   ({count} documents)")
+    return lines
+
+
+def _vlm_report(v):
+    """What the verifier actually did, as report lines."""
+    judged, cached, sec = v["judged"], v["cache_hits"], v.get("seconds", 0.0)
+    lines = ["VLM verifier:", f"  {'Model':<28}{v.get('model', '')}"]
+    for label, n in (("Documents seen", v["docs"]),
+                     ("... skipped (rule profile)", v["docs_profile"]),
+                     ("... with boxes judged", v["docs_judged"]),
+                     ("Boxes judged", judged),
+                     ("Boxes removed", v["dropped"])):
+        lines.append(f"  {label:<28}{n:>8}")
+    if judged:
+        lines[-2] += (f"   ({cached} from the judgement cache, "
+                      f"{judged - cached} sent to the model)")
+    per_box = f"   ({sec / judged:.2f} s/box)" if judged else ""
+    lines.append(f"  {'Time in the verifier':<28}{sec:>8.1f} s{per_box}")
+    if v["judged_per_kilde"]:
+        lines.append("  Per kilde:")
+        for k in sorted(v["judged_per_kilde"]):
+            lines.append(f"     {k:<25}{v['judged_per_kilde'][k]:>8} judged, "
+                         f"{v['dropped_per_kilde'].get(k, 0)} removed")
+    return lines
 
 
 def _draw_continuous(name, pages, folder, png_dir, truth, y_origin, csv_boxes_doc, sladd_boxes_doc):
@@ -477,6 +527,11 @@ def main():
 
     sladd_boxes, yolo_boxes, csv_boxes, failed = {}, {}, {}, []
     timings = {}
+    phase_time = defaultdict(float)
+    vlm_total = {"docs": 0, "docs_judged": 0, "docs_profile": 0,
+                 "judged": 0, "dropped": 0, "cache_hits": 0,
+                 "judged_per_kilde": defaultdict(int),
+                 "dropped_per_kilde": defaultdict(int)}
     ocr_lines = {}                          # (name, page) -> list of (text, marks)
     warned_about_lines = False
 
@@ -498,11 +553,12 @@ def main():
 
     start_wall = time.perf_counter()
 
-    def handle_finished(i, name, pages, time_used):
+    def handle_finished(i, name, pages, time_used, doc_stats=None):
         """Everything that happens to a finished document: log, CSV, PNG, eval."""
         nonlocal total_time, warned_about_lines
         total_time += time_used
         timings[name] = time_used
+        _collect_stats(doc_stats)
 
         if args.ocr_log:
             if not warned_about_lines and pages and "linjer" not in pages[0]:
@@ -559,6 +615,26 @@ def main():
 
         print(f"  {n} box(es), {len(pages)} page(s), {time_used:.2f}s (est. remaining: {remains:.0f}s)")
 
+    def _collect_stats(doc_stats):
+        """Add one document's phase timings and VLM counters to the totals."""
+        if not doc_stats:
+            return
+        for phase, sec in doc_stats.get("timings", {}).items():
+            phase_time[phase] += sec
+        v = doc_stats.get("vlm")
+        if v is None:
+            return
+        vlm_total["docs"] += 1
+        if v.get("profile_skipped"):
+            vlm_total["docs_profile"] += 1
+        if v.get("judged"):
+            vlm_total["docs_judged"] += 1
+        for field in ("judged", "dropped", "cache_hits"):
+            vlm_total[field] += v.get(field, 0)
+        for field in ("judged_per_kilde", "dropped_per_kilde"):
+            for k, n in (v.get(field) or {}).items():
+                vlm_total[field][k] += n
+
     # ── Rettsstiftelse types per document (rule profiles, as in prod) ──
     rs_per_doc = {}
     if args.metadata_csv:
@@ -571,7 +647,7 @@ def main():
     def rs_for(name):
         return rs_per_doc.get(_doc_no(name)) if rs_per_doc else None
 
-    def run_in_main_process(pdf_bytes, name):
+    def run_in_main_process(pdf_bytes, name, stats=None):
         """Full run with the models. Returns pages, or None on error."""
         try:
             result = run_model_on_pdf_bytes(pdf_bytes, write_time=args.time, with_lines=args.ocr_log, name=name,
@@ -581,7 +657,7 @@ def main():
                                               yolo_cache_dir=args.yolo_cache,
                                               rettsstiftelsestyper=rs_for(name),
                                               postfilter=not args.without_postfilter,
-                                              vlm=vlm)
+                                              vlm=vlm, stats=stats)
         except Exception as e:
             failed.append((name, repr(e)))
             traceback.print_exc()
@@ -602,7 +678,7 @@ def main():
                                    not args.without_postfilter, vlm)
                        for pdf_path in files]
             for i, (pdf_path, fut) in enumerate(zip(files, futures), start=1):
-                status, name, payload, time_used = fut.result()
+                status, name, payload, time_used, doc_stats = fut.result()
                 print(f"\n[{i}/{total_count}] → {name}")
                 if status == "feil":
                     failed.append((name, payload))
@@ -617,13 +693,14 @@ def main():
                         failed.append((name, repr(e)))
                         traceback.print_exc()
                         continue
-                    pages = run_in_main_process(pdf_bytes, name)
+                    doc_stats = {}
+                    pages = run_in_main_process(pdf_bytes, name, doc_stats)
                     if pages is None:
                         continue
                     time_used = time.perf_counter() - start
                 else:
                     pages = payload
-                handle_finished(i, name, pages, time_used)
+                handle_finished(i, name, pages, time_used, doc_stats)
     else:
         # ── Sequential run ───────────────────────────────────────
         # Pre-read the next file while the GPU works.
@@ -644,17 +721,33 @@ def main():
                 with open(files[i], "rb") as f:
                     next_bytes = f.read()
 
-            pages = run_in_main_process(pdf_bytes, name)
+            doc_stats = {}
+            pages = run_in_main_process(pdf_bytes, name, doc_stats)
             if pages is None:
                 continue
 
-            handle_finished(i, name, pages, time.perf_counter() - start)
+            handle_finished(i, name, pages, time.perf_counter() - start,
+                            doc_stats)
 
     wall_time = time.perf_counter() - start_wall
     print(f"\nDone! {total_count} documents in {wall_time:.1f}s ({wall_time/max(total_count,1):.2f}s/doc)")
 
     if failed:
         print(f"Failed ({len(failed)}):", failed[:5])
+
+    report_lines = []
+    if phase_time:
+        report_lines += _time_report(phase_time, wall_time, total_count, processes)
+    if vlm is not None:
+        vlm_total["model"] = vlm.model
+        vlm_total["seconds"] = phase_time.get("vlm", 0.0)
+        vlm_total["judged_per_kilde"] = dict(vlm_total["judged_per_kilde"])
+        vlm_total["dropped_per_kilde"] = dict(vlm_total["dropped_per_kilde"])
+        if report_lines:
+            report_lines.append("")
+        report_lines += _vlm_report(vlm_total)
+    if report_lines:
+        print("\n" + "\n".join(report_lines))
 
     if args.ocr_log:
         n = _write_ocr_log(ocr_lines, args.ocr_log_file)
@@ -671,12 +764,18 @@ def main():
                                      write=lambda *a, **k: print(*a, **k, file=buf))
         log = buf.getvalue()
         print(log, end="")
-        if args.truth:
+        if args.truth and eval_result is not None:
+            eval_result["timings"] = dict(phase_time)
+            eval_result["wall_time"] = wall_time
+            if vlm is not None:
+                eval_result["vlm"] = vlm_total
             time_lines = "".join(f"  {n}: {t:.2f}s\n" for n, t in sorted(timings.items()))
+            report = "\n".join(report_lines) + "\n\n" if report_lines else ""
             header = (
                 f"Folder:     {os.path.abspath(args.folder)}\n"
                 f"Truth CSV:  {os.path.abspath(args.truth_csv)}\n"
                 f"Total time: {total_time:.2f}s\n"
+                f"{report}"
                 f"Time per document:\n{time_lines}\n"
             )
             write_result_files(eval_result, folder=args.result_dir,

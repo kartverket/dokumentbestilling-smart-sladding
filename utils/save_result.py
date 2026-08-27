@@ -40,6 +40,52 @@ def write_result_files(result, folder=".", description=None, log=None):
         for t, (tr, tot) in sorted(result["pr_type"].items()):
             w.writerow([t or "(empty)", tr, tot, round(tr / tot * 100, 1) if tot else 0])
 
+        kilde = result.get("pr_kilde") or {}
+        if kilde:
+            w.writerow([])
+            w.writerow(["## Per kilde"])
+            w.writerow(["kilde", "treff", "oversladd", "pred", "oversladd_pct"])
+            for k, (tr, ov) in sorted(kilde.items()):
+                tot = tr + ov
+                w.writerow([k, tr, ov, tot,
+                            round(ov / tot * 100, 1) if tot else 0])
+
+        timings = result.get("timings") or {}
+        if timings:
+            total = sum(timings.values())
+            w.writerow([])
+            w.writerow(["## Time"])
+            w.writerow(["fase", "sekunder", "pct"])
+            for phase, sec in sorted(timings.items(), key=lambda kv: -kv[1]):
+                w.writerow([phase, round(sec, 1),
+                            round(sec / total * 100, 1) if total else 0])
+            w.writerow(["sum", round(total, 1), 100.0])
+            wall = result.get("wall_time")
+            if wall is not None:
+                w.writerow(["wall_clock", round(wall, 1), ""])
+
+        vlm = result.get("vlm") or {}
+        if vlm:
+            w.writerow([])
+            w.writerow(["## VLM"])
+            w.writerow(["model", "dokumenter", "dokumenter_dommet",
+                        "dokumenter_med_profil", "bokser_dommet",
+                        "bokser_fjernet", "cache_treff", "sekunder"])
+            w.writerow([vlm.get("model", ""), vlm.get("docs", 0),
+                        vlm.get("docs_judged", 0), vlm.get("docs_profile", 0),
+                        vlm.get("judged", 0), vlm.get("dropped", 0),
+                        vlm.get("cache_hits", 0),
+                        round(vlm.get("seconds", 0.0), 1)])
+            judged_per_kilde = vlm.get("judged_per_kilde") or {}
+            if judged_per_kilde:
+                dropped_per_kilde = vlm.get("dropped_per_kilde") or {}
+                w.writerow([])
+                w.writerow(["## VLM per kilde"])
+                w.writerow(["kilde", "dommet", "fjernet"])
+                for k in sorted(judged_per_kilde):
+                    w.writerow([k, judged_per_kilde[k],
+                                dropped_per_kilde.get(k, 0)])
+
         miss = result.get("miss_files", [])
         if miss:
             w.writerow([])

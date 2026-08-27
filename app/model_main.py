@@ -228,7 +228,7 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                            elektronisk_tinglyst=False, only_yolo=False,
                            cache_dir=None, yolo_cache_dir=None,
                            only_cache=False, rettsstiftelsestyper=None,
-                           postfilter=True, vlm=None):
+                           postfilter=True, vlm=None, stats=None):
     """only_cache=True: return None instead of running the models on a cache
     miss. Lets GPU-less worker processes handle cache hits and send the misses
     back to a process that has the models.
@@ -240,9 +240,13 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     vlm: a vlm_verifier.VlmConfig turns the VLM verifier on. It can only
     remove boxes, and it needs the page images, so a document served entirely
     from the caches is rendered anyway.
+
+    stats: an optional dict this document's phase timings, cache hits and VLM
+    counters are written to. Left untouched on a cache miss under only_cache.
     """
     t = {}
     n_judged = n_dropped = 0
+    vlm_stats = {}
     codes = {k.strip().upper() for k in (rettsstiftelsestyper or ()) if k}
     koordfam = bool(KOORDFAM_CODES & codes)
     seksjonering = bool(SEKSJONERING_CODES & codes)
@@ -350,7 +354,8 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                 image_vlm = images_ocr[si] if images_ocr else None
                 boxes_with_source, judged, dropped = vlm_verifier.verify_page(
                     boxes_with_source, image_vlm, lines, vlm,
-                    koordfam=koordfam, seksjonering=seksjonering)
+                    koordfam=koordfam, seksjonering=seksjonering,
+                    stats=vlm_stats)
                 n_judged += judged
                 n_dropped += dropped
 
@@ -364,6 +369,15 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     if write_time:
         _write_time(t, len(pages), name, ocr_hit, yolo_hit,
                     n_judged, n_dropped)
+
+    if stats is not None:
+        stats["timings"] = dict(t)
+        stats["pages"] = n_pages
+        stats["ocr_cache_hit"] = ocr_hit
+        stats["yolo_cache_hit"] = yolo_hit
+        if vlm is not None:
+            vlm_stats["profile_skipped"] = koordfam or seksjonering
+            stats["vlm"] = vlm_stats
 
     return _to_flat(pages, page_field)
 

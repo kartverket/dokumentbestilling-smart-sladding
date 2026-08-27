@@ -120,7 +120,7 @@ def _line_text(lines, box):
 
 
 def _judge(crop_png, a, i):
-    """One box -> «ja» or «nei», plus the model's transcription.
+    """One box -> «ja» or «nei», the model's transcription, and cache hit or not.
 
     Never raises, and never answers «nei» on a failure: the caller must be
     able to keep the box whatever goes wrong.
@@ -135,7 +135,7 @@ def _judge(crop_png, a, i):
         if cached is not None:
             answer, number, _rationale, parse_error, check = parse_answer(cached)
             if not parse_error:
-                return answer, number, check.get("linjen", "")
+                return answer, number, check.get("linjen", ""), True
 
     url = a.urls[i % len(a.urls)]
     messages = _build_melding(a.prompt, image_b64)
@@ -150,16 +150,16 @@ def _judge(crop_png, a, i):
         # quietly do nothing at all.
         if not (e.code == 400 and _THINKING["value"]
                 and "reasoning" in str(e).lower()):
-            return "ja", "", ""
+            return "ja", "", "", False
         _THINKING["value"] = None
         try:
             raw = call_model(url, a.model, messages, api_key=a.api_key,
                              timeout=a.timeout, temperature=0.0,
                              max_tokens=a.max_tokens, thinking=None)
         except Exception:
-            return "ja", "", ""
+            return "ja", "", "", False
     except Exception:
-        return "ja", "", ""
+        return "ja", "", "", False
     answer, number, _rationale, parse_error, check = parse_answer(raw)
     # Once the field has been dropped the answers no longer match the
     # fingerprint, so they stay out of the cache.
@@ -168,7 +168,7 @@ def _judge(crop_png, a, i):
             vlm_cache.write_cache(a.cache_dir, key, "", raw, 0.0)
         except OSError:
             pass
-    return answer, number, check.get("linjen", "")
+    return answer, number, check.get("linjen", ""), False
 
 
 def in_stratum(source, a, koordfam=False, seksjonering=False):
@@ -184,12 +184,16 @@ def in_stratum(source, a, koordfam=False, seksjonering=False):
 
 
 def verify_page(boxes_with_source, image, lines, a, koordfam=False,
-                seksjonering=False):
+                seksjonering=False, stats=None):
     """Judge one page's boxes and return the survivors.
 
     `boxes_with_source` is the internal per-box list from model_main,
     `image` the page as the OCR saw it. Boxes outside the stratum are
     returned untouched and never reach the model.
+
+    stats  an optional dict the counters are added to: judged, dropped,
+             cache_hits, and the same split per kilde. The caller owns the
+             dict and can accumulate over pages and documents.
     """
     if not boxes_with_source or image is None:
         return boxes_with_source, 0, 0
@@ -210,13 +214,32 @@ def verify_page(boxes_with_source, image, lines, a, koordfam=False,
             lambda t: _judge(t[1], a, t[0]), tasks))
 
     dropped = set()
-    for (i, _crop_png), (answer, number, own_line) in zip(tasks, verdicts):
+    cache_hits = 0
+    for (i, _crop_png), (answer, number, own_line, from_cache) in zip(tasks, verdicts):
+        cache_hits += bool(from_cache)
         if answer != "nei":
             continue
         if fnr_protects([number, own_line, _line_text(lines, boxes_with_source[i][0])]):
             continue
         dropped.add(i)
 
+    if stats is not None:
+        _count(stats, tasks, dropped, cache_hits, boxes_with_source)
+
     survivors = [pair for i, pair in enumerate(boxes_with_source)
                  if i not in dropped]
     return survivors, len(tasks), len(dropped)
+
+
+def _count(stats, tasks, dropped, cache_hits, boxes_with_source):
+    """Add one page's verdicts to the caller's counter dict."""
+    stats["judged"] = stats.get("judged", 0) + len(tasks)
+    stats["dropped"] = stats.get("dropped", 0) + len(dropped)
+    stats["cache_hits"] = stats.get("cache_hits", 0) + cache_hits
+    judged_per_kilde = stats.setdefault("judged_per_kilde", {})
+    dropped_per_kilde = stats.setdefault("dropped_per_kilde", {})
+    for i, _crop_png in tasks:
+        source = boxes_with_source[i][1]
+        judged_per_kilde[source] = judged_per_kilde.get(source, 0) + 1
+        if i in dropped:
+            dropped_per_kilde[source] = dropped_per_kilde.get(source, 0) + 1

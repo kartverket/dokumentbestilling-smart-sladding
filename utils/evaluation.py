@@ -60,6 +60,7 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, 
     total_truth = total_hit = total_pred = total_oversladd = 0
     total_ov_area = total_fa_area = 0.0
     pr_type = defaultdict(lambda: [0, 0])
+    pr_kilde = defaultdict(lambda: [0, 0])          # kilde -> [treff, oversladd]
     miss_files = defaultdict(lambda: [0, 0])
     oversladd_files = defaultdict(int)
     oversladd_boxes = {}   # (navn, si) -> (iw, ih, [(x0,y0,x1,y1)])
@@ -132,6 +133,13 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, 
                 miss_files[(name, si)][0] += 1
             write(f"   truth#{fi + 1} {t:<22} coverage={best_cov:5.0%}  IoU={best_iou:5.0%}  "
                   f"-> {'HIT' if hit else 'MISSING'}")
+        for pi in range(len(pred)):
+            if source_names:
+                source = (source_names[pi] if pi < len(source_names) else "") or "unknown"
+            else:
+                source = "yolo" if raw[pi] in yolo_coords else "paddle"
+            pr_kilde[source][0 if pi in hit_pred else 1] += 1
+
         n_oversladd = len(pred) - len(hit_pred)
         total_oversladd += n_oversladd
         if n_oversladd > 0:
@@ -170,6 +178,17 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, 
     for t, (tr, tot) in sorted(pr_type.items()):
         write(f"   {t or '(empty)':<22} {tr}/{tot} = {tr / tot:.0%}")
 
+    if pr_kilde:
+        write("Sladd boxes per kilde (hit / oversladd):")
+        for k, (tr, ov) in sorted(pr_kilde.items()):
+            tot = tr + ov
+            write(f"   {k:<22} {tot:>5} boxes:  {tr} hit, {ov} oversladd "
+                  f"= {(ov / tot if tot else 0):.0%} oversladd")
+        n_hit_boxes = sum(tr for tr, _ in pr_kilde.values())
+        if n_hit_boxes != total_hit:
+            write(f"   (counted per sladd box: {n_hit_boxes} boxes cover "
+                  f"{total_hit} truth boxes)")
+
     error = sorted((k for k, (b, _tot) in miss_files.items() if b > 0))
     write("\n" + "=" * 64)
     if total_truth == 0:
@@ -193,6 +212,7 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, 
         "total_overlap": total_ov_area / total_fa_area if total_fa_area else 0.0,
         "threshold": threshold,
         "pr_type": {t: tuple(v) for t, v in pr_type.items()},
+        "pr_kilde": {k: tuple(v) for k, v in pr_kilde.items()},
         "details": details,
         "miss_files": [
             {"fil": name, "side": si, "bom": b, "truth_total": tot}
