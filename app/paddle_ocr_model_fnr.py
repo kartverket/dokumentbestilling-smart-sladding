@@ -74,6 +74,9 @@ def _fetch_reader():
         kwargs["text_recognition_model_dir"] = REC_MODEL_DIR
         if gpu:
             kwargs["precision"] = "fp16"
+        else:
+            # PaddleX enables oneDNN by default, and 3.3.1 crashes in that path.
+            kwargs["enable_mkldnn"] = False
         if os.environ.get("SLADD_HPI") == "1":
             kwargs["enable_hpi"] = True
 
