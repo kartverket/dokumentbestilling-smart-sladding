@@ -28,10 +28,10 @@ RUN set -eux; \
         rm "${model}.tar"; \
     done
 
-# Before requirements.txt, which names the same torch version. PyPI's default
-# wheel is a CUDA 13 build, and CUDA 13 dropped sm_70, which is this card.
-# Installed first, the cu126 build satisfies that pin and pip leaves it alone.
-RUN pip install --no-cache-dir torch==2.12.1 torchvision==0.27.1 \
+# Before requirements.txt, which names the same torch version. The +cu126 tag is
+# load-bearing: the index also carries +cu130, which sorts higher and drops
+# sm_70, this card. Installed first, it satisfies the pin and pip leaves it be.
+RUN pip install --no-cache-dir torch==2.12.1+cu126 torchvision==0.27.1+cu126 \
     --index-url https://download.pytorch.org/whl/cu126
 
 COPY requirements.txt .
