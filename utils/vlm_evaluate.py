@@ -41,7 +41,7 @@ from vlm_client import fnr_protects
 from filter_common import (reclassify_invalid_covering,
                            reclassify_missing_covered)
 
-ANSWER = ("ja", "nei", "usikker")
+ANSWER = ("ja", "nei")
 
 
 # ── Statistics ────────────────────────────────────────────────
@@ -134,9 +134,11 @@ def join(manifest, judge):
             unjudged += 1
             continue
         row = dict(m)
-        row["svar"] = (d.get("svar") or "usikker").strip().lower()
+        # A missing or unreadable verdict keeps the box, same as everywhere
+        # else. «feil» is carried along and counted separately below.
+        row["svar"] = (d.get("svar") or "ja").strip().lower()
         if row["svar"] not in ANSWER:
-            row["svar"] = "usikker"
+            row["svar"] = "ja"
         row["tall"] = d.get("tall", "")
         row["begrunnelse"] = d.get("begrunnelse", "")
         row["feil"] = d.get("feil", "")
@@ -241,9 +243,7 @@ def _group(row):
 # ── Report ────────────────────────────────────────────────────
 
 def _columns(tab):
-    """The verdicts to show. usikker only appears when something landed there."""
-    return [s for s in ANSWER
-            if s != "usikker" or any(tab[k]["usikker"] for k in tab)]
+    return list(ANSWER)
 
 
 def write_matrix(row_list, write=print):
@@ -294,9 +294,9 @@ def _factors(sample, n_bom_judged, n_cov_judged):
     return miss, cov
 
 
-def tally(row_list, sample, uncertain_remover=False, write=print):
+def tally(row_list, sample, write=print):
     """Gain against loss risk, scaled up to the full uttrekk."""
-    remove = {"nei", "usikker"} if uncertain_remover else {"nei"}
+    remove = {"nei"}
 
     miss = [r for r in row_list if _group(r) == "BOM"]
     cov = [r for r in row_list if _group(r) == "DEKKENDE"]
@@ -327,8 +327,6 @@ def tally(row_list, sample, uncertain_remover=False, write=print):
           f"{_estimate(loss_upper)} at the 95 % bound")
     write(f"  Sample to uttrekk: BOM × {miss_factor:.2f}, "
           f"covering × {hit_factor:.2f}.")
-    if uncertain_remover:
-        write("  «usikker» counts as «nei» here (--uncertain-remover).")
     write("")
 
     if not cov:
@@ -440,9 +438,6 @@ def main():
                         "still hold: the covering boxes were drawn at random "
                         "and independently of the features, so a subset is "
                         "still a random sample of its own subpopulation.")
-    p.add_argument("--uncertain-remover", action="store_true",
-                   help="Count «usikker» as «nei». The default is to keep, "
-                        "an uncertain verdict is no proof of oversladding.")
     a = p.parse_args()
 
     manifest = read_result_csv(a.manifest)
@@ -480,7 +475,7 @@ def main():
     n_error = sum(1 for r in row_list if r.get("feil"))
     if n_error:
         print(f"  ⚠ {n_error} rows had errors/unparsable answers, counted "
-              f"as usikker")
+              f"as «ja», so they cost gain rather than recall")
 
     if a.fnr_override:
         # Four independent readings of the same line; one valid 11-digit run
@@ -518,7 +513,7 @@ def main():
     write_per_source(row_list)
     if a.split_by:
         write_deling(row_list, a.split_by)
-    res = tally(row_list, sample, uncertain_remover=a.uncertain_remover)
+    res = tally(row_list, sample)
     if skewed:
         print("  NB: the result above rests on a sample that does not look "
               "random, see the warning at the top.")
@@ -527,7 +522,7 @@ def main():
         os.path.dirname(os.path.abspath(a.manifest)) if a.judge.startswith("regel:")
         else os.path.dirname(os.path.abspath(a.judge)))
     os.makedirs(out_dir, exist_ok=True)
-    remove = {"nei", "usikker"} if a.uncertain_remover else {"nei"}
+    remove = {"nei"}
     lost = [r for r in row_list if _group(r) == "DEKKENDE" and r["svar"] in remove]
     gain = [r for r in row_list if _group(r) == "BOM" and r["svar"] in remove]
     lost.sort(key=lambda r: (r["fil"], int(r["side"]), int(r["nr"])))
@@ -544,8 +539,8 @@ def main():
 
     with open(os.path.join(out_dir, "oppsummering.json"), "w",
               encoding="utf-8") as f:
-        json.dump({**res, "usikker_fjerner": a.uncertain_remover,
-                   "n_domt": len(row_list), "n_manifest": len(manifest),
+        json.dump({**res, "n_domt": len(row_list),
+                   "n_manifest": len(manifest),
                    "n_feil": n_error}, f, ensure_ascii=False, indent=2)
 
 

@@ -3,8 +3,8 @@
 Off unless it is turned on (VLM_ENABLED / --vlm / ?vlm=true). When on, every
 box in the stratum is cropped with a red frame around it, sent to the model
 one box at a time, and dropped only on a clear «nei». Everything else — «ja»,
-«usikker», a timeout, an unparsable answer, a missing endpoint — keeps the
-box, so the verifier can only remove sladdinger, never add or move one.
+a timeout, an unparsable answer, a missing endpoint — keeps the box, so the
+verifier can only remove sladdinger, never add or move one.
 
 Two guards sit in front of the «nei»:
 
@@ -148,9 +148,10 @@ def _line_text(lines, box):
 
 
 def _judge(crop_png, a, i):
-    """One box -> «ja», «nei» or «usikker», plus the model's transcription.
+    """One box -> «ja» or «nei», plus the model's transcription.
 
-    Never raises: the caller must be able to keep the box on any failure.
+    Never raises, and never answers «nei» on a failure: the caller must be
+    able to keep the box whatever goes wrong.
     """
     image_b64 = base64.b64encode(crop_png).decode("ascii")
     key = vlm_cache.item_key(image_b64, None) if a.cache_dir else None
@@ -173,20 +174,20 @@ def _judge(crop_png, a, i):
                          thinking=_THINKING["value"])
     except urllib.error.HTTPError as e:
         # An endpoint that does not know reasoning_effort answers 400 to every
-        # box. Without this the verifier would answer «usikker» to everything
-        # and quietly do nothing at all.
+        # box. Without this the verifier would answer «ja» to everything and
+        # quietly do nothing at all.
         if not (e.code == 400 and _THINKING["value"]
                 and "reasoning" in str(e).lower()):
-            return "usikker", "", ""
+            return "ja", "", ""
         _THINKING["value"] = None
         try:
             raw = call_model(url, a.model, messages, api_key=a.api_key,
                              timeout=a.timeout, temperature=0.0,
                              max_tokens=a.max_tokens, thinking=None)
         except Exception:
-            return "usikker", "", ""
+            return "ja", "", ""
     except Exception:
-        return "usikker", "", ""
+        return "ja", "", ""
     answer, number, _rationale, parse_error, check = parse_answer(raw)
     # Once the field has been dropped the answers no longer match the
     # fingerprint, so they stay out of the cache.

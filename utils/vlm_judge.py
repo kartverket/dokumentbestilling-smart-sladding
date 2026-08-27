@@ -19,8 +19,9 @@ judgements worse. The manifest's OCR is still used after the fact, by
 vlm_evaluate --fnr-override.
 
 Anything that cannot be interpreted — timeout, HTTP error, unparsable answer —
-is logged in the «feil» column and becomes «usikker», NEVER «nei»: «nei» is
-the answer that costs recall.
+is logged in the «feil» column and becomes «ja», NEVER «nei»: «nei» is the
+answer that costs recall. «feil» is what tells a forced «ja» apart from one
+the model gave.
 
 Run:
     python utils/vlm_judge.py \
@@ -196,7 +197,7 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
         with open(os.path.join(folder, row["utsnitt"]), "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode("ascii")
     except OSError as e:
-        return {"svar": "usikker", "tall": "",
+        return {"svar": "ja", "tall": "",
                 "begrunnelse": "",
                 "sekunder": round(time.monotonic() - t0, 2),
                 "feil": f"{type(e).__name__}: {e}"[:200], "raatekst": ""}
@@ -250,7 +251,7 @@ def judge_one(row, a, folder, prompt, cache_dir=None):
     sec = time.monotonic() - t0
 
     if error:
-        return {"svar": "usikker", "tall": "",
+        return {"svar": "ja", "tall": "",
                 "begrunnelse": "", "sekunder": round(sec, 2), "feil": error,
                 "raatekst": ""}
     answer, number, rationale, parse_error, check = parse_answer(raw)
@@ -609,7 +610,7 @@ def run(a):
               f"max {timings[-1]:.2f}s")
     if tally["feil"]:
         print(f"  ⚠ {tally['feil']} rows with errors/unparsable answers "
-              f"— all counted as «usikker». Run again with --resume.")
+              f"— all counted as «ja». Run again with --resume.")
     print(f"  Judgements:      {out_path}")
     print(f"  Without content: {write_without_content(out_path)}")
     print(f"  Review:          {write_review_md(out_path, folder)}")

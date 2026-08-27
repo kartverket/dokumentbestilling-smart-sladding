@@ -10,8 +10,10 @@ all offer, so the model is switched with a URL and a name instead of a code
 change. llama-server is what runs on the GPU host: see docs/VLM-ISOLATION.md
 for why the smallest server wins here.
 
-Anything that cannot be interpreted — timeout, HTTP error, unparsable answer —
-becomes «usikker», NEVER «nei»: «nei» is the answer that costs recall.
+The model answers «ja» or «nei» and nothing else. Anything that cannot be
+interpreted — timeout, HTTP error, unparsable answer — becomes «ja», NEVER
+«nei»: «nei» is the answer that costs recall. The «feil» field is what tells a
+forced «ja» apart from one the model actually gave.
 """
 
 import json
@@ -33,7 +35,7 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler(
 STD_URL = "http://127.0.0.1:8080/v1"   # llama-server default port
 STD_TIMEOUT = 120
 # Roughly double a full answer. A truncated answer is unparsable and
-# becomes «usikker», never «nei», so the cap costs recall nothing when it bites.
+# becomes «ja», never «nei», so the cap costs recall nothing when it bites.
 STD_MAX_TOKENS = 150
 
 # Set to None if the endpoint rejects the field — shared across the threads.
@@ -58,7 +60,7 @@ Svar kun med JSON:
 # ── Answer parsing ────────────────────────────────────────────
 
 _JSON_RE = re.compile(r"\{.*?\}", re.S)
-_ANSWER_RE = re.compile(r"\b(ja|nei|usikker)\b", re.I)
+_ANSWER_RE = re.compile(r"\b(ja|nei)\b", re.I)
 
 
 def _checklist(d):
@@ -75,10 +77,11 @@ def parse_answer(text):
 
     Strict to lenient: plain JSON, then the first JSON object in the text
     (models like to wrap it in ```json), then a keyword search. Anything left
-    over becomes «usikker», never «nei».
+    over becomes «ja», never «nei»: a box we could not read a verdict for
+    keeps its sladd. «feil» says why.
     """
     if not text or not text.strip():
-        return "usikker", "", "", "empty answer", {}
+        return "ja", "", "", "empty answer", {}
     clean = text.strip()
     if clean.startswith("```"):
         clean = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", clean).strip()
@@ -95,11 +98,11 @@ def parse_answer(text):
         if not isinstance(d, dict):
             continue
         answer = str(d.get("svar", "")).strip().lower()
-        if answer in ("ja", "nei", "usikker"):
+        if answer in ("ja", "nei"):
             return (answer, str(d.get("tall", "")).strip(),
                     str(d.get("begrunnelse", "")).strip(), "", _checklist(d))
         missing = "svar" not in d or not str(d.get("svar", "")).strip()
-        return ("usikker", str(d.get("tall", "")).strip(),
+        return ("ja", str(d.get("tall", "")).strip(),
                 str(d.get("begrunnelse", "")).strip(),
                 "the model omitted the «svar» field — the rest of the JSON came"
                 if missing else f"unknown answer {answer!r}", _checklist(d))
@@ -108,7 +111,7 @@ def parse_answer(text):
     if m:
         return (m.group(1).lower(), "", clean[:120],
                 "not JSON, read by keyword", {})
-    return "usikker", "", clean[:120], "unparsable answer", {}
+    return "ja", "", clean[:120], "unparsable answer", {}
 
 
 # ── Calls ─────────────────────────────────────────────────────

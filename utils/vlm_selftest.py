@@ -155,7 +155,7 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
     reject_reasoning
                     answers 400 to reasoning_effort, like older endpoints
     answers         {image-b64: svar} — the stub's "model". Unknown images
-                    fall back to a ja/nei/usikker round-robin.
+                    fall back to a ja/nei round-robin.
     fixed           a dict answered to everything, for tests that need to know
                     what the model said without knowing which crop it saw
     """
@@ -199,7 +199,7 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
             elif bad and i % 7 == 0:
                 content = "Dette ser ut som et fødselsnummer, ja."
             else:
-                answer = svar_bilde or ("ja", "nei", "usikker")[i % 3]
+                answer = svar_bilde or ("ja", "nei")[i % 2]
                 content = json.dumps({"svar": answer,
                                       "tall": "", "begrunnelse": "stub"})
             message = {"role": "assistant", "content": content}
@@ -344,7 +344,7 @@ def check_verifier(rot):
         srv.shutdown()
 
     # An endpoint that answers 400 to reasoning_effort would otherwise make
-    # every box «usikker», and the verifier would look like it was running
+    # every box «ja», and the verifier would look like it was running
     # while removing nothing.
     import vlm_client
     before_thinking = vlm_client._THINKING["value"]
@@ -402,12 +402,12 @@ def main(keep):
         for field in ("tall", "holdepunkt"):
             check(STD_PROMPT.index(f'"{field}"') < STD_PROMPT.index('"svar"'),
                   f"«{field}» comes before «svar» in the JSON template")
-        # «usikker» is a parse failure state, not an answer: doubt has to go
-        # to «ja», or recall leaks out through a third alternative.
+        # Two verdicts only. Doubt goes to «ja», and a third alternative
+        # must not creep back into the prompt.
         check(re.search(r"i tvil,?\s*svar «ja»", STD_PROMPT),
               "the prompt sends doubt to «ja»")
         check("usikker" not in STD_PROMPT.lower(),
-              "the prompt does not offer «usikker» as an answer")
+              "the prompt offers no third verdict")
         asymmetry = re.search(r"(\d+) ganger verre", STD_PROMPT)
         check(asymmetry and int(asymmetry.group(1)) > 1,
               "the prompt states the cost asymmetry "
@@ -425,12 +425,14 @@ def main(keep):
               "JSON in a code block is read")
         check(parse_answer("Jeg mener dette er nei, en koordinat.")[0] == "nei",
               "prose falls back on keywords")
-        check(parse_answer("")[0] == "usikker", "an empty answer becomes usikker")
-        check(parse_answer("^^^")[0] == "usikker", "junk becomes usikker")
+        check(parse_answer("")[0] == "ja", "an empty answer becomes ja")
+        check(parse_answer("^^^")[0] == "ja", "junk becomes ja")
+        check(parse_answer('{"svar": "usikker"}')[0] == "ja",
+              "a model that answers «usikker» anyway is read as ja")
         # A full checklist without «svar» is still a parse failure.
         without = parse_answer('{"linjen":"Dagboknr. 1234/1980","holdepunkt":"dagboknr",'
                          '"tall":"1234/1980"}')
-        check(without[0] == "usikker" and "omitted the «svar»" in without[3],
+        check(without[0] == "ja" and "omitted the «svar»" in without[3],
               f"a missing «svar» is named precisely ({without[3]!r})")
         check(all(parse_answer(t)[0] != "nei" for t in ("", "^^^", "{}")),
               "no failure state can become «nei»")
@@ -633,11 +635,11 @@ def main(keep):
             d1 = read(image_csv)
             check(len(d1) == 6, f"all 6 rows written despite errors ({len(d1)})")
             check(any(r["feil"] for r in d1), "at least one error was logged")
-            check(all(r["svar"] in ("ja", "nei", "usikker") for r in d1),
+            check(all(r["svar"] in ("ja", "nei") for r in d1),
                   "every answer is a valid value")
-            check(all(r["svar"] == "usikker" for r in d1
+            check(all(r["svar"] == "ja" for r in d1
                       if r["feil"].startswith(("HTTPError", "URLError"))),
-                  "network errors became «usikker», never «nei»")
+                  "network errors became «ja», never «nei»")
             n_error = sum(1 for r in d1 if r["feil"])
 
             # Resuming: the failed rows must be retried
@@ -675,8 +677,8 @@ def main(keep):
             check(all("thought" in r["feil"] for r in d),
                   "empty «content» is diagnosed as thinking, not an anonymous "
                   "error")
-            check(all(r["svar"] == "usikker" for r in d),
-                  "and becomes «usikker», not «nei»")
+            check(all(r["svar"] == "ja" for r in d),
+                  "and becomes «ja», not «nei»")
         finally:
             srv.shutdown()
 
@@ -887,14 +889,12 @@ def main(keep):
         check("No rows left" in out_empty,
               "an empty condition says so instead of counting on nothing")
 
-        # With --uncertain-remover the image arm's usikre must show as loss
         run_step(os.path.join(HERE, "vlm_evaluate.py"),
              "--manifest", os.path.join(ut, "manifest.csv"),
              "--judge", os.path.join(ut, "judge_image.csv"),
-             "--out-dir", os.path.join(ut, "evaluering_bilde"),
-             "--uncertain-remover")
+             "--out-dir", os.path.join(ut, "evaluering_bilde"))
         check(os.path.isfile(os.path.join(ut, "evaluering_bilde", "lost.csv")),
-              "--uncertain-remover runs and writes lost.csv")
+              "the image arm evaluates and writes lost.csv")
 
         # ── The verifier in the pipeline ─────────────────────
         # vlm_judge above is the offline tool. This is the same prompt and
