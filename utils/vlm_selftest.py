@@ -32,6 +32,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "app")))
 import fitz
 from PIL import Image
 
+from config import (VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,
+                    VLM_MARGIN_RIGHT_PT, VLM_MARGIN_UP_PT, VLM_MAX_PX)
 from filter_common import SCALE
 from filter_review import rotate_box
 from vlm_export import _ocr_context
@@ -477,7 +479,8 @@ def main(keep):
         run_step(os.path.join(HERE, "vlm_export.py"),
              "--res-csv", res_csv, "--truth-csv", truth_csv,
              "--folder", pdf_dir, "--out-dir", ut,
-             "--hit-sample", "2", "--ocr-cache", ocr_dir, "--seed", "7")
+             "--hit-sample", "2", "--ocr-cache", ocr_dir, "--seed", "7",
+             "--margin", "60")
         manifest = read(os.path.join(ut, "manifest.csv"))
         with open(os.path.join(ut, "utvalg.json"), encoding="utf-8") as f:
             sample = json.load(f)
@@ -557,6 +560,40 @@ def main(keep):
                   for r in read(os.path.join(full, "manifest.csv"))
                   if r["fil"] != "0100003.pdf"),
               "--full-width gives crops the full page width")
+
+        # A flagless export must give the images prod sends, or the numbers
+        # measured here stop describing prod.
+        as_prod = os.path.join(rot, "eksport_som_prod")
+        run_step(os.path.join(HERE, "vlm_export.py"),
+             "--res-csv", res_csv, "--truth-csv", truth_csv,
+             "--folder", pdf_dir, "--out-dir", as_prod, "--hit-sample", "0")
+        with open(os.path.join(as_prod, "utvalg.json"), encoding="utf-8") as f:
+            geometry = json.load(f)
+        check((geometry["margin_up_pt"], geometry["margin_down_pt"],
+               geometry["margin_left_pt"], geometry["margin_right_pt"],
+               geometry["maks_px"])
+              == (VLM_MARGIN_UP_PT, VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,
+                  VLM_MARGIN_RIGHT_PT, VLM_MAX_PX),
+              "an export without flags uses the config geometry prod crops with")
+        check(all(int(r["utsnitt_bredde"]) == min(VLM_MAX_PX, page_width)
+                  for r in read(os.path.join(as_prod, "manifest.csv"))
+                  if r["fil"] != "0100003.pdf"),
+              f"and its crops are the page width capped at {VLM_MAX_PX} px")
+
+        one_side = os.path.join(rot, "eksport_venstre")
+        run_step(os.path.join(HERE, "vlm_export.py"),
+             "--res-csv", res_csv, "--truth-csv", truth_csv,
+             "--folder", pdf_dir, "--out-dir", one_side, "--hit-sample", "0",
+             "--margin-left", "full", "--margin-right", "30", "--max-px", "0")
+        m_side = [r for r in read(os.path.join(one_side, "manifest.csv"))
+                  if r["fil"] != "0100003.pdf"]
+        check(m_side and all(int(r["utsnitt_bredde"]) < page_width
+                             for r in m_side),
+              "--margin-left full --margin-right 30 stops short of the right "
+              "edge")
+        check(all(abs(float(r["m_x1"]) + 30 * SCALE
+                      - int(r["utsnitt_bredde"])) < 12 for r in m_side),
+              "and the right margin is the 30 pt asked for")
 
         # nr is assigned before the work is distributed, so the manifests must
         # be bit-identical no matter how many processes.

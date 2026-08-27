@@ -44,11 +44,13 @@ STD_MAX_TOKENS = 150
 MARKER = (230, 20, 20)   # red frame around the box being judged
 MARKER_WIDTH = 3         # px, grown with the crop width
 
+FULL = "full"            # margin value: reach the page edge on that side
+
 
 # ── Crop ────────────────────────────────────────────────
 
-def crop_with_marker(image, box, margin_px, margin_up=None, margin_down=None,
-                     max_px=None, full_width=False, from_top=False):
+def crop_with_marker(image, box, *, margin_up, margin_down, margin_left,
+                     margin_right, max_px=None):
     """Cut the crop around `box` and draw the red frame on it.
 
     The one definition of the image the model is shown. Prod and
@@ -56,10 +58,11 @@ def crop_with_marker(image, box, margin_px, margin_up=None, margin_down=None,
     images than the runs the thresholds were measured on.
 
     `image` is the page as the OCR saw it (already rotated) and `box` its
-    coordinates in that same pixel space. `margin_px` is the context to each
-    side; `margin_up` and `margin_down` default to it. `full_width` takes the
-    whole page width instead of the horizontal margin, `from_top` starts the
-    crop at the top of the page.
+    coordinates in that same pixel space. Each side is pixels, or FULL to
+    reach the page edge, and all four are required: a side that quietly fell
+    back to a default would show the model an image no run was measured on.
+    They are separate because the context is: the ledetekst that tells a fnr
+    from a coordinate sits on the same line or above it.
 
     Returns (crop, marker): the RGB crop and the frame coordinates inside it.
     On an edge case it returns (None, reason) instead, where reason is
@@ -73,13 +76,13 @@ def crop_with_marker(image, box, margin_px, margin_up=None, margin_down=None,
     if x1 <= 0 or y1 <= 0 or x0 >= image.width or y0 >= image.height:
         return None, "outside"
 
-    up = margin_px if margin_up is None else margin_up
-    down = margin_px if margin_down is None else margin_down
-    left = 0 if full_width else max(0, int(x0 - margin_px))
-    right = (image.width if full_width
-             else min(image.width, int(x1 + margin_px)))
-    top = 0 if from_top else max(0, int(y0 - up))
-    bottom = min(image.height, int(y1 + down))
+    left = (0 if margin_left == FULL
+            else max(0, int(x0 - margin_left)))
+    right = (image.width if margin_right == FULL
+             else min(image.width, int(x1 + margin_right)))
+    top = 0 if margin_up == FULL else max(0, int(y0 - margin_up))
+    bottom = (image.height if margin_down == FULL
+              else min(image.height, int(y1 + margin_down)))
     if right <= left or bottom <= top:
         return None, "empty"
 

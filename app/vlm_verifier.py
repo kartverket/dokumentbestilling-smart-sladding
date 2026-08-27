@@ -16,9 +16,9 @@ Two guards sit in front of the «nei»:
             it infers, so the code does the inferring.
 
 The crop itself is vlm_client.crop_with_marker, shared with
-utils/vlm_export.py, and the geometry is VLM_MARGIN_PT/VLM_MAX_PX in config:
-if prod and the export drift apart the model sees other images in prod than in
-the runs it was measured on.
+utils/vlm_export.py, and the geometry is the VLM_MARGIN_*/VLM_MAX_PX block in
+config, which the export CLI defaults to as well: if prod and the export drift
+apart the model sees other images in prod than in the runs it was measured on.
 """
 
 import base64
@@ -31,11 +31,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import (PDF_DPI, VLM_API_KEY, VLM_BREAKER_COOLDOWN,
                     VLM_BREAKER_FAILURES, VLM_CONCURRENT, VLM_ENABLED,
-                    VLM_MARGIN_PT, VLM_MAX_PX, VLM_MAX_TOKENS, VLM_MODEL,
-                    VLM_SOURCES, VLM_TIMEOUT, VLM_URL)
+                    VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,
+                    VLM_MARGIN_RIGHT_PT, VLM_MARGIN_UP_PT, VLM_MAX_PX,
+                    VLM_MAX_TOKENS, VLM_MODEL, VLM_SOURCES, VLM_TIMEOUT,
+                    VLM_URL)
 import vlm_cache
-from vlm_client import (STD_PROMPT, _THINKING, _build_melding, call_model,
-                        crop_with_marker, fnr_protects, parse_answer)
+from vlm_client import (FULL, STD_PROMPT, _THINKING, _build_melding,
+                        call_model, crop_with_marker, fnr_protects,
+                        parse_answer)
 
 SCALE = PDF_DPI / 72.0            # PDF points -> pixels
 
@@ -86,7 +89,11 @@ class VlmConfig:
     def __init__(self, urls, model, timeout=VLM_TIMEOUT,
                  concurrent=VLM_CONCURRENT, max_tokens=VLM_MAX_TOKENS,
                  api_key=VLM_API_KEY, sources=VLM_SOURCES,
-                 margin_pt=VLM_MARGIN_PT, max_px=VLM_MAX_PX, cache_dir=None,
+                 margin_up_pt=VLM_MARGIN_UP_PT,
+                 margin_down_pt=VLM_MARGIN_DOWN_PT,
+                 margin_left_pt=VLM_MARGIN_LEFT_PT,
+                 margin_right_pt=VLM_MARGIN_RIGHT_PT,
+                 max_px=VLM_MAX_PX, cache_dir=None,
                  prompt=STD_PROMPT, thinking="none"):
         self.urls = [urls] if isinstance(urls, str) else list(urls)
         self.model = model
@@ -95,7 +102,10 @@ class VlmConfig:
         self.max_tokens = max_tokens
         self.api_key = api_key
         self.sources = frozenset(sources)
-        self.margin_pt = margin_pt
+        self.margin_up_pt = margin_up_pt
+        self.margin_down_pt = margin_down_pt
+        self.margin_left_pt = margin_left_pt
+        self.margin_right_pt = margin_right_pt
         self.max_px = max_px
         self.prompt = prompt
         # Sent AND fingerprinted, so a cached answer is never one the server
@@ -120,15 +130,25 @@ def config_from_env():
                      VLM_MODEL)
 
 
-def _crop(image, box, margin_px, max_px):
+def _px(margin_pt):
+    """A margin in points as pixels, leaving FULL alone."""
+    return margin_pt if margin_pt == FULL else margin_pt * SCALE
+
+
+def _crop(image, box, a):
     """The crop the model is sent, as PNG bytes.
 
     `image` is the page as the OCR saw it (already rotated), `box` its
-    coordinates in that same pixel space. Returns None when the box falls
-    outside the page or has no area left after clipping — the caller then
-    keeps the box unjudged.
+    coordinates in that same pixel space. The geometry comes from the config
+    `a`, so it is the same one utils/vlm_export.py cuts with. Returns None
+    when the box falls outside the page or has no area left after clipping —
+    the caller then keeps the box unjudged.
     """
-    ut, _marker = crop_with_marker(image, box, margin_px, max_px=max_px)
+    ut, _marker = crop_with_marker(
+        image, box,
+        margin_up=_px(a.margin_up_pt), margin_down=_px(a.margin_down_pt),
+        margin_left=_px(a.margin_left_pt), margin_right=_px(a.margin_right_pt),
+        max_px=a.max_px)
     if ut is None:
         return None
     buffer = io.BytesIO()
@@ -264,12 +284,11 @@ def verify_page(boxes_with_source, image, lines, a, koordfam=False,
     if not boxes_with_source or image is None:
         return boxes_with_source, 0, 0
 
-    margin_px = a.margin_pt * SCALE
     tasks = []
     for i, pair in enumerate(boxes_with_source):
         if not in_stratum(pair[1], a, koordfam, seksjonering):
             continue
-        crop_png = _crop(image, pair[0], margin_px, a.max_px)
+        crop_png = _crop(image, pair[0], a)
         if crop_png is not None:
             tasks.append((i, crop_png))
     if not tasks:

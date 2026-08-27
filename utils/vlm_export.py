@@ -42,10 +42,28 @@ from filter_common import (CRITERIA, PDF_DPI, SCALE, STD_CRITERION,
                            read_processed_docs, read_predictions,
                            write_summary)
 from filter_review import _read_ocr_cache, rotate_box, _render_page
-from config import VLM_MARGIN_PT, VLM_MAX_PX
-from vlm_client import crop_with_marker
+from config import (VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,
+                    VLM_MARGIN_RIGHT_PT, VLM_MARGIN_UP_PT, VLM_MAX_PX)
+from vlm_client import FULL, crop_with_marker
 
 STD_WORKERS = max(1, min(8, (os.cpu_count() or 2) - 1))
+
+# (up, down, left, right) in points, each a number or FULL.
+STD_MARGIN = (VLM_MARGIN_UP_PT, VLM_MARGIN_DOWN_PT,
+              VLM_MARGIN_LEFT_PT, VLM_MARGIN_RIGHT_PT)
+
+
+def _px(margin_pt):
+    """A margin in points as pixels, leaving FULL alone."""
+    return margin_pt if margin_pt == FULL else float(margin_pt) * SCALE
+
+
+def _margin(value):
+    """CLI margin: points, or «full» for the page edge."""
+    if str(value).strip().lower() == FULL:
+        return FULL
+    return float(value)
+
 
 MANIFEST_FIELD = [
     "nr", "utsnitt", "fil", "doc_no", "side", "klasse", "kilde", "conf",
@@ -170,8 +188,8 @@ def _job_for_file(task):
     Warnings are collected and printed by the parent, otherwise they would
     interleave on screen.
     """
-    (name, preds, folder, crop_dir, margin_x, margin_y, full_width,
-     from_top, max_px, ocr_dir, roter, n_lines) = task
+    (name, preds, folder, crop_dir, margin, max_px, ocr_dir, roter,
+     n_lines) = task
 
     path = os.path.join(folder, name)
     if not os.path.isfile(path):
@@ -211,15 +229,14 @@ def _job_for_file(task):
         if k:
             image = image.rotate(90 * k, expand=True)
 
-        mx = margin_x * SCALE
-        m_up, m_ned = margin_y[0] * SCALE, margin_y[1] * SCALE
+        up, down, left, right = (_px(v) for v in margin)
         for p in page_pred:
             px = p["px"]
             r = rotate_box([px[0] * sx, px[1] * sy, px[2] * sx, px[3] * sy],
                            k, w0, h0)
-            ut, m = crop_with_marker(image, r, mx, margin_up=m_up,
-                                     margin_down=m_ned, max_px=max_px,
-                                     full_width=full_width, from_top=from_top)
+            ut, m = crop_with_marker(image, r, margin_up=up,
+                                     margin_down=down, margin_left=left,
+                                     margin_right=right, max_px=max_px)
             if ut is None:
                 # A label drawn past the page edge, an odd CropBox: one strange
                 # row must not sink an export of tens of thousands of boxes.
@@ -277,21 +294,18 @@ def _job_for_file(task):
     return rows, warnings, dropped
 
 
-def export(ds, selected, folder, out_dir, margin_x=VLM_MARGIN_PT,
-              margin_y=VLM_MARGIN_PT, full_width=False, from_top=False,
+def export(ds, selected, folder, out_dir, margin=STD_MARGIN,
               max_px=VLM_MAX_PX, ocr_dir=None, roter=True, workers=1,
               n_lines=0):
     """Renders, crops and writes the manifest. Returns the manifest rows.
 
-    The margin is asymmetric because the context is: the ledetekst that says
-    whether a number is a fnr or a coordinate sits on the same line or above
-    it, so width buys more than height and up more than down. margin_y is one
-    number or an (up, down) pair. Work is split per DOCUMENT across processes.
+    `margin` is (up, down, left, right) in points, each a number or FULL for
+    the page edge. The sides are separate because the context is: the
+    ledetekst that says whether a number is a fnr or a coordinate sits on the
+    same line or above it. The default is the VLM_* geometry in config, the
+    same one the verifier crops with in prod. Work is split per DOCUMENT
+    across processes.
     """
-    try:
-        margin_y = (float(margin_y[0]), float(margin_y[1]))
-    except TypeError:
-        margin_y = (float(margin_y), float(margin_y))
     crop_dir = os.path.join(out_dir, "utsnitt")
     os.makedirs(crop_dir, exist_ok=True)
 
@@ -310,9 +324,8 @@ def export(ds, selected, folder, out_dir, margin_x=VLM_MARGIN_PT,
                              if p["covers"] else 0)
         per_file[p["navn"]].append(p)
 
-    tasks = [(name, per_file[name], folder, crop_dir, margin_x, margin_y,
-                 full_width, from_top, max_px, ocr_dir, roter,
-                 n_lines)
+    tasks = [(name, per_file[name], folder, crop_dir, margin, max_px,
+                 ocr_dir, roter, n_lines)
                 for name in sorted(per_file)]
     print(f"\n  {len(selected)} boxes in {len(tasks)} documents"
           f"  ({workers} parallel processes)")
@@ -392,31 +405,39 @@ def main():
     p.add_argument("--source", nargs="+", default=None, metavar="KILDE",
                    help="Limit to these sources (yolo/paddle/begge)")
 
-    p.add_argument("--margin", type=float, default=VLM_MARGIN_PT, metavar="PT",
-                   help=f"Context margin around the box in points "
-                        f"(default {VLM_MARGIN_PT:g}). Overridden per axis by "
-                        f"--margin-x/--margin-y.")
-    p.add_argument("--margin-x", type=float, default=None, metavar="PT",
+    # A side nothing on the command line touches keeps the config value the
+    # verifier crops with, so a flagless export gives the images prod sends.
+    # Every margin takes points or «full», which reaches the page edge.
+    p.add_argument("--margin", type=_margin, default=None, metavar="PT",
+                   help="Context margin on every side the narrower flags "
+                        "leave alone, in points.")
+    p.add_argument("--margin-x", type=_margin, default=None, metavar="PT",
                    help="Sideways margin. The ledetekst that reveals what the "
                         "number is usually sits on the same line, so width is "
                         "worth more than height. 200-250 covers a text line.")
-    p.add_argument("--margin-y", type=float, default=None, metavar="PT",
+    p.add_argument("--margin-y", type=_margin, default=None, metavar="PT",
                    help="Margin up/down. 90 gives ~2 text lines each way, "
                         "enough to see a column heading.")
-    p.add_argument("--margin-up", type=float, default=None, metavar="PT",
+    p.add_argument("--margin-up", type=_margin, default=None, metavar="PT",
                    help="Margin upwards only. Headings sit ABOVE the number, "
                         "so more up than down buys context without as much "
                         "junk below.")
-    p.add_argument("--margin-down", type=float, default=None, metavar="PT",
+    p.add_argument("--margin-down", type=_margin, default=None, metavar="PT",
                    help="Margin downwards only.")
+    p.add_argument("--margin-left", type=_margin, default=None, metavar="PT",
+                   help="Margin leftwards only. «full» reaches the left page "
+                        "edge, which catches the ledetekst at the start of "
+                        "the line without paying for the empty right side.")
+    p.add_argument("--margin-right", type=_margin, default=None, metavar="PT",
+                   help="Margin rightwards only.")
     p.add_argument("--from-top", action="store_true",
-                   help="Include everything from the top of the page down to "
-                        "the box, for form headings too far up to reach with "
-                        "--margin-y. Gives tall crops and many image tokens, "
-                        "raise the server's context to match.")
+                   help="Same as --margin-up full: everything from the top of "
+                        "the page down to the box, for form headings too far "
+                        "up to reach with --margin-y. Gives tall crops and "
+                        "many image tokens, raise the server's context.")
     p.add_argument("--full-width", action="store_true",
-                   help="Take the whole page width instead of --margin-x. "
-                        "Always catches the full line, at the cost of "
+                   help="Same as --margin-left full --margin-right full. "
+                        "Always catches the whole line, at the cost of "
                         "resolution after downscaling, consider --max-px.")
     p.add_argument("--max-px", type=int, default=VLM_MAX_PX, metavar="PX",
                    help=f"Scale down crops wider than this "
@@ -528,14 +549,21 @@ def main():
         return
 
     os.makedirs(a.out_dir, exist_ok=True)
-    margin_x = a.margin if a.margin_x is None else a.margin_x
-    margin_y = a.margin if a.margin_y is None else a.margin_y
-    margin_up = margin_y if a.margin_up is None else a.margin_up
-    margin_down = margin_y if a.margin_down is None else a.margin_down
-    rows = export(ds, selected, a.folder, a.out_dir, margin_x=margin_x,
-                      margin_y=(margin_up, margin_down),
-                      full_width=a.full_width,
-                      from_top=a.from_top,
+    # Narrowest flag wins per side: the side itself, then the shorthand, then
+    # the axis, then --margin, then the config geometry. --margin has to stay
+    # a fallback rather than an argparse default, or it could not reach a side
+    # that has one of its own.
+    def first(*values):
+        return next(v for v in values if v is not None)
+
+    wide = FULL if a.full_width else None
+    top = FULL if a.from_top else None
+    margin = (
+        first(a.margin_up, top, a.margin_y, a.margin, VLM_MARGIN_UP_PT),
+        first(a.margin_down, a.margin_y, a.margin, VLM_MARGIN_DOWN_PT),
+        first(a.margin_left, wide, a.margin_x, a.margin, VLM_MARGIN_LEFT_PT),
+        first(a.margin_right, wide, a.margin_x, a.margin, VLM_MARGIN_RIGHT_PT))
+    rows = export(ds, selected, a.folder, a.out_dir, margin=margin,
                       max_px=a.max_px or 0, ocr_dir=a.ocr_cache,
                       roter=a.roter, workers=a.workers,
                       n_lines=a.ocr_lines)
@@ -552,8 +580,8 @@ def main():
     stat["hit_factor"] = (stat["n_covering_total"] / written["covering"]
                             if written["covering"] else 0.0)
     stat.update({
-        "margin_x_pt": margin_x, "margin_y_pt": [margin_up, margin_down],
-        "full_bredde": a.full_width, "from_top": a.from_top,
+        "margin_up_pt": margin[0], "margin_down_pt": margin[1],
+        "margin_left_pt": margin[2], "margin_right_pt": margin[3],
         "maks_px": a.max_px,
         "res_csv": os.path.abspath(a.res_csv) if a.res_csv else None,
         "fasit_csv": os.path.abspath(a.truth_csv),
