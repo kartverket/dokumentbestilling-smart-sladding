@@ -177,7 +177,7 @@ PDF rendering is not cached: the files are too large, roughly 25 MB per page.
   yolo-yearly-10000-docs/
     yolo-yearly-10000-docs.pt    ← the weights
     modell.json                  ← dataset, hyperparameters, metrics, git sha
-    trening/                     ← results.csv, args.yaml, data.yaml, split_log.txt
+    training/                    ← results.csv, args.yaml, data.yaml, split_log.txt
 ```
 
 `$SLADD_RUNS` holds working directories instead: checkpoints, plots and
