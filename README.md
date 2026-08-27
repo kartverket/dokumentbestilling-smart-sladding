@@ -50,7 +50,7 @@ server, `$SLADD_WEIGHTS` (see `server.env`), one directory per published model:
 $SLADD_WEIGHTS/<name>/
   <name>.pt        the weights, named after the model
   modell.json      what it was trained on, with which parameters
-  trening/         results.csv, args.yaml, data.yaml, split_log.txt
+  training/        results.csv, args.yaml, data.yaml, split_log.txt
 ```
 
 `make -C $SLADD_TRAIN publiser` creates them after a training run. See

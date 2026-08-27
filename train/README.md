@@ -34,7 +34,7 @@ This runs the whole pipeline and produces two things:
 $SLADD_WEIGHTS/uttrekk_4_jou/
   uttrekk_4_jou.pt     ← the weights (copy of best.pt, named)
   modell.json          ← dataset, split strategy, hyperparameters, metrics, git sha
-  trening/             ← results.csv, args.yaml, data.yaml, split_log.txt
+  training/            ← results.csv, args.yaml, data.yaml, split_log.txt
 ```
 
 Validation (`valider_yolo.sh`) and deploy (`./deploy.sh build weights=…`) point at the
@@ -111,14 +111,17 @@ what actually ran rather than what someone remembered to write down:
 
 ```json
 {
-  "navn": "uttrekk_4_jou",
-  "publisert": "2026-08-20T14:12:03+02:00",
-  "vekter": { "fil": "uttrekk_4_jou.pt", "sha256": "4927f577…", "checkpoint": "best" },
-  "trent":   { "base_model": "yolo26x.pt", "epochs": 200, "imgsz": 1280, "batch": 4, "patience": 20 },
-  "datasett":{ "sti": "…/uttrekk_4/dataset", "antall_bilder": {"train": 812, "val": 174, "test": 175},
+  "name": "uttrekk_4_jou",
+  "published": "2026-08-20T14:12:03+02:00",
+  "weights": { "file": "uttrekk_4_jou.pt", "sha256": "4927f577…", "checkpoint": "best" },
+  "trained": { "date": "2026-08-19T22:41:07+02:00", "base_model": "yolo26x.pt",
+               "epochs": 200, "imgsz": 1280, "batch": 4, "patience": 20 },
+  "dataset": { "path": "…/uttrekk_4/dataset", "classes": {"0": "fnr"},
+               "n_images": {"train": 812, "val": 174, "test": 175},
                "strategy": "doc_type", "doc_type": "SR_JOU", "labels_csv": "…/uttrekk_4.csv" },
-  "resultater": { "epoch": 143, "metrics/mAP50(B)": 0.88, "metrics/mAP50-95(B)": 0.62 },
-  "kode": { "git_sha": "eb6f64dd…", "git_rent_tre": true }
+  "results": { "epochs_run": 168, "epoch": 143, "metrics/mAP50(B)": 0.88, "metrics/mAP50-95(B)": 0.62 },
+  "code": { "git_sha": "eb6f64dd…", "git_clean_tree": true },
+  "env": { "python": "3.12.3", "ultralytics": "8.4.90", "torch": "2.12.1" }
 }
 ```
 

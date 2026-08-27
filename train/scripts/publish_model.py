@@ -3,11 +3,12 @@
 An ultralytics run directory is a working directory, not a model store: the
 file is called best.pt whichever model it is, and the name only exists in the
 folder above. This copies the run out to $SLADD_WEIGHTS/<name>/ as <name>.pt +
-modell.json + trening/, so the model can be moved without losing its identity.
+modell.json + training/, so the model can be moved without losing its identity.
 
 The metadata is read from the run itself and from git, so it describes what
-was actually run. What only the Makefile knows, which PDFs and which truth
-the dataset came from, is passed in with --info.
+was actually run. A loose .pt whose run is gone gets its hyperparameters from
+the checkpoint instead. What only the Makefile knows, which PDFs and which
+truth the dataset came from, is passed in with --info.
 
 Run:
     python publish_model.py --run $SLADD_RUNS/uttrekk_4_jou --out $SLADD_WEIGHTS
@@ -115,7 +116,7 @@ def read_results(path):
             return float("-inf")
 
     best = max(rows, key=score)
-    out = {"epoker_kjort": len(rows)}
+    out = {"epochs_run": len(rows)}
     for sort_key, value in best.items():
         if sort_key == "epoch" or sort_key.startswith("metrics/"):
             try:
@@ -135,7 +136,44 @@ def count_images(dataset_dir):
     return out
 
 
-def git_status(repo):
+def parse_time(text):
+    """An ISO timestamp as an aware datetime, None if it is not one."""
+    try:
+        return datetime.fromisoformat(text).astimezone()
+    except (TypeError, ValueError):
+        return None
+
+
+def read_checkpoint(path):
+    """(hyperparameters, metrics, training time) out of an ultralytics checkpoint.
+
+    A loose .pt has no args.yaml beside it, but ultralytics writes the same
+    values into the file itself. torch.load unpickles ultralytics classes, so
+    without that package installed the metadata comes back empty rather than
+    raising.
+    """
+    try:
+        import torch
+        import ultralytics    # noqa: F401  (torch.load unpickles its classes)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception:
+        return {}, {}, None
+    if not isinstance(checkpoint, dict):
+        return {}, {}, None
+    arguments = checkpoint.get("train_args")
+    metrics = checkpoint.get("train_metrics")
+    return (arguments if isinstance(arguments, dict) else {},
+            metrics if isinstance(metrics, dict) else {},
+            parse_time(checkpoint.get("date")))
+
+
+def git_status(repo, trained_at=None, given_sha=None):
+    """The commit the model was trained on, when that can still be established.
+
+    The sha is read at publish time, which is the training commit only while
+    nothing has been committed since the run. A HEAD newer than the weights
+    would name a commit nobody trained on, so it is left blank instead.
+    """
     def git(*args):
         try:
             return subprocess.run(["git", "-C", str(repo), *args],
@@ -144,11 +182,19 @@ def git_status(repo):
         except (OSError, subprocess.CalledProcessError):
             return ""
 
+    if given_sha:
+        return {"git_sha": given_sha, "note": "given with --git-sha"}
+
     sha = git("rev-parse", "HEAD")
     if not sha:
         return {}
+    head_time = parse_time(git("log", "-1", "--format=%cI"))
+    if trained_at and head_time and head_time > trained_at:
+        return {"git_sha": None,
+                "note": f"HEAD ({sha[:8]}) is newer than the weights, so the training "
+                        "commit is not known. Pass it with --git-sha."}
     status = git("status", "--porcelain")
-    return {"git_sha": sha, "git_rent_tre": status == ""}
+    return {"git_sha": sha, "git_clean_tree": status == ""}
 
 
 def env():
@@ -197,6 +243,9 @@ def main():
                    help="extra facts about the dataset (repeatable)")
     p.add_argument("--overwrite", action="store_true",
                    help="overwrite a model already published under this name")
+    p.add_argument("--git-sha", default=None,
+                   help="the commit the model was trained on, for an old run that HEAD "
+                        "has moved past")
     args = p.parse_args()
 
     if not args.out:
@@ -230,7 +279,11 @@ def main():
                  f"      Use another --name, or --overwrite to replace it.")
 
     dataset_dir = Path(args.dataset).resolve() if args.dataset else None
-    arguments = read_yaml(run / "args.yaml") if run else {}
+    if run:
+        arguments, checkpoint_metrics, checkpoint_time = read_yaml(run / "args.yaml"), {}, None
+    else:
+        arguments, checkpoint_metrics, checkpoint_time = read_checkpoint(source)
+    trained_at = checkpoint_time or datetime.fromtimestamp(source.stat().st_mtime).astimezone()
     extra = dict(kv.split("=", 1) for kv in args.info if "=" in kv and kv.split("=", 1)[1])
 
     mal.mkdir(parents=True, exist_ok=True)
@@ -252,8 +305,7 @@ def main():
             "source": str(source),
         },
         "trained": {
-            "date": datetime.fromtimestamp(source.stat().st_mtime).astimezone()
-                    .isoformat(timespec="seconds"),
+            "date": trained_at.isoformat(timespec="seconds"),
             "run": str(run) if run else None,
             "base_model": extra.pop("base_model", None) or arguments.get("model"),
             "epochs": arguments.get("epochs"),
@@ -269,14 +321,19 @@ def main():
             "classes": read_yaml(dataset_dir / "data.yaml").get("names") if dataset_dir else None,
             **extra,
         },
-        "results": read_results(run / "results.csv") if run else {},
-        "code": git_status(Path(__file__).resolve().parents[2]),
+        "results": read_results(run / "results.csv") if run else checkpoint_metrics,
+        "code": git_status(Path(__file__).resolve().parents[2], trained_at, args.git_sha),
         "env": env(),
     }
     # Say it outright, so the empty fields do not read as a failed metadata read.
     if run is None:
-        metadata["trained"]["unknown_origin"] = ("published from a loose weights file. "
-                                              "The training run no longer exists")
+        metadata["trained"]["unknown_origin"] = (
+            "published from a loose weights file. The hyperparameters and metrics were "
+            "read out of the checkpoint; the epoch history and the plots went with the "
+            "training run"
+            if arguments else
+            "published from a loose weights file that could not be read. Install torch "
+            "and ultralytics to recover the hyperparameters from the checkpoint")
     (mal / "modell.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -286,9 +343,9 @@ def main():
     print(f"  sha256:   {metadata['weights']['sha256'][:16]}…")
     print()
     print("Validate it:")
-    print(f"  ./valider_yolo.sh modell={weight_file} uttrekk=N")
+    print(f"  ./valider_yolo.sh model={weight_file} uttrekk=N")
     print("Build an image with it:")
-    print(f"  ./deploy.sh build vekter={weight_file}")
+    print(f"  ./deploy.sh build weights={weight_file}")
 
 
 if __name__ == "__main__":
