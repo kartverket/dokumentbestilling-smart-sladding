@@ -73,9 +73,7 @@ def _fetch_reader():
         kwargs["text_detection_model_dir"] = DET_MODEL_DIR
         kwargs["text_recognition_model_dir"] = REC_MODEL_DIR
         if gpu:
-            kwargs["precision"] = "fp16"   
-        else:
-            kwargs["enable_mkldnn"] = True 
+            kwargs["precision"] = "fp16"
         if os.environ.get("SLADD_HPI") == "1":
             kwargs["enable_hpi"] = True
 
