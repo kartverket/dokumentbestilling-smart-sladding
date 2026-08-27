@@ -23,6 +23,15 @@ x-common: &common
     GUNICORN_LOG_DIR: /data/gunicorn_logs
     ML_LOG_DIR: /data/ml_logs
     LOG_BACKUP_DAYS: ${LOG_BACKUP_DAYS:-30}
+    # VLM verifier, off unless SLADD_VLM=1 with an endpoint. deploy.sh sources
+    # server.env, so the values come from there. The URL is reached from
+    # inside the container, so localhost is the container itself: use the
+    # host's address, or host.docker.internal.
+    SLADD_VLM: ${SLADD_VLM:-}
+    SLADD_VLM_URL: ${SLADD_VLM_URL:-}
+    SLADD_VLM_MODEL: ${SLADD_VLM_MODEL:-}
+    SLADD_VLM_TIMEOUT: ${SLADD_VLM_TIMEOUT:-20}
+    SLADD_VLM_CONCURRENT: ${SLADD_VLM_CONCURRENT:-4}
   # The access, error and application logs rotate and zip themselves into the
   # mounted directories. This cap is for stray stdout/stderr, which otherwise
   # grows without limit in docker's own json log file.

@@ -442,7 +442,7 @@ def main():
                    help="Include everything from the top of the page down to "
                         "the box, for form headings too far up to reach with "
                         "--margin-y. Gives tall crops and many image tokens, "
-                        "raise OLLAMA_CONTEXT_LENGTH to match.")
+                        "raise the server's context to match.")
     p.add_argument("--full-width", action="store_true",
                    help="Take the whole page width instead of --margin-x. "
                         "Always catches the full line, at the cost of "

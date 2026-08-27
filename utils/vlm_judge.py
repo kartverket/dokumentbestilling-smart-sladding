@@ -1,8 +1,8 @@
 """Sends the crops from vlm_export to a local VLM and stores the judgements.
 
 Step 2 of the VLM verifier pilot. Speaks OpenAI-compatible
-/v1/chat/completions, which vLLM, llama.cpp-server, LM Studio and Ollama all
-offer — switch model with --url/--model, not by editing the code.
+/v1/chat/completions, which llama-server, vLLM and LM Studio all offer —
+switch model with --url/--model, not by editing the code.
 
 Resuming is the DEFAULT: finished rows in an existing judgement CSV are
 skipped and only the failed ones retried. Use --restart to judge everything
@@ -25,8 +25,8 @@ the answer that costs recall.
 Run:
     python utils/vlm_judge.py \
         --manifest /data2/vlm/uttrekk6_kalibrering/manifest.csv \
-        --url http://localhost:8000/v1 \
-        --model Qwen/Qwen3-VL-8B-Instruct \
+        --url http://127.0.0.1:8080/v1 \
+        --model qwen3.8-27b \
         --concurrent 4
 """
 
@@ -35,7 +35,6 @@ import base64
 import csv
 import json
 import os
-import re
 import sys
 import threading
 import time
@@ -43,18 +42,17 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "app")))
+
+# The prompt, the call and the parsing live in app/, so the verifier that runs
+# inside the pipeline judges with the same prompt as the pilot runs here.
 import vlm_cache
+from vlm_client import (STD_MAX_TOKENS, STD_PROMPT, STD_TIMEOUT, STD_URL,
+                        _THINKING, _build_melding, call_model, parse_answer)
 from filter_common import (reclassify_invalid_covering,
                            reclassify_missing_covered)
 
-STD_URL = "http://localhost:8000/v1"
-STD_TIMEOUT = 120
-# Roughly double a full answer. A truncated answer is unparsable and
-# becomes «usikker», never «nei», so the cap costs recall nothing when it bites.
-STD_MAX_TOKENS = 150
-
-# Set to None if the endpoint rejects the field — shared across the threads.
-_THINKING = {"value": "none"}
 # WITHOUT_CONTENT_FIELD plus the sensitive and technical columns. The model's
 # checklist is stored so vlm_evaluate can re-apply the fnr rule without a GPU.
 OUT_FIELD = ["utsnitt", "riktig", "klasse", "svar", "begrunnelse",
@@ -182,134 +180,6 @@ def write_without_content(out_path):
             writer.writerow(_without_content_row(row))
     return path
 
-# The prompt is the real experiment of the pilot: it is built around the
-# contrasts both YOLO and the rules fall for, so treat edits as experiments.
-STD_PROMPT = """\
-Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den røde rammen markerer et område som er foreslått sladdet.
-
-Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over.
-
-Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
-
-- Svar «ja» når tallet er eller sannsynligvis er et fødselsnummer.
-- Svar «nei» BARE når du tydelig ser at tallet er noe annet: kontonummer, organisasjonsnummer, koordinat, beløp, dato alene, matrikkel-/saks-/dokumentnummer, og skriv hva det er i «holdepunkt».
-- Å si nei på et fødselsnummer er 100 ganger verre enn å si ja på et annet tall. Når du er i tvil, svar «ja».
-
-Svar kun med JSON:
-{"tall": "tallene du ser i og rundt rammen", "holdepunkt": "hva tallet er, hvis det er noe annet enn et fødselsnummer — ellers tom", "svar": "ja"}\
-"""
-
-
-# ── Answer parsing ────────────────────────────────────────────
-
-_JSON_RE = re.compile(r"\{.*?\}", re.S)
-_ANSWER_RE = re.compile(r"\b(ja|nei|usikker)\b", re.I)
-
-
-def _checklist(d):
-    """The checklist fields as text. Unknown or missing become empty."""
-    ut = {}
-    for field in ("linjen", "sifre_paa_linjen", "dato_gyldig", "holdepunkt"):
-        v = d.get(field)
-        ut[field] = "" if v is None else str(v).strip().replace("\n", " ")[:300]
-    return ut
-
-
-def parse_answer(text):
-    """Raw model answer -> (svar, tall, begrunnelse, feil, checklist).
-
-    Strict to lenient: plain JSON, then the first JSON object in the text
-    (models like to wrap it in ```json), then a keyword search. Anything left
-    over becomes «usikker», never «nei».
-    """
-    if not text or not text.strip():
-        return "usikker", "", "", "empty answer", {}
-    clean = text.strip()
-    if clean.startswith("```"):
-        clean = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", clean).strip()
-
-    candidates = [clean]
-    m = _JSON_RE.search(clean)
-    if m:
-        candidates.append(m.group(0))
-    for kand in candidates:
-        try:
-            d = json.loads(kand)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(d, dict):
-            continue
-        answer = str(d.get("svar", "")).strip().lower()
-        if answer in ("ja", "nei", "usikker"):
-            return (answer, str(d.get("tall", "")).strip(),
-                    str(d.get("begrunnelse", "")).strip(), "", _checklist(d))
-        missing = "svar" not in d or not str(d.get("svar", "")).strip()
-        return ("usikker", str(d.get("tall", "")).strip(),
-                str(d.get("begrunnelse", "")).strip(),
-                "the model omitted the «svar» field — the rest of the JSON came"
-                if missing else f"unknown answer {answer!r}", _checklist(d))
-
-    m = _ANSWER_RE.search(clean)
-    if m:
-        return (m.group(1).lower(), "", clean[:120],
-                "not JSON, read by keyword", {})
-    return "usikker", "", clean[:120], "unparsable answer", {}
-
-
-# ── Calls ─────────────────────────────────────────────────────
-
-def _build_melding(prompt, image_b64):
-    """One chat message for one crop, from the inputs judge_one loaded."""
-    return [{"role": "user", "content": [
-        {"type": "text", "text": prompt},
-        {"type": "image_url",
-         "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-    ]}]
-
-
-def call_model(url, model, messages, api_key=None, timeout=STD_TIMEOUT,
-                temperature=0.0, max_tokens=STD_MAX_TOKENS, thinking="none"):
-    """One call. thinking=None omits reasoning_effort entirely.
-
-    Ollama turns thinking ON by itself when the field is missing, and then the
-    whole token budget goes to an inner monologue while «content» stays empty.
-    """
-    body = {"model": model, "messages": messages,
-             "temperature": temperature, "max_tokens": max_tokens}
-    if thinking:
-        body["reasoning_effort"] = thinking
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url.rstrip("/") + "/chat/completions", data=data,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key or 'none'}"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as answer:
-            d = json.loads(answer.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        # urllib throws away the response body, which is exactly where the
-        # endpoint explains what it did not like.
-        try:
-            explanation = e.read().decode("utf-8", "replace").strip()[:300]
-        except Exception:
-            explanation = ""
-        raise urllib.error.HTTPError(
-            e.url, e.code, f"{e.reason} — {explanation}" if explanation
-            else str(e.reason), e.headers, None)
-    m = d["choices"][0]["message"]
-    content = m.get("content") or ""
-    if not content.strip():
-        # Empty content with reasoning beside it means thinking ate the answer.
-        for field in ("reasoning", "reasoning_content"):
-            if (m.get(field) or "").strip():
-                raise ValueError(
-                    "empty «content» — the model thought instead of "
-                    "answering. Qwen3-VL ships as two checkpoints: on a "
-                    "THINKING one (Ollama tag «qwen3-vl:8b») --thinking none "
-                    "does not help, the thinking is trained in. Use "
-                    "«qwen3-vl:8b-instruct», or raise --max-tokens to let it "
-                    "finish thinking (expensive)")
-    return content
 
 
 def judge_one(row, a, folder, prompt, cache_dir=None):
@@ -750,7 +620,7 @@ def run(a):
 def main():
     p = argparse.ArgumentParser(
         description="Judges crops from vlm_export with a local, "
-                    "OpenAI-compatible VLM (vLLM / llama.cpp / Ollama).")
+                    "OpenAI-compatible VLM (llama-server / vLLM).")
     p.add_argument("--manifest", default=None,
                    help="manifest.csv from vlm_export (required)")
     p.add_argument("--crop-dir", default=None,
@@ -762,10 +632,9 @@ def main():
 
     p.add_argument("--url", nargs="+", default=[STD_URL],
                    help=f"OpenAI-compatible base URL (default {STD_URL}). "
-                        "Several URLs spread the boxes round-robin — run one "
-                        "Ollama instance per URL, since qwen35/qwen3vl "
-                        "serialise calls within an instance. "
-                        "Ollama: http://localhost:11434/v1")
+                        "Several URLs spread the boxes round-robin, one "
+                        "server instance per URL, for models that serialise "
+                        "calls within an instance")
     p.add_argument("--model", default=None,
                    help="Model name the endpoint knows (required)")
     p.add_argument("--api-key", default=None, help="Bearer token if needed")

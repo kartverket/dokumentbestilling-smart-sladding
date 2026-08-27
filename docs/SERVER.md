@@ -31,11 +31,19 @@ Set by `server.env`, which `activate.sh` sources.
 | `SLADD_TRAIN` | `.../train` | Training directory |
 | `SLADD_LOGS` | `/data/docker` | Container log root on the host |
 | `SLADD_LOG_DAYS` | `30` | Days of log history per log file |
+| `SLADD_VLM` | empty | `1` turns the VLM verifier on |
+| `SLADD_VLM_URL` | `http://127.0.0.1:8080/v1` | llama-server endpoint |
+| `SLADD_VLM_MODEL` | `qwen3.8:27b` | Label only, llama-server serves one model |
 | `SLADD_VENV` | `.../venv/bin/activate` | Venv |
 
 `SLADD_LOGS` and `SLADD_LOG_DAYS` belong to deploy, not to training:
 `deploy.sh` reads them and passes them to compose as `LOG_ROOT` and
 `LOG_BACKUP_DAYS`.
+
+The three `SLADD_VLM` variables belong to both. `deploy.sh` passes them to the
+containers, and `utils/run.py` reads them as the defaults for `--vlm-url` and
+`--vlm-model`. All three are needed before anything happens. See the VLM
+verifier section in the README.
 
 An empty value after login means a stale shell, not a broken install. Run
 `source activate.sh` again in that pane.

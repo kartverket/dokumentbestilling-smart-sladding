@@ -30,6 +30,8 @@ from redaction import sladd_files
 from yolo_fnr import set_weights, active_weights
 from yolo_cache import cache_dir_for_weights
 from load_pdf import PDF_DPI
+import vlm_verifier
+from vlm_client import STD_URL as VLM_STD_URL
 import traceback
 from save_result import write_result_files
 
@@ -113,11 +115,13 @@ def _read_files_from_file(path):
 
 def _process_from_cache(pdf_path, ocr_cache, yolo_cache, elektronisk_tinglyst,
                         only_yolo, with_lines, rettsstiftelsestyper=None,
-                        postfilter=True):
+                        postfilter=True, vlm=None):
     """Handle one document in a worker process, from cache only.
 
     A cache hit is pure CPU, so workers need no models. A miss returns
-    ("miss", ...) and the main process, which has the models, runs it.
+    ("miss", ...) and the main process, which has the models, runs it. With
+    --vlm the worker also renders the pages and calls the endpoint: both are
+    CPU and network, not GPU.
     """
     name = os.path.basename(pdf_path)
     start = time.perf_counter()
@@ -129,7 +133,7 @@ def _process_from_cache(pdf_path, ocr_cache, yolo_cache, elektronisk_tinglyst,
             elektronisk_tinglyst=elektronisk_tinglyst, only_yolo=only_yolo,
             cache_dir=ocr_cache, yolo_cache_dir=yolo_cache,
             only_cache=True, rettsstiftelsestyper=rettsstiftelsestyper,
-            postfilter=postfilter)
+            postfilter=postfilter, vlm=vlm)
         if result is None:
             return ("miss", name, None, 0.0)
         pages = _pages_from_result(result, pdf_bytes)
@@ -289,6 +293,32 @@ def main():
                         "profiles (KOORDFAM_CODES in config) the way prod does "
                         "when the skip job sends the codes; without it, global "
                         "behaviour")
+    p.add_argument("--vlm", action="store_true",
+                   help="run the VLM verifier: every box in the stratum (see "
+                        "VLM_SOURCES in config, only documents without a rule "
+                        "profile) is sent to the model as a crop, and dropped "
+                        "on a clear «nei». Needs --vlm-model and an endpoint. "
+                        "Forces a render even on a full cache hit, since the "
+                        "crops come from the page image")
+    p.add_argument("--vlm-url", default=None, metavar="URL",
+                   help=f"OpenAI-compatible /v1 endpoint, comma-separated for "
+                        f"several backends (default: $SLADD_VLM_URL, else "
+                        f"{VLM_STD_URL})")
+    p.add_argument("--vlm-model", default=None, metavar="NAVN",
+                   help="model name at the endpoint, e.g. qwen3.8:27b "
+                        "(default: $SLADD_VLM_MODEL)")
+    p.add_argument("--vlm-concurrent", type=int, default=None, metavar="N",
+                   help="boxes in flight per page (default: "
+                        "$SLADD_VLM_CONCURRENT or 4)")
+    p.add_argument("--vlm-timeout", type=float, default=None, metavar="SEK",
+                   help="seconds per box before the answer is given up on and "
+                        "the box kept (default: $SLADD_VLM_TIMEOUT or 20)")
+    p.add_argument("--vlm-cache", default=None, metavar="DIR",
+                   help="folder for judgements per prompt version, so a re-run "
+                        "reuses them. Default: $SLADD_CACHE/vlm")
+    p.add_argument("--no-vlm-cache", action="store_true",
+                   help="judge every box afresh, without reading or writing "
+                        "the judgement cache")
     args = p.parse_args()
 
     # ── Derive cache paths ───────────────────────────────────────
@@ -303,6 +333,34 @@ def main():
             args.ocr_cache = os.path.join(cache_base, uttrekk_name, "ocr")
         if args.yolo_cache is None and not args.no_yolo_cache:
             args.yolo_cache = os.path.join(cache_base, uttrekk_name, "yolo")
+        if args.vlm_cache is None and not args.no_vlm_cache:
+            # Not per uttrekk: the key is the crop, so the same box judged in
+            # another uttrekk is the same answer.
+            args.vlm_cache = os.path.join(cache_base, "vlm")
+
+    # ── VLM verifier ─────────────────────────────────────────────
+    vlm = None
+    if args.vlm:
+        model = args.vlm_model or os.environ.get("SLADD_VLM_MODEL")
+        if not model:
+            print("ERROR: --vlm needs --vlm-model (or $SLADD_VLM_MODEL)")
+            return
+        url = (args.vlm_url or os.environ.get("SLADD_VLM_URL")
+               or VLM_STD_URL)
+        vlm = vlm_verifier.VlmConfig(
+            [u.strip() for u in url.split(",") if u.strip()], model,
+            timeout=args.vlm_timeout if args.vlm_timeout is not None
+                    else float(os.environ.get("SLADD_VLM_TIMEOUT", "20")),
+            concurrent=args.vlm_concurrent if args.vlm_concurrent is not None
+                       else int(os.environ.get("SLADD_VLM_CONCURRENT", "4")),
+            cache_dir=None if args.no_vlm_cache else args.vlm_cache)
+        print(f"VLM verifier: {model} at {', '.join(vlm.urls)} "
+              f"(kilde {'/'.join(sorted(vlm.sources))}, documents without a "
+              f"rule profile)")
+        if vlm.cache_dir:
+            print(f"  Judgement cache: {vlm.cache_dir}")
+        else:
+            print(f"  Judgement cache off")
 
     # ── Validate inputs early ────────────────────────────────────
     if args.select_from_file and not os.path.isfile(args.select_from_file):
@@ -522,7 +580,8 @@ def main():
                                               cache_dir=args.ocr_cache,
                                               yolo_cache_dir=args.yolo_cache,
                                               rettsstiftelsestyper=rs_for(name),
-                                              postfilter=not args.without_postfilter)
+                                              postfilter=not args.without_postfilter,
+                                              vlm=vlm)
         except Exception as e:
             failed.append((name, repr(e)))
             traceback.print_exc()
@@ -540,7 +599,7 @@ def main():
                                    args.elektronisk_tinglyst, args.only_yolo,
                                    args.ocr_log,
                                    rs_for(os.path.basename(pdf_path)),
-                                   not args.without_postfilter)
+                                   not args.without_postfilter, vlm)
                        for pdf_path in files]
             for i, (pdf_path, fut) in enumerate(zip(files, futures), start=1):
                 status, name, payload, time_used = fut.result()

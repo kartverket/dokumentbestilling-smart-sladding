@@ -34,8 +34,10 @@ sys.path.insert(0, os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "app")))
 
 # Imported, not copied, so a change in prod cannot leave a silently diverging
-# copy of the digit-confusion rules here.
-from paddle_ocr_model_fnr import find_fnr
+# copy of the digit-confusion rules here. The fnr guard is the same code the
+# in-pipeline verifier runs, so --fnr-override measures what prod does.
+from vlm_client import fnr_candidate as _fnr_candidate
+from vlm_client import fnr_protects
 from filter_common import (reclassify_invalid_covering,
                            reclassify_missing_covered)
 
@@ -81,32 +83,6 @@ def poisson_upper_bound(k, confidence=0.95):
 # ── Rule baseline ─────────────────────────────────────────────
 # A VLM verdict only counts if it beats the rule it would replace, hence
 # --judge regel:<name>, judged from the OCR line through the same accounts.
-
-_FNR_ORD = re.compile(
-    r"(f\s*[øo]dsels\s*n|pers\s*[.\s]*n|p\s*\.\s*nr|f\s*\.\s*nr|fnr|personnummer)",
-    re.I)
-_FIVE_LOP = re.compile(r"(?<!\d)\d{5}(?!\d)")
-
-
-def _fnr_candidate(line):
-    """Does the line hold an 11-digit run shaped like a fødselsnummer?
-
-    Uses the pipeline's own find_fnr, which works on digit positions: strip
-    the separators first and «030392S0000 Iflg fullmakt» glues to «1f1g», the
-    boundary check fails, and a real fnr is lost.
-    """
-    return bool(find_fnr(line or "", require_mod11=False))
-
-
-def _has_fnr_caption(line):
-    """A fnr ledetekst plus a five-digit run on the same line.
-
-    Catches documents where the date of birth is written in some other form
-    than DDMMYY, so there is no eleven-digit run to find at all.
-    """
-    text = line or ""
-    return bool(_FNR_ORD.search(text)) and bool(_FIVE_LOP.search(text))
-
 
 def _has_decimal(text):
     return bool(re.search(r"\d[.,]\d", text or ""))
@@ -518,8 +494,7 @@ def main():
             if not sources:
                 missing += 1
                 continue
-            verner = (any(_fnr_candidate(k) for k in sources)
-                      or (caption and any(_has_fnr_caption(k) for k in sources)))
+            verner = fnr_protects(sources, caption=caption)
             if r["svar"] != "ja" and verner:
                 r["svar"] = "ja"
                 n += 1

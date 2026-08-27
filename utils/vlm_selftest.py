@@ -13,6 +13,7 @@ Run:
 import argparse
 import base64
 import csv
+import glob
 import io
 import json
 import os
@@ -145,7 +146,7 @@ def build_data(rot):
 # ── Stub endpoint ─────────────────────────────────────────────
 
 def make_server(bad=False, thinks=False, reject_reasoning=False,
-                answers=None):
+                answers=None, fixed=None):
     """Stub speaking /v1/chat/completions.
 
     bad             injects 500 errors and prose answers
@@ -155,6 +156,8 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
                     answers 400 to reasoning_effort, like older endpoints
     answers         {image-b64: svar} — the stub's "model". Unknown images
                     fall back to a ja/nei/usikker round-robin.
+    fixed           a dict answered to everything, for tests that need to know
+                    what the model said without knowing which crop it saw
     """
     counter = {"n": 0, "reasoning": [], "avvist": 0}
     lock = threading.Lock()
@@ -191,7 +194,9 @@ def make_server(bad=False, thinks=False, reject_reasoning=False,
                         b64 = d["image_url"]["url"].split("base64,", 1)[-1]
                         svar_bilde = (answers or {}).get(b64)
 
-            if bad and i % 7 == 0:
+            if fixed is not None:
+                content = json.dumps(fixed)
+            elif bad and i % 7 == 0:
                 content = "Dette ser ut som et fødselsnummer, ja."
             else:
                 answer = svar_bilde or ("ja", "nei", "usikker")[i % 3]
@@ -234,6 +239,149 @@ def check(condition, message):
     if not condition:
         raise SystemExit(f"ERROR: {message}")
     print(f"  ok  {message}")
+
+
+# The fnr guard asks find_fnr for the SHAPE, not the check digits, so a
+# number with a real day and month and invalid control digits is enough.
+SHAPE_FNR = "01019900000"
+
+
+def check_verifier(rot):
+    """The verifier inside model_main: stratum, «nei», fnr guard, failures.
+
+    Two levels. The pipeline level stubs YOLO and Paddle out and checks the
+    wiring in run_model_on_pdf_bytes; the verify_page level feeds boxes and a
+    page image straight in, since a hand-built OCR token cannot carry a box
+    through lenient_check and mod11 the way a real scan does. Every path that
+    is not a clear, unprotected «nei» must leave the box standing.
+    """
+    import numpy as np
+    from PIL import Image
+
+    import model_main
+    import vlm_verifier
+    from paddle_ocr_model_fnr import Token
+
+    box = (300.0, 400.0, 460.0, 440.0)
+    original = (model_main.find_yolo_boxes, model_main.read_tokens_batched,
+                model_main.find_rotations_batch)
+    model_main.find_yolo_boxes = lambda image, conf=None: [(*box, 0.85)]
+    model_main.read_tokens_batched = lambda images: [[] for _ in images]
+    model_main.find_rotations_batch = lambda images: [0 for _ in images]
+
+    doc = fitz.open()
+    doc.new_page()
+    pdf = doc.tobytes()
+    doc.close()
+    image = Image.fromarray(np.full((900, 700, 3), 255, dtype=np.uint8))
+
+    def boxes(*sources):
+        return [(box, kilde, 0.85, None, None) for kilde in sources]
+
+    nei = {"tall": "12345", "holdepunkt": "kontonummer", "svar": "nei"}
+    srv, url, counter = make_server(fixed=nei)
+    try:
+        a = vlm_verifier.VlmConfig([url], "stub", timeout=10)
+
+        before = counter["n"]
+        check(len(model_main.run_model_on_pdf_bytes(pdf)) == 1
+              and counter["n"] == before,
+              "vlm=None: the box stands and nothing is sent")
+        check(len(model_main.run_model_on_pdf_bytes(pdf, vlm=a)) == 0,
+              "an unprotected «nei» removes the box")
+        check(counter["n"] == before + 1, "exactly one box was judged")
+
+        # Documents with a rule profile are outside the stratum: the profiles
+        # already clean up there, and the measured gain is elsewhere.
+        before = counter["n"]
+        for code, name in (("SR_JOU", "koordfam"), ("SE_SEK", "seksjonering")):
+            n = len(model_main.run_model_on_pdf_bytes(
+                pdf, vlm=a, rettsstiftelsestyper=[code]))
+            check(n == 1 and counter["n"] == before,
+                  f"a {name} document is not judged at all")
+
+        # Only kilde «yolo» is worth the GPU: the gain measured on the other
+        # kilder was 1 box of 332.
+        left, judged, dropped = vlm_verifier.verify_page(
+            boxes("begge", "paddle", "yolo_vertikal"), image, [], a)
+        check((judged, dropped, len(left)) == (0, 0, 3),
+              "begge, paddle and yolo_vertikal never reach the model")
+
+        # The fnr guard: the model says «nei» to digits that are shaped like a
+        # fnr. Both readings of the line must overrule it.
+        left, _, dropped = vlm_verifier.verify_page(boxes("yolo"), image, [], a)
+        check((dropped, len(left)) == (1, 0),
+              "no fnr anywhere: the «nei» stands")
+        line = [Token(f"Selger {SHAPE_FNR} andel", 290.0, 395.0, 470.0,
+                      445.0, 0.99)]
+        left, _, dropped = vlm_verifier.verify_page(
+            boxes("yolo"), image, [(line, line[0].text, None)], a)
+        check((dropped, len(left)) == (0, 1),
+              "PaddleOCR's line holds a fnr run: the «nei» is overruled")
+
+        dead = vlm_verifier.VlmConfig(["http://127.0.0.1:1/v1"], "stub",
+                                      timeout=1)
+        check(len(model_main.run_model_on_pdf_bytes(pdf, vlm=dead)) == 1,
+              "an unreachable endpoint cannot cost a sladd")
+    finally:
+        srv.shutdown()
+
+    srv, url, _ = make_server(fixed={"tall": SHAPE_FNR, "svar": "nei"})
+    try:
+        a = vlm_verifier.VlmConfig([url], "stub", timeout=10)
+        left, _, dropped = vlm_verifier.verify_page(boxes("yolo"), image, [], a)
+        check((dropped, len(left)) == (0, 1),
+              "the model transcribed a fnr and still said «nei»: overruled")
+    finally:
+        srv.shutdown()
+
+    srv, url, _ = make_server(fixed={"tall": "12345", "svar": "ja"})
+    try:
+        a = vlm_verifier.VlmConfig([url], "stub", timeout=10)
+        check(len(model_main.run_model_on_pdf_bytes(pdf, vlm=a)) == 1,
+              "a «ja» leaves the box alone")
+    finally:
+        srv.shutdown()
+
+    # An endpoint that answers 400 to reasoning_effort would otherwise make
+    # every box «usikker», and the verifier would look like it was running
+    # while removing nothing.
+    import vlm_client
+    before_thinking = vlm_client._THINKING["value"]
+    vlm_client._THINKING["value"] = "none"
+    srv, url, counter = make_server(reject_reasoning=True, fixed=nei)
+    try:
+        a = vlm_verifier.VlmConfig([url], "stub", timeout=10,
+                                   cache_dir=os.path.join(rot, "vlm_400"))
+        left, judged, dropped = vlm_verifier.verify_page(
+            boxes("yolo"), image, [], a)
+        check(counter["avvist"] == 1,
+              "only the first call is rejected, then the field is dropped")
+        check((judged, dropped, len(left)) == (1, 1, 0),
+              "the verdict still comes through and the box is removed")
+        check(not glob.glob(os.path.join(a.cache_dir, "*.json")),
+              "answers from the fallback stay out of the cache")
+    finally:
+        srv.shutdown()
+        vlm_client._THINKING["value"] = before_thinking
+
+    # The judgement cache is keyed on the crop, so the second run must not
+    # reach the endpoint at all.
+    srv, url, counter = make_server(fixed=nei)
+    try:
+        a = vlm_verifier.VlmConfig([url], "stub", timeout=10,
+                                   cache_dir=os.path.join(rot, "vlm_cache"))
+        check(len(a.fingerprint) == 16,
+              "the cache folder is the prompt version")
+        model_main.run_model_on_pdf_bytes(pdf, vlm=a)
+        after_first = counter["n"]
+        model_main.run_model_on_pdf_bytes(pdf, vlm=a)
+        check(counter["n"] == after_first,
+              "the same crop is answered from the cache the second time")
+    finally:
+        srv.shutdown()
+        (model_main.find_yolo_boxes, model_main.read_tokens_batched,
+         model_main.find_rotations_batch) = original
 
 
 def main(keep):
@@ -288,8 +436,8 @@ def main(keep):
               "no failure state can become «nei»")
 
         print("\n[1b] fnr candidates with the pipeline's digit confusion")
-        from vlm_evaluate import _fnr_candidate
-        from vlm_evaluate import _has_fnr_caption
+        from vlm_client import fnr_candidate as _fnr_candidate
+        from vlm_client import has_fnr_caption as _has_fnr_caption
         check(_fnr_candidate("loo190-00000"),
               "«loo190-00000» is recognised, o→0 and l→1")
         # Strip the spaces and the run glues to «1f1g» from «Iflg», and
@@ -747,6 +895,13 @@ def main(keep):
              "--uncertain-remover")
         check(os.path.isfile(os.path.join(ut, "evaluering_bilde", "lost.csv")),
               "--uncertain-remover runs and writes lost.csv")
+
+        # ── The verifier in the pipeline ─────────────────────
+        # vlm_judge above is the offline tool. This is the same prompt and
+        # the same parsing, but inside run_model_on_pdf_bytes, where a wrong
+        # «nei» removes a real sladd.
+        print("\n[7] vlm_verifier in the pipeline")
+        check_verifier(rot)
 
         print("\nALT OK.")
         if keep:

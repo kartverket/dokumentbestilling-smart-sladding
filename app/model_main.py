@@ -22,6 +22,7 @@ from yolo_fnr import (find_yolo_boxes, lenient_check, tokens_in_box,
 from box_features import features_for_box
 from ocr_cache import read_cache as read_ocr_cache, write_cache as write_ocr_cache
 from yolo_cache import read_cache as read_yolo_cache, write_cache as write_yolo_cache
+import vlm_verifier
 
 
 @contextmanager
@@ -89,7 +90,7 @@ def _find_boxes_only_yolo(yolo_boxes):
     return [tuple(pair) for pair in boxes]
 
 
-def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
+def _find_boxes_with_source(tokens, lines, yolo_boxes, koordfam=False,
                            seksjonering=False, postfilter=True):
     """Merge Paddle and YOLO boxes.
 
@@ -98,10 +99,6 @@ def _find_boxes_with_source(tokens, yolo_boxes, koordfam=False,
 
     Internal per-box layout: [box, kilde, yolo_conf, paddle_rec_score, trekk]
     """
-    # Line grouping is the expensive part: done once per page and shared by
-    # the fnr search and the per-box feature computation.
-    lines = build_lines(tokens) if tokens else []
-
     boxes = [[box, "paddle", None, rec_score, window_features]
               for (box, _mod11, rec_score, window_features)
               in sladd_boxes_from_tokens(tokens, lines)]
@@ -231,7 +228,7 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                            elektronisk_tinglyst=False, only_yolo=False,
                            cache_dir=None, yolo_cache_dir=None,
                            only_cache=False, rettsstiftelsestyper=None,
-                           postfilter=True):
+                           postfilter=True, vlm=None):
     """only_cache=True: return None instead of running the models on a cache
     miss. Lets GPU-less worker processes handle cache hits and send the misses
     back to a process that has the models.
@@ -239,8 +236,13 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     rettsstiftelsestyper: the document's XX_YYY codes from the grunnbok.
     Enables per-document-type rule profiles (KOORDFAM_CODES in config).
     None/empty = global behaviour, so missing metadata can never cost recall.
+
+    vlm: a vlm_verifier.VlmConfig turns the VLM verifier on. It can only
+    remove boxes, and it needs the page images, so a document served entirely
+    from the caches is rendered anyway.
     """
     t = {}
+    n_judged = n_dropped = 0
     codes = {k.strip().upper() for k in (rettsstiftelsestyper or ()) if k}
     koordfam = bool(KOORDFAM_CODES & codes)
     seksjonering = bool(SEKSJONERING_CODES & codes)
@@ -275,13 +277,16 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     # cover what _build_page needs. With --only-yolo, rotations + YOLO is
     # enough.
     missing_ocr = not ocr_hit and not only_yolo
-    needs_pixels = (missing_ocr or not root_hit
-                       or (uses_yolo and yolo_boxes_per_page is None))
+    needs_models = (missing_ocr or not root_hit
+                    or (uses_yolo and yolo_boxes_per_page is None))
+    if needs_models and only_cache:
+        return None
+    # The verifier crops from the page image. Rendering is pure CPU, so a
+    # cache-only worker can do it without the models.
+    needs_pixels = needs_models or vlm is not None
     images = images_ocr = None
 
     if needs_pixels:
-        if only_cache:
-            return None
         with _take_time(t, "render"):
             images = list(read_pages_from_bytes(pdf_bytes))
 
@@ -330,12 +335,24 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                     new_yolo_boxes.append(raw)
                 yolo_boxes = [b for b in raw if b[4] >= YOLO_CONF] if yolo_cache else raw
 
+            # Line grouping is the expensive part: done once per page and
+            # shared by the fnr search, the per-box features and the verifier.
+            lines = build_lines(tokens) if tokens else []
             if only_yolo:
                 boxes_with_source = _find_boxes_only_yolo(yolo_boxes)
             else:
                 boxes_with_source = _find_boxes_with_source(
-                    tokens, yolo_boxes, koordfam=koordfam,
+                    tokens, lines, yolo_boxes, koordfam=koordfam,
                     seksjonering=seksjonering, postfilter=postfilter)
+
+        if vlm is not None:
+            with _take_time(t, "vlm"):
+                image_vlm = images_ocr[si] if images_ocr else None
+                boxes_with_source, judged, dropped = vlm_verifier.verify_page(
+                    boxes_with_source, image_vlm, lines, vlm,
+                    koordfam=koordfam, seksjonering=seksjonering)
+                n_judged += judged
+                n_dropped += dropped
 
         with _take_time(t, "postprocessing"):
             pages.append(_build_page(si + 1, page_target[si], tokens, boxes_with_source,
@@ -345,13 +362,16 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
         write_yolo_cache(yolo_cache_dir, name, rotations, new_yolo_boxes)
 
     if write_time:
-        _write_time(t, len(pages), name, ocr_hit, yolo_hit)
+        _write_time(t, len(pages), name, ocr_hit, yolo_hit,
+                    n_judged, n_dropped)
 
     return _to_flat(pages, page_field)
 
 
-def _write_time(t, n_pages, name=None, ocr_hit=False, yolo_hit=False):
-    entries = ["render", "orientation", "ocr", "yolo+match", "postprocessing"]
+def _write_time(t, n_pages, name=None, ocr_hit=False, yolo_hit=False,
+                n_judged=0, n_dropped=0):
+    entries = ["render", "orientation", "ocr", "yolo+match", "vlm",
+               "postprocessing"]
     total = sum(t.get(p, 0.0) for p in entries)
 
     label = f"Timing [{name}]:" if name else "Timing:"
@@ -360,10 +380,14 @@ def _write_time(t, n_pages, name=None, ocr_hit=False, yolo_hit=False):
         label += f" ({' + '.join(from_cache)} from cache)"
     print(label)
     for post in entries:
+        if post == "vlm" and post not in t:
+            continue
         sec = t.get(post, 0.0)
         pct = (sec / total * 100) if total else 0.0
         print(f"  {post:<18}{sec:9.3f} s{pct:7.1f}%")
     print(f"  {'Total':<18}{total:9.3f} s")
     print(f"  {'Pages total':<18}{n_pages:9d}")
+    if n_judged:
+        print(f"  {'VLM judged':<18}{n_judged:9d}  ({n_dropped} dropped)")
     if n_pages:
         print(f"  {'Per page':<18}{total / n_pages:9.3f} s")

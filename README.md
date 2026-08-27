@@ -124,8 +124,9 @@ and returns the sladd boxes as JSON.
 | 500 | `{"error": "<description>"}` |
 
 Optional query parameters: `elektronisk_tinglyst=true` skips YOLO entirely,
-and `rettsstiftelsestyper=SR_JOU,SE_SEK` (comma-separated grunnbok codes)
-enables the per-document-type rule profiles.
+`rettsstiftelsestyper=SR_JOU,SE_SEK` (comma-separated grunnbok codes) enables
+the per-document-type rule profiles, and `vlm=false` turns the VLM verifier off
+for one request when the container runs with it on.
 
 #### Response format
 
@@ -193,6 +194,9 @@ Same code path as a POST: bytes in, `run_model_on_pdf_bytes` out.
 | `--result-dir PATH` | `.` | where the `result-*` directory is created |
 | `--metadata-csv FILE` | none | rettsstiftelse types per document; enables rule profiles |
 | `--without-postfilter` | off | skip all postfilters; baseline of what the rules contribute |
+| `--vlm` | off | let a vision model re-read the boxes and remove the ones it rejects |
+| `--vlm-model NAME` | `$SLADD_VLM_MODEL` | model name at the endpoint |
+| `--vlm-url URL` | `$SLADD_VLM_URL` | OpenAI-compatible `/v1`, comma-separated for several backends |
 | `--time` | off | timing per document |
 
 Output directories that already exist abort the run; use `--proceed` to resume
@@ -227,13 +231,73 @@ python run_stats.py result-2026-07-14T08-15-20 --labels labels.csv
 
 Writes `statistikk.txt` and `statistikk.png` into the result directory.
 
+## VLM verifier
+
+A vision model can re-read every proposed sladdeboks and remove the ones it is
+sure hold no fødselsnummer. It is off unless you turn it on, and when it is on
+it can only remove boxes. It never adds one and never moves one.
+
+Three limits bound what a «nei» from the model can do.
+
+- Only boxes with kilde `yolo` are judged, and only in documents that get no
+  rule profile. Measured on uttrekk4, the removable boxes were 806 of 1027 for
+  `yolo`, 0 of 203 for `begge` and 1 of 129 for `paddle`, so judging the other
+  kilder costs GPU time and returns nothing.
+- Before a «nei» is acted on, PaddleOCR's line and the model's own
+  transcription go back through `find_fnr`. A valid eleven-digit run overrules
+  the verdict, and so does a fnr ledetekst next to a five-digit run. The model
+  reads better than it infers, so the code does the inferring.
+- Anything that fails keeps the box: a timeout, an HTTP error, an answer that
+  does not parse, an endpoint that is not running.
+
+The endpoint is OpenAI-compatible `/v1/chat/completions`, so llama-server,
+vLLM and LM Studio all work. `llama-server` is what runs on the GPU host,
+because it has no registry client and no cloud backend to switch off. Each
+judged box is one call to the model. `run.py --time` reports what it cost on
+its own `vlm` line.
+
+The crops hold real fødselsnumre, so what the model server may reach matters as
+much as what it answers. `docs/VLM-ISOLATION.md` covers the sandbox and how to
+check that it holds.
+
+### Turning it on in prod
+
+Set these in `server.env` and deploy again. `deploy.sh` passes them to the
+container.
+
+```sh
+export SLADD_VLM=1
+export SLADD_VLM_URL=http://<host>:8080/v1
+export SLADD_VLM_MODEL=qwen3.8:27b
+```
+
+All three are needed. Without a URL and a model there is nothing to call, and
+the pipeline runs as it did before. The container reaches the URL from the
+inside, so `localhost` there is the container itself and not the host.
+
+The container also runs with `HTTP_PROXY` set for traffic to the outside. VLM
+calls skip it, since the endpoint is on the inside. Set `SLADD_VLM_PROXY` if
+yours really does sit behind the proxy.
+
+### Turning it on in run.py
+
+```sh
+python run.py --count alle --truth --csv --vlm --vlm-model qwen3.8:27b
+```
+
+The crops come from the page image, so `--vlm` renders every document even
+when OCR and YOLO both come from cache. Judgements are cached under
+`$SLADD_CACHE/vlm` in a directory named after the prompt version, so a rerun
+with the same prompt and model reuses them. Edit the prompt and you get a new
+directory and a full rejudge.
+
 ## Configuration
 
 | File | Contents |
 |------|----------|
 | `app/config.py` | PDF DPI, YOLO thresholds, OCR parameters, filter rules, orientation |
 | `utils/utils_config.py` | paths, evaluation threshold, visualisation colours |
-| `server.env` | `SLADD_*` paths on the GPU server |
+| `server.env` | `SLADD_*` paths on the GPU server, and the VLM verifier settings |
 | `.env` | deploy state for one machine, which tag runs where (see `.env.example`) |
 
 ## CSV formats

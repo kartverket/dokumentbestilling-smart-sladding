@@ -136,3 +136,29 @@ DEDUP_OVERLAP     = 0.5       # coverage at which a YOLO box is "the same" as a 
 # ---- Orientation -------------------------------------------
 ORIENTATION_DOWNSCALE       = 4
 ORIENTATION_MIN_CONFIDENCE      = 0.7       # below this: do not trust the guess, do not rotate
+
+# ---- VLM verifier ------------------------------------------
+# A vision model that re-reads each proposed sladdeboks and may drop it. Off
+# unless switched on: SLADD_VLM=1 with a URL and a model name in prod,
+# --vlm in utils/run.py. See app/vlm_verifier.py for what it may and may not
+# do, and docs/VLM-ISOLATION.md for what the model server is allowed to reach.
+# The endpoint is OpenAI-compatible /v1, so llama-server, vLLM and LM Studio
+# all work.
+VLM_ENABLED = _os.environ.get("SLADD_VLM", "").strip().lower() in (
+    "1", "true", "yes", "on")
+VLM_URL = _os.environ.get("SLADD_VLM_URL", "")        # comma-separated = several backends
+VLM_MODEL = _os.environ.get("SLADD_VLM_MODEL", "")
+VLM_API_KEY = _os.environ.get("SLADD_VLM_API_KEY") or None
+VLM_TIMEOUT = float(_os.environ.get("SLADD_VLM_TIMEOUT", "20"))   # seconds per box
+VLM_CONCURRENT = int(_os.environ.get("SLADD_VLM_CONCURRENT", "4"))  # boxes in flight per page
+VLM_MAX_TOKENS = 150
+
+# The stratum. Measured on uttrekk4: after the fnr guard the gain is 806 of
+# 1027 removable boxes on kilde «yolo», 0 of 203 on «begge» and 1 of 129 on
+# «paddle» — judging the other two costs GPU and buys nothing.
+VLM_SOURCES = ("yolo",)
+
+# Crop geometry. Must match utils/vlm_export.py, or prod shows the model other
+# images than the runs it was measured on.
+VLM_MARGIN_PT = 60.0           # context around the box, in PDF points
+VLM_MAX_PX = 800               # wider crops are scaled down
