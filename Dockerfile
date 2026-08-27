@@ -28,15 +28,14 @@ RUN set -eux; \
         rm "${model}.tar"; \
     done
 
-# Before requirements.txt, which names the same torch version. The +cu126 tag is
-# load-bearing: the index also carries +cu130, which sorts higher and drops
-# sm_70, this card. Installed first, it satisfies the pin and pip leaves it be.
-RUN pip install --no-cache-dir torch==2.12.1+cu126 torchvision==0.27.1+cu126 \
-    --index-url https://download.pytorch.org/whl/cu126
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+
+# We have to use 2.12.1+cu126 for it to work on the server with sm-70
+RUN pip install --no-cache-dir --force-reinstall \
+    torch==2.12.1+cu126 torchvision==0.27.1+cu126 \
+    --index-url https://download.pytorch.org/whl/cu126
 RUN pip install --no-cache-dir --force-reinstall --no-deps nvidia-cudnn-cu12==9.5.1.17
 
 # paddlepaddle-gpu pins its own nvidia-* wheels, and the NCCL it leaves behind is
