@@ -3,8 +3,15 @@
 #
 #   ./valider_full.sh model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no]
 #                     [rules=no] [metadata=yes|PATH] [images=N] [processes=N]
+#   ./valider_full.sh deploy=test|prod|URL uttrekk=N [list=NAME] [name=ALIAS]
+#                     [metadata=yes|PATH] [images=N]
 #
-#   model      path to the YOLO weights file (required)
+#   model      path to the YOLO weights file (required without deploy=)
+#   deploy     validate a running container instead of the local model: 'test'
+#              (port from .env, default 5072), 'prod' (5071) or a full URL.
+#              Every PDF goes over HTTP to /model, so the image decides
+#              weights and rules. The caches, rules= and processes= belong to
+#              the local path and are not available
 #   uttrekk    uttrekk number to validate against (required)
 #   list       name of the ID list (default: all documents)
 #   name       custom name for the output directory
@@ -29,6 +36,7 @@ fi
 
 # ── Parse named parameters ────────────────────────────────────────
 MODEL=""
+DEPLOY=""
 UTTREKK_NR=""
 LIST=""
 NAME=""
@@ -47,6 +55,7 @@ AFTER_FLAG=0
 for arg in "$@"; do
     case "$arg" in
         model=*)  MODEL="${arg#model=}"; AFTER_FLAG=0 ;;
+        deploy=*) DEPLOY="${arg#deploy=}"; AFTER_FLAG=0 ;;
         uttrekk=*) UTTREKK_NR="${arg#uttrekk=}"; AFTER_FLAG=0 ;;
         list=*)   LIST="${arg#list=}"; AFTER_FLAG=0 ;;
         name=*)    NAME="${arg#name=}"; AFTER_FLAG=0 ;;
@@ -62,7 +71,7 @@ for arg in "$@"; do
                 AFTER_FLAG=0
             else
                 echo "ERROR: Unknown parameter: $arg"
-                echo "Valid: model=PATH uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
+                echo "Valid: model=PATH|deploy=test uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
                 echo "run.py flags are passed on as they are, e.g. --vlm --vlm-concurrent 1"
                 exit 1
             fi
@@ -70,9 +79,28 @@ for arg in "$@"; do
     esac
 done
 
-if [[ -z "$MODEL" ]]; then
-    echo "ERROR: model= is required"
+if [[ -z "$MODEL" && -z "$DEPLOY" ]]; then
+    echo "ERROR: model= or deploy= is required"
     echo "Example: $0 model=\$SLADD_PRODWEIGHTS uttrekk=5 list=jou"
+    echo "         $0 deploy=test uttrekk=5 list=jou"
+    exit 1
+fi
+
+if [[ -n "$MODEL" && -n "$DEPLOY" ]]; then
+    echo "ERROR: model= and deploy= cannot be combined. The image holds its own"
+    echo "       weights: see which with ./deploy.sh status"
+    exit 1
+fi
+
+if [[ -n "$DEPLOY" && ( "$RULES" == "no" || "$RULES" == "0" ) ]]; then
+    echo "ERROR: rules=no is not available with deploy=: the postfilters run inside"
+    echo "       the container. Measure that baseline locally instead."
+    exit 1
+fi
+
+if [[ -n "$DEPLOY" && -n "$PROCESSES" ]]; then
+    echo "ERROR: processes= is not available with deploy=: the container answers one"
+    echo "       request at a time (gunicorn workers=1)."
     exit 1
 fi
 
@@ -92,7 +120,42 @@ derive_model_name() {
     echo "$name"
 }
 
-MODEL_NAME=$(derive_model_name "$MODEL")
+# Docker tags and URLs both go into a directory name, so anything else is stripped.
+slug() {
+    printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/-/g; s/--*/-/g; s/^-*//; s/-*$//'
+}
+
+# deploy.sh writes .env next to itself, which is this script's directory.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+env_value() {
+    [[ -f "$SCRIPT_DIR/.env" ]] || return 0
+    { grep "^${1}=" "$SCRIPT_DIR/.env" 2>/dev/null || true; } | tail -1 | cut -d= -f2-
+}
+
+MODEL_NAME=""
+API_URL=""
+TAG=""
+if [[ -z "$DEPLOY" ]]; then
+    MODEL_NAME=$(derive_model_name "$MODEL")
+else
+    case "$DEPLOY" in
+        prod) API_URL="http://localhost:5071/model"; TAG=$(env_value PROD_TAG) ;;
+        test) PORT=$(env_value TEST_PORT)
+              API_URL="http://localhost:${PORT:-5072}/model"
+              TAG=$(env_value TEST_TAG) ;;
+        http://*|https://*)
+              API_URL="$DEPLOY"
+              [[ "$API_URL" == */model ]] || API_URL="${API_URL%/}/model" ;;
+        *)    echo "ERROR: deploy= must be 'test', 'prod' or a URL (got: $DEPLOY)"
+              exit 1 ;;
+    esac
+
+    # The tag names the code; the label names the model inside it.
+    if [[ -n "$TAG" ]] && command -v docker >/dev/null 2>&1; then
+        MODEL_NAME=$(docker image inspect "${IMAGE:-smart-sladding}:${TAG}" \
+            --format '{{index .Config.Labels "no.kartverket.smsl.modell"}}' 2>/dev/null || true)
+    fi
+fi
 
 # ── Build paths ──────────────────────────────────────────────────
 UTTREKK_DIR="$SLADD_UTTREKK/uttrekk_${UTTREKK_NR}"
@@ -103,17 +166,24 @@ if [[ -n "$LIST" ]]; then
     LIST_FILE="$SLADD_LISTS/uttrekk_${UTTREKK_NR}_${LIST}.txt"
 fi
 
+if [[ -n "$DEPLOY" ]]; then
+    # The tag identifies the deployment; without it, whatever was asked for.
+    PREFIX="deploy_$(slug "${TAG:-$DEPLOY}")"
+else
+    PREFIX="full_${MODEL_NAME}"
+fi
+
 if [[ -n "$NAME" ]]; then
     OUT_NAME="$NAME"
 elif [[ -n "$LIST" ]]; then
-    OUT_NAME="full_${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_${LIST}"
+    OUT_NAME="${PREFIX}_validated_on_uttrekk_${UTTREKK_NR}_${LIST}"
 else
-    OUT_NAME="full_${MODEL_NAME}_validated_on_uttrekk_${UTTREKK_NR}_all"
+    OUT_NAME="${PREFIX}_validated_on_uttrekk_${UTTREKK_NR}_all"
 fi
 OUT_DIR="$SLADD_VALIDATION/$OUT_NAME"
 
 # ── Check that the files exist ───────────────────────────────────
-if [[ ! -f "$MODEL" ]]; then
+if [[ -z "$DEPLOY" && ! -f "$MODEL" ]]; then
     echo "ERROR: Cannot find model: $MODEL"
     exit 1
 fi
@@ -133,13 +203,35 @@ if [[ ! -d "$UTTREKK_DIR" ]]; then
     exit 1
 fi
 
+if [[ -n "$DEPLOY" ]]; then
+    HEALTH_URL="${API_URL%/model}/health"
+    if ! curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+        echo "ERROR: no answer from $HEALTH_URL"
+        case "$DEPLOY" in
+            prod|test) echo "       Start the deployment first: ./deploy.sh start $DEPLOY" ;;
+            *)         echo "       Check that something is listening there." ;;
+        esac
+        exit 1
+    fi
+fi
+
 # Without list= all documents run: labels cover the whole uttrekk, so a document with no rows holds zero fnr.
 
 # ── Show what is being run ───────────────────────────────────────
 echo "╭─────────────────────────────────────────────╮"
-echo "│ Full validation (OCR+YOLO): $OUT_NAME"
+if [[ -n "$DEPLOY" ]]; then
+    echo "│ Deployment validation (over HTTP): $OUT_NAME"
+else
+    echo "│ Full validation (OCR+YOLO): $OUT_NAME"
+fi
 echo "├─────────────────────────────────────────────┤"
-printf "│ modell:   %s\n" "$MODEL"
+if [[ -n "$DEPLOY" ]]; then
+    printf "│ api:      %s\n" "$API_URL"
+    printf "│ tag:      %s\n" "${TAG:-(unknown: no .env in $SCRIPT_DIR)}"
+    printf "│ modell:   %s\n" "${MODEL_NAME:-(unknown: read it with ./deploy.sh status)}"
+else
+    printf "│ modell:   %s\n" "$MODEL"
+fi
 printf "│ uttrekk:  %s\n" "$UTTREKK_DIR"
 if [[ -n "$LIST_FILE" ]]; then
     printf "│ liste:    %s\n" "$LIST_FILE"
@@ -148,13 +240,18 @@ else
 fi
 printf "│ truth:    %s\n" "$TRUTH"
 printf "│ out dir:  %s\n" "$OUT_DIR"
-printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/{ocr,yolo}"
+if [[ -n "$DEPLOY" ]]; then
+    printf "│ cache:    (none: the container renders and reads every document itself)\n"
+else
+    printf "│ cache:    %s\n" "$SLADD_CACHE/uttrekk_${UTTREKK_NR}/{ocr,yolo}"
+fi
 echo "╰─────────────────────────────────────────────╯"
 echo ""
 
 # ── Fill the caches first ────────────────────────────────────────
 # precache.py does run.py's work in parallel processes against the same GPU, measured 3.3x on V100S.
-if [[ "$PRECACHE" == "yes" ]]; then
+# With deploy= there is nothing to fill: the container keeps its own caches.
+if [[ "$PRECACHE" == "yes" && -z "$DEPLOY" ]]; then
     echo "── Filling cache (precache.py) ──"
     PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
         --folder "$UTTREKK_DIR"
@@ -171,7 +268,6 @@ fi
 # ── Build the command ────────────────────────────────────────────
 CMD=(python -u "$SLADD_RUN"
     --folder "$UTTREKK_DIR"
-    --yolo-weights "$MODEL"
     --csv --truth --only-error
     --truth-csv "$TRUTH"
     --csv-out "$OUT_DIR/resultat.csv"
@@ -179,6 +275,12 @@ CMD=(python -u "$SLADD_RUN"
     --result-dir "$OUT_DIR"
     --time
 )
+
+if [[ -n "$DEPLOY" ]]; then
+    CMD+=(--api-url "$API_URL")
+else
+    CMD+=(--yolo-weights "$MODEL")
+fi
 
 if [[ -n "$LIST_FILE" ]]; then
     CMD+=(--select-from-file "$LIST_FILE")

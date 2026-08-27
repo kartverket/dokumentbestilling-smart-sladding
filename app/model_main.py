@@ -238,8 +238,9 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     None/empty = global behaviour, so missing metadata can never cost recall.
 
     vlm: a vlm_verifier.VlmConfig turns the VLM verifier on. It can only
-    remove boxes, and it needs the page images, so a document served entirely
-    from the caches is rendered anyway.
+    remove boxes. The crops come from the page image, so a document served
+    entirely from the caches is rendered the first time a page has a box in
+    the stratum, and not at all if no page does.
 
     stats: an optional dict this document's phase timings, cache hits and VLM
     counters are written to. Left untouched on a cache miss under only_cache.
@@ -285,12 +286,9 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                     or (uses_yolo and yolo_boxes_per_page is None))
     if needs_models and only_cache:
         return None
-    # The verifier crops from the page image. Rendering is pure CPU, so a
-    # cache-only worker can do it without the models.
-    needs_pixels = needs_models or vlm is not None
-    images = images_ocr = None
+    images_ocr = None
 
-    if needs_pixels:
+    if needs_models:
         with _take_time(t, "render"):
             images = list(read_pages_from_bytes(pdf_bytes))
 
@@ -306,6 +304,21 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                 tokens_per_page = read_tokens_batched(images_ocr)
             if cache_dir and name:
                 write_ocr_cache(cache_dir, name, rotations, tokens_per_page)
+
+    def _pages_as_ocr_saw_them():
+        """The pages the verifier crops from, rasterised on first use.
+
+        A document served from the caches renders only if some page has a box
+        to judge, and never if none has. Rendering is pure CPU, so a
+        cache-only worker gets here without the models.
+        """
+        nonlocal images_ocr
+        if images_ocr is None:
+            with _take_time(t, "render"):
+                raw = list(read_pages_from_bytes(pdf_bytes))
+            images_ocr = [np.rot90(b, k) if k else b
+                          for b, k in zip(raw, rotations)]
+        return images_ocr
 
     if tokens_per_page is None:
         tokens_per_page = [[] for _ in range(n_pages)]
@@ -349,11 +362,11 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                     tokens, lines, yolo_boxes, koordfam=koordfam,
                     seksjonering=seksjonering, postfilter=postfilter)
 
-        if vlm is not None:
+        if vlm is not None and vlm_verifier.needs_image(
+                boxes_with_source, vlm, koordfam, seksjonering):
             with _take_time(t, "vlm"):
-                image_vlm = images_ocr[si] if images_ocr else None
                 boxes_with_source, judged, dropped = vlm_verifier.verify_page(
-                    boxes_with_source, image_vlm, lines, vlm,
+                    boxes_with_source, _pages_as_ocr_saw_them()[si], lines, vlm,
                     koordfam=koordfam, seksjonering=seksjonering,
                     stats=vlm_stats)
                 n_judged += judged

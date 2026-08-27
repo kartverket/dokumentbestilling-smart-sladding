@@ -239,6 +239,16 @@ def in_stratum(source, a, koordfam=False, seksjonering=False):
     return source in a.sources
 
 
+def needs_image(boxes_with_source, a, koordfam=False, seksjonering=False):
+    """Whether the page holds a box the verifier may judge.
+
+    The caller asks before rasterising: a page with nothing in the stratum
+    never needs an image.
+    """
+    return any(in_stratum(pair[1], a, koordfam, seksjonering)
+               for pair in boxes_with_source)
+
+
 def verify_page(boxes_with_source, image, lines, a, koordfam=False,
                 seksjonering=False, stats=None):
     """Judge one page's boxes and return the survivors.

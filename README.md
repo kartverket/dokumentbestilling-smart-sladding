@@ -199,6 +199,9 @@ Same code path as a POST: bytes in, `run_model_on_pdf_bytes` out.
 | `--vlm` | off | let a vision model re-read the boxes and remove the ones it rejects |
 | `--vlm-model NAME` | `$SLADD_VLM_MODEL` | model name at the endpoint |
 | `--vlm-url URL` | `$SLADD_VLM_URL` | OpenAI-compatible `/v1`, comma-separated for several backends |
+| `--api-url URL` | none | send every PDF to a running deployment instead of the model in this process |
+| `--api-timeout SEK` | `300` | seconds per document before it counts as failed |
+| `--api-no-vlm` | off | send `vlm=false`, so a container with the verifier on answers without it |
 | `--time` | off | timing per document |
 
 Output directories that already exist abort the run; use `--proceed` to resume
@@ -209,6 +212,11 @@ under `$SLADD_CACHE`, so rerunning the same model is nearly free.
 python run.py --select 10000676.pdf --csv --truth --time
 python run.py --count alle --truth --csv --png
 ```
+
+With `--api-url` the model runs nowhere near this process: each PDF is POSTed
+to a container and the boxes come back over HTTP. The weights, the rules and
+the caches are then the image's, so `--yolo-weights`, `--vlm` and
+`--without-postfilter` are refused. See "Validating a deployment" below.
 
 On the server, `valider_full.sh` and `valider_yolo.sh` wrap this with the
 standard paths. Start there rather than assembling flags by hand.
@@ -371,6 +379,32 @@ curl http://localhost:5072/health
 `promote` requires the tag explicitly, asks for confirmation, and **rolls back
 automatically** if `/health` does not answer. A tag built on uncommitted changes
 gets a `-dirty` suffix and is refused.
+
+### Validating a deployment
+
+`./deploy.sh test <tag>` only checks that the container answers. To see what it
+finds, point the validation at it:
+
+```sh
+./deploy.sh start test
+./valider_full.sh deploy=test uttrekk=5 list=jou
+```
+
+Every PDF goes over HTTP to `/model` in the container, and the answer is
+measured against the labels exactly as a local run is. Output folder,
+`resultat.csv` and summary look the same, so you can compare the two runs line
+by line.
+
+- The image holds the weights and the rules. `model=`, `rules=` and
+  `processes=` therefore do not apply, and `./deploy.sh status` tells you which
+  model is inside.
+- The caches under `$SLADD_CACHE` belong to this disk. The container keeps its
+  own and reads every document from scratch, so expect a few seconds per
+  document.
+- `deploy=prod` measures port 5071. `deploy=http://host:5072` measures any
+  other address.
+- `metadata=yes` sends the rettsstiftelse types as query parameters, the way
+  the skip job does.
 
 ### Other commands
 

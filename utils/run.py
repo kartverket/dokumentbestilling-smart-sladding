@@ -12,6 +12,7 @@ warnings.filterwarnings("ignore", message=".*ccache.*")
 os.environ["GLOG_minloglevel"] = "2"
 
 import fitz
+import requests
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))
 if _UTILS not in sys.path:
@@ -78,6 +79,41 @@ def _pages_from_result(result, pdf_bytes):
             pages.append({"side": n, "bilde_bredde": bw, "bilde_hoyde": bh,
                           "boxes": boxes})
     return pages
+
+
+def _health_url(api_url):
+    """The deployment's /health, derived from its /model URL."""
+    base = api_url.split("?", 1)[0].rstrip("/")
+    head, _, last = base.rpartition("/")
+    # A bare origin has no path to strip: the last "/" is the one in "http://".
+    if not last or head.endswith("/"):
+        return base + "/health"
+    return head + "/health"
+
+
+def _post_pdf(session, api_url, pdf_bytes, name, rettsstiftelsestyper,
+              elektronisk_tinglyst, vlm_off, timeout):
+    """One document through a running deployment, the way the skip job sends it.
+
+    The answer is the flat box list from /model, which _pages_from_result reads
+    the same way as a local run.
+    """
+    params = {"filrevisjonid": os.path.splitext(name)[0]}
+    if elektronisk_tinglyst:
+        params["elektronisk_tinglyst"] = "true"
+    if rettsstiftelsestyper:
+        params["rettsstiftelsestyper"] = ",".join(rettsstiftelsestyper)
+    if vlm_off:
+        params["vlm"] = "false"
+    answer = session.post(api_url, params=params, data=pdf_bytes,
+                          headers={"Content-Type": "application/pdf"},
+                          timeout=timeout)
+    answer.raise_for_status()
+    result = answer.json()
+    if not isinstance(result, list):
+        raise ValueError(f"expected a list of boxes, got "
+                         f"{type(result).__name__}: {str(result)[:120]}")
+    return result
 
 
 def _write_ocr_log(ocr_lines, path):
@@ -349,13 +385,25 @@ def main():
                         "profiles (KOORDFAM_CODES in config) the way prod does "
                         "when the skip job sends the codes; without it, global "
                         "behaviour")
+    p.add_argument("--api-url", default=None, metavar="URL",
+                   help="send every PDF to a running deployment (POST to this "
+                        "URL, e.g. http://localhost:5072/model) instead of "
+                        "running the model in this process. The image holds "
+                        "the weights and the rules, so --yolo-weights, the "
+                        "caches, --vlm and --without-postfilter do not apply")
+    p.add_argument("--api-timeout", type=float, default=300, metavar="SEK",
+                   help="seconds to wait for one document before it counts as "
+                        "failed (default 300)")
+    p.add_argument("--api-no-vlm", action="store_true",
+                   help="send vlm=false, so a container running with the "
+                        "verifier answers without it")
     p.add_argument("--vlm", action="store_true",
                    help="run the VLM verifier: every box in the stratum (see "
                         "VLM_SOURCES in config, only documents without a rule "
                         "profile) is sent to the model as a crop, and dropped "
                         "on a clear «nei». Needs --vlm-model and an endpoint. "
-                        "Forces a render even on a full cache hit, since the "
-                        "crops come from the page image")
+                        "The crops come from the page image, so a fully cached "
+                        "document renders only if it has a box in the stratum")
     p.add_argument("--vlm-url", default=None, metavar="URL",
                    help=f"OpenAI-compatible /v1 endpoint, comma-separated for "
                         f"several backends (default: $SLADD_VLM_URL, else "
@@ -376,6 +424,23 @@ def main():
                    help="judge every box afresh, without reading or writing "
                         "the judgement cache")
     args = p.parse_args()
+
+    # ── API mode: the deployment owns model, rules and caches ────
+    session = None
+    if args.api_url:
+        conflicting = [flag for flag, on in (
+            ("--vlm", args.vlm),
+            ("--only-yolo", args.only_yolo),
+            ("--without-postfilter", args.without_postfilter),
+            ("--yolo-weights", bool(args.yolo_weights)),
+            ("--ocr-log", args.ocr_log)) if on]
+        if conflicting:
+            print(f"ERROR: --api-url cannot be combined with "
+                  f"{', '.join(conflicting)}: the container decides model and "
+                  f"rules, and answers with boxes only.")
+            return
+        # Its caches are its own, and it never sees the ones on this disk.
+        args.no_ocr_cache = args.no_yolo_cache = True
 
     # ── Derive cache paths ───────────────────────────────────────
     if args.no_ocr_cache:
@@ -440,18 +505,32 @@ def main():
         print(f"ERROR: --folder not found: {args.folder}")
         return
 
-    set_weights(args.yolo_weights)
+    if args.api_url:
+        # A deployment that is down would otherwise fail once per document,
+        # after every PDF has been read and sent.
+        session = requests.Session()
+        health = _health_url(args.api_url)
+        try:
+            session.get(health, timeout=10).raise_for_status()
+        except Exception as e:
+            print(f"ERROR: {health} does not answer: "
+                  f"{type(e).__name__}: {str(e)[:160]}")
+            print("      Start the deployment first, e.g. ./deploy.sh start test")
+            return
+        print(f"API: every PDF goes to {args.api_url} ({health} answers)")
+    else:
+        set_weights(args.yolo_weights)
 
-    # One cache folder per model: the weights hash becomes a subfolder, so a
-    # new model never reads another model's boxes.
-    if args.elektronisk_tinglyst:
-        args.yolo_cache = None          # elektronisk tinglyst runs without YOLO
-    if args.yolo_cache:
-        if os.path.isfile(active_weights()):
-            args.yolo_cache = cache_dir_for_weights(args.yolo_cache, active_weights())
-        else:
-            print(f"WARNING: weights file {active_weights()} not found - YOLO cache disabled")
-            args.yolo_cache = None
+        # One cache folder per model: the weights hash becomes a subfolder, so a
+        # new model never reads another model's boxes.
+        if args.elektronisk_tinglyst:
+            args.yolo_cache = None      # elektronisk tinglyst runs without YOLO
+        if args.yolo_cache:
+            if os.path.isfile(active_weights()):
+                args.yolo_cache = cache_dir_for_weights(args.yolo_cache, active_weights())
+            else:
+                print(f"WARNING: weights file {active_weights()} not found - YOLO cache disabled")
+                args.yolo_cache = None
 
     # ── Output folders ───────────────────────────────────────────
     output_mapper = [m for m in [
@@ -554,7 +633,11 @@ def main():
     processes = args.processes
     if processes is None:
         processes = min(8, os.cpu_count() or 1)
-    if processes > 1 and not args.ocr_cache and not args.yolo_cache:
+    if args.api_url:
+        # The container answers one request at a time (gunicorn workers=1), so
+        # more client processes would only queue.
+        processes = 1
+    elif processes > 1 and not args.ocr_cache and not args.yolo_cache:
         print("Without a cache every document must go through the models - running sequentially.")
         processes = 1
 
@@ -655,16 +738,26 @@ def main():
         return rs_per_doc.get(_doc_no(name)) if rs_per_doc else None
 
     def run_in_main_process(pdf_bytes, name, stats=None):
-        """Full run with the models. Returns pages, or None on error."""
+        """Full run with the models, or one POST with --api-url.
+
+        Returns pages, or None on error.
+        """
         try:
-            result = run_model_on_pdf_bytes(pdf_bytes, write_time=args.time, with_lines=args.ocr_log, name=name,
-                                              elektronisk_tinglyst=args.elektronisk_tinglyst,
-                                              only_yolo=args.only_yolo,
-                                              cache_dir=args.ocr_cache,
-                                              yolo_cache_dir=args.yolo_cache,
-                                              rettsstiftelsestyper=rs_for(name),
-                                              postfilter=not args.without_postfilter,
-                                              vlm=vlm, stats=stats)
+            if args.api_url:
+                result = _post_pdf(session, args.api_url, pdf_bytes, name,
+                                   rs_for(name), args.elektronisk_tinglyst,
+                                   args.api_no_vlm, args.api_timeout)
+            else:
+                result = run_model_on_pdf_bytes(
+                    pdf_bytes, write_time=args.time, with_lines=args.ocr_log,
+                    name=name,
+                    elektronisk_tinglyst=args.elektronisk_tinglyst,
+                    only_yolo=args.only_yolo,
+                    cache_dir=args.ocr_cache,
+                    yolo_cache_dir=args.yolo_cache,
+                    rettsstiftelsestyper=rs_for(name),
+                    postfilter=not args.without_postfilter,
+                    vlm=vlm, stats=stats)
         except Exception as e:
             failed.append((name, repr(e)))
             traceback.print_exc()
@@ -781,6 +874,7 @@ def main():
             header = (
                 f"Folder:     {os.path.abspath(args.folder)}\n"
                 f"Truth CSV:  {os.path.abspath(args.truth_csv)}\n"
+                + (f"API:        {args.api_url}\n" if args.api_url else "") +
                 f"Total time: {total_time:.2f}s\n"
                 f"{report}"
                 f"Time per document:\n{time_lines}\n"
