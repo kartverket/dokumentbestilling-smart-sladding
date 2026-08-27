@@ -182,6 +182,12 @@ def _vlm_report(v):
     if judged:
         lines[-2] += (f"   ({cached} from the judgement cache, "
                       f"{judged - cached} sent to the model)")
+    not_cached = v.get("not_cached") or {}
+    if not_cached:
+        lines.append(f"  {'Answers NOT cached':<28}{sum(not_cached.values()):>8}"
+                     f"   (they are judged again on every run)")
+        for reason in sorted(not_cached, key=lambda r: -not_cached[r]):
+            lines.append(f"     {reason:<25}{not_cached[reason]:>8}")
     per_box = f"   ({sec / judged:.2f} s/box)" if judged else ""
     lines.append(f"  {'Time in the verifier':<28}{sec:>8.1f} s{per_box}")
     if v["judged_per_kilde"]:
@@ -531,7 +537,8 @@ def main():
     vlm_total = {"docs": 0, "docs_judged": 0, "docs_profile": 0,
                  "judged": 0, "dropped": 0, "cache_hits": 0,
                  "judged_per_kilde": defaultdict(int),
-                 "dropped_per_kilde": defaultdict(int)}
+                 "dropped_per_kilde": defaultdict(int),
+                 "not_cached": defaultdict(int)}
     ocr_lines = {}                          # (name, page) -> list of (text, marks)
     warned_about_lines = False
 
@@ -631,7 +638,7 @@ def main():
             vlm_total["docs_judged"] += 1
         for field in ("judged", "dropped", "cache_hits"):
             vlm_total[field] += v.get(field, 0)
-        for field in ("judged_per_kilde", "dropped_per_kilde"):
+        for field in ("judged_per_kilde", "dropped_per_kilde", "not_cached"):
             for k, n in (v.get(field) or {}).items():
                 vlm_total[field][k] += n
 
@@ -741,8 +748,8 @@ def main():
     if vlm is not None:
         vlm_total["model"] = vlm.model
         vlm_total["seconds"] = phase_time.get("vlm", 0.0)
-        vlm_total["judged_per_kilde"] = dict(vlm_total["judged_per_kilde"])
-        vlm_total["dropped_per_kilde"] = dict(vlm_total["dropped_per_kilde"])
+        for field in ("judged_per_kilde", "dropped_per_kilde", "not_cached"):
+            vlm_total[field] = dict(vlm_total[field])
         if report_lines:
             report_lines.append("")
         report_lines += _vlm_report(vlm_total)

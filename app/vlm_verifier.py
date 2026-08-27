@@ -36,6 +36,12 @@ from vlm_client import (STD_PROMPT, _THINKING, _build_melding, call_model,
 
 SCALE = PDF_DPI / 72.0            # PDF points -> pixels
 
+# parse_answer's «feil» texts, shortened for the run report
+_SHORT = {"not JSON, read by keyword": "answer was not JSON",
+          "unparsable answer": "answer unreadable",
+          "empty answer": "answer empty",
+          "the model omitted the «svar» field": "no «svar» field"}
+
 
 class VlmConfig:
     """What the verifier needs to run. `urls` may hold several backends.
@@ -120,7 +126,11 @@ def _line_text(lines, box):
 
 
 def _judge(crop_png, a, i):
-    """One box -> «ja» or «nei», the model's transcription, and cache hit or not.
+    """One box -> «ja» or «nei», the model's transcription, and a cache note.
+
+    The note is «hit», «written», «off», or the reason the answer was not
+    stored. An answer the cache refuses is judged again on every run, so the
+    reason has to reach the caller instead of being dropped here.
 
     Never raises, and never answers «nei» on a failure: the caller must be
     able to keep the box whatever goes wrong.
@@ -135,7 +145,7 @@ def _judge(crop_png, a, i):
         if cached is not None:
             answer, number, _rationale, parse_error, check = parse_answer(cached)
             if not parse_error:
-                return answer, number, check.get("linjen", ""), True
+                return answer, number, check.get("linjen", ""), "hit"
 
     url = a.urls[i % len(a.urls)]
     messages = _build_melding(a.prompt, image_b64)
@@ -150,25 +160,32 @@ def _judge(crop_png, a, i):
         # quietly do nothing at all.
         if not (e.code == 400 and _THINKING["value"]
                 and "reasoning" in str(e).lower()):
-            return "ja", "", "", False
+            return "ja", "", "", "call failed"
         _THINKING["value"] = None
         try:
             raw = call_model(url, a.model, messages, api_key=a.api_key,
                              timeout=a.timeout, temperature=0.0,
                              max_tokens=a.max_tokens, thinking=None)
         except Exception:
-            return "ja", "", "", False
+            return "ja", "", "", "call failed"
     except Exception:
-        return "ja", "", "", False
+        return "ja", "", "", "call failed"
     answer, number, _rationale, parse_error, check = parse_answer(raw)
-    # Once the field has been dropped the answers no longer match the
-    # fingerprint, so they stay out of the cache.
-    if key and not parse_error and _THINKING["value"] == a.thinking:
-        try:
-            vlm_cache.write_cache(a.cache_dir, key, "", raw, 0.0)
-        except OSError:
-            pass
-    return answer, number, check.get("linjen", ""), False
+    note = "off" if not key else ""
+    if key:
+        # Once the field has been dropped the answers no longer match the
+        # fingerprint, so they stay out of the cache.
+        if parse_error:
+            note = _SHORT.get(parse_error.split("—")[0].strip(), "unparsed")
+        elif _THINKING["value"] != a.thinking:
+            note = "reasoning_effort dropped"
+        else:
+            note = "written"
+            try:
+                vlm_cache.write_cache(a.cache_dir, key, "", raw, 0.0)
+            except OSError:
+                note = "cache not writable"
+    return answer, number, check.get("linjen", ""), note
 
 
 def in_stratum(source, a, koordfam=False, seksjonering=False):
@@ -214,9 +231,9 @@ def verify_page(boxes_with_source, image, lines, a, koordfam=False,
             lambda t: _judge(t[1], a, t[0]), tasks))
 
     dropped = set()
-    cache_hits = 0
-    for (i, _crop_png), (answer, number, own_line, from_cache) in zip(tasks, verdicts):
-        cache_hits += bool(from_cache)
+    notes = []
+    for (i, _crop_png), (answer, number, own_line, note) in zip(tasks, verdicts):
+        notes.append(note)
         if answer != "nei":
             continue
         if fnr_protects([number, own_line, _line_text(lines, boxes_with_source[i][0])]):
@@ -224,18 +241,24 @@ def verify_page(boxes_with_source, image, lines, a, koordfam=False,
         dropped.add(i)
 
     if stats is not None:
-        _count(stats, tasks, dropped, cache_hits, boxes_with_source)
+        _count(stats, tasks, dropped, notes, boxes_with_source)
 
     survivors = [pair for i, pair in enumerate(boxes_with_source)
                  if i not in dropped]
     return survivors, len(tasks), len(dropped)
 
 
-def _count(stats, tasks, dropped, cache_hits, boxes_with_source):
+def _count(stats, tasks, dropped, notes, boxes_with_source):
     """Add one page's verdicts to the caller's counter dict."""
     stats["judged"] = stats.get("judged", 0) + len(tasks)
     stats["dropped"] = stats.get("dropped", 0) + len(dropped)
-    stats["cache_hits"] = stats.get("cache_hits", 0) + cache_hits
+    stats["cache_hits"] = (stats.get("cache_hits", 0)
+                           + sum(1 for n in notes if n == "hit"))
+    not_cached = stats.setdefault("not_cached", {})
+    for note in notes:
+        if note in ("hit", "written", "off"):
+            continue
+        not_cached[note] = not_cached.get(note, 0) + 1
     judged_per_kilde = stats.setdefault("judged_per_kilde", {})
     dropped_per_kilde = stats.setdefault("dropped_per_kilde", {})
     for i, _crop_png in tasks:

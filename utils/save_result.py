@@ -76,6 +76,14 @@ def write_result_files(result, folder=".", description=None, log=None):
                         vlm.get("judged", 0), vlm.get("dropped", 0),
                         vlm.get("cache_hits", 0),
                         round(vlm.get("seconds", 0.0), 1)])
+            not_cached = vlm.get("not_cached") or {}
+            if not_cached:
+                w.writerow([])
+                w.writerow(["## VLM ikke cachet"])
+                w.writerow(["grunn", "antall"])
+                for reason in sorted(not_cached, key=lambda r: -not_cached[r]):
+                    w.writerow([reason, not_cached[reason]])
+
             judged_per_kilde = vlm.get("judged_per_kilde") or {}
             if judged_per_kilde:
                 dropped_per_kilde = vlm.get("dropped_per_kilde") or {}
