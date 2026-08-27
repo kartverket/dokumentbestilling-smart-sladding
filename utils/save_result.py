@@ -44,7 +44,7 @@ def write_result_files(result, folder=".", description=None, log=None):
         if kilde:
             w.writerow([])
             w.writerow(["## Per kilde"])
-            w.writerow(["kilde", "treff", "oversladd", "pred", "oversladd_pct"])
+            w.writerow(["kilde", "hit", "oversladd", "pred", "oversladd_pct"])
             for k, (tr, ov) in sorted(kilde.items()):
                 tot = tr + ov
                 w.writerow([k, tr, ov, tot,
@@ -55,7 +55,7 @@ def write_result_files(result, folder=".", description=None, log=None):
             total = sum(timings.values())
             w.writerow([])
             w.writerow(["## Time"])
-            w.writerow(["fase", "sekunder", "pct"])
+            w.writerow(["phase", "seconds", "pct"])
             for phase, sec in sorted(timings.items(), key=lambda kv: -kv[1]):
                 w.writerow([phase, round(sec, 1),
                             round(sec / total * 100, 1) if total else 0])
@@ -68,9 +68,9 @@ def write_result_files(result, folder=".", description=None, log=None):
         if vlm:
             w.writerow([])
             w.writerow(["## VLM"])
-            w.writerow(["model", "dokumenter", "dokumenter_dommet",
-                        "dokumenter_med_profil", "bokser_dommet",
-                        "bokser_fjernet", "cache_treff", "sekunder"])
+            w.writerow(["model", "documents", "documents_judged",
+                        "documents_with_profile", "boxes_judged",
+                        "boxes_removed", "cache_hits", "seconds"])
             w.writerow([vlm.get("model", ""), vlm.get("docs", 0),
                         vlm.get("docs_judged", 0), vlm.get("docs_profile", 0),
                         vlm.get("judged", 0), vlm.get("dropped", 0),
@@ -79,8 +79,8 @@ def write_result_files(result, folder=".", description=None, log=None):
             not_cached = vlm.get("not_cached") or {}
             if not_cached:
                 w.writerow([])
-                w.writerow(["## VLM ikke cachet"])
-                w.writerow(["grunn", "antall"])
+                w.writerow(["## VLM not cached"])
+                w.writerow(["reason", "count"])
                 for reason in sorted(not_cached, key=lambda r: -not_cached[r]):
                     w.writerow([reason, not_cached[reason]])
 
@@ -89,7 +89,7 @@ def write_result_files(result, folder=".", description=None, log=None):
                 dropped_per_kilde = vlm.get("dropped_per_kilde") or {}
                 w.writerow([])
                 w.writerow(["## VLM per kilde"])
-                w.writerow(["kilde", "dommet", "fjernet"])
+                w.writerow(["kilde", "judged", "removed"])
                 for k in sorted(judged_per_kilde):
                     w.writerow([k, judged_per_kilde[k],
                                 dropped_per_kilde.get(k, 0)])

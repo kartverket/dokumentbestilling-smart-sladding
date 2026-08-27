@@ -153,6 +153,13 @@ VLM_TIMEOUT = float(_os.environ.get("SLADD_VLM_TIMEOUT", "20"))   # seconds per 
 VLM_CONCURRENT = int(_os.environ.get("SLADD_VLM_CONCURRENT", "4"))  # boxes in flight per page
 VLM_MAX_TOKENS = 150
 
+# Circuit breaker. A hung endpoint costs one full VLM_TIMEOUT per box, so a
+# document with ten boxes holds a prod request for VLM_TIMEOUT x 10. After
+# this many failures in a row the verifier stops calling for the cooldown and
+# keeps every box. 0 turns it off.
+VLM_BREAKER_FAILURES = int(_os.environ.get("SLADD_VLM_BREAKER_FAILURES", "5"))
+VLM_BREAKER_COOLDOWN = float(_os.environ.get("SLADD_VLM_BREAKER_COOLDOWN", "30"))
+
 # The stratum. Measured on uttrekk4: after the fnr guard the gain is 806 of
 # 1027 removable boxes on kilde «yolo», 0 of 203 on «begge» and 1 of 129 on
 # «paddle» — judging the other two costs GPU and buys nothing.

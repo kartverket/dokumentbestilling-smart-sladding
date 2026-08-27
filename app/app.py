@@ -36,6 +36,32 @@ def health():
     return jsonify(health="healthy")
 
 
+def _vlm_log(stats):
+    """The verifier's part of the request log line, empty when it was off."""
+    v = stats.get("vlm")
+    if not v or not v.get("judged"):
+        return ''
+    seconds = stats.get("timings", {}).get("vlm", 0.0)
+    return (f', vlm={v["dropped"]}/{v["judged"]} removed'
+            f' in {seconds:.1f}s')
+
+
+def _warn_on_vlm_failure(filrevisjonid, stats):
+    """A verifier that answered nothing must not pass as one that said «ja».
+
+    Every failure path keeps the box, so the document is still safe; the point
+    is that a dead endpoint would otherwise leave no trace at all.
+    """
+    v = stats.get("vlm") or {}
+    failed = sum(n for reason, n in (v.get("not_cached") or {}).items()
+                 if reason in ("call failed", "breaker open"))
+    if failed:
+        logging.warning(
+            f'Document {_log_safe(filrevisjonid)}: VLM answered nothing for '
+            f'{failed} of {v.get("judged", 0)} boxes — they keep their sladd, '
+            f'but the verifier is doing less than it looks like')
+
+
 @app.route('/model', methods=['POST'])
 def get_bounding_boxes():
 
@@ -61,14 +87,17 @@ def get_bounding_boxes():
         # endpoint there is nothing to call.
         vlm = VLM if request.args.get('vlm', 'true').lower() != 'false' else None
         pdf_file_stream = request.get_data()
+        stats = {}
         bounding_boxes_result = model_main.run_model_on_pdf_bytes(
             pdf_file_stream, name=filrevisjonid,
             elektronisk_tinglyst=elektronisk_tinglyst,
-            rettsstiftelsestyper=rettsstiftelsestyper, vlm=vlm)
+            rettsstiftelsestyper=rettsstiftelsestyper, vlm=vlm, stats=stats)
 
         logging.info(f'Document {_log_safe(filrevisjonid)}: '
                      f'{len(bounding_boxes_result)} boxes, rettsstiftelsestyper='
-                     f'{_log_safe(",".join(rettsstiftelsestyper))}')
+                     f'{_log_safe(",".join(rettsstiftelsestyper))}'
+                     f'{_vlm_log(stats)}')
+        _warn_on_vlm_failure(filrevisjonid, stats)
         return jsonify(bounding_boxes_result)
 
     except Exception as e:

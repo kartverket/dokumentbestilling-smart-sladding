@@ -24,10 +24,13 @@ the runs it was measured on.
 import base64
 import io
 import os
+import threading
+import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-from config import (PDF_DPI, VLM_API_KEY, VLM_CONCURRENT, VLM_ENABLED,
+from config import (PDF_DPI, VLM_API_KEY, VLM_BREAKER_COOLDOWN,
+                    VLM_BREAKER_FAILURES, VLM_CONCURRENT, VLM_ENABLED,
                     VLM_MARGIN_PT, VLM_MAX_PX, VLM_MAX_TOKENS, VLM_MODEL,
                     VLM_SOURCES, VLM_TIMEOUT, VLM_URL)
 import vlm_cache
@@ -35,6 +38,35 @@ from vlm_client import (STD_PROMPT, _THINKING, _build_melding, call_model,
                         crop_with_marker, fnr_protects, parse_answer)
 
 SCALE = PDF_DPI / 72.0            # PDF points -> pixels
+
+# Consecutive failures, and the clock until calls resume. Per process: each
+# gunicorn worker finds out on its own, which is cheaper than sharing state.
+_BREAKER = {"failures": 0, "open_until": 0.0}
+_BREAKER_LOCK = threading.Lock()
+
+
+def _breaker_open():
+    """True while the verifier is backing off from a failing endpoint."""
+    if not VLM_BREAKER_FAILURES:
+        return False
+    with _BREAKER_LOCK:
+        return time.monotonic() < _BREAKER["open_until"]
+
+
+def _breaker_note(ok):
+    """One call's outcome. A success anywhere closes the breaker again."""
+    if not VLM_BREAKER_FAILURES:
+        return
+    with _BREAKER_LOCK:
+        if ok:
+            _BREAKER["failures"] = 0
+            _BREAKER["open_until"] = 0.0
+            return
+        _BREAKER["failures"] += 1
+        if _BREAKER["failures"] >= VLM_BREAKER_FAILURES:
+            _BREAKER["open_until"] = time.monotonic() + VLM_BREAKER_COOLDOWN
+            _BREAKER["failures"] = 0
+
 
 # parse_answer's «feil» texts, shortened for the run report
 _SHORT = {"not JSON, read by keyword": "answer was not JSON",
@@ -147,6 +179,9 @@ def _judge(crop_png, a, i):
             if not parse_error:
                 return answer, number, check.get("linjen", ""), "hit"
 
+    if _breaker_open():
+        return "ja", "", "", "breaker open"
+
     url = a.urls[i % len(a.urls)]
     messages = _build_melding(a.prompt, image_b64)
     try:
@@ -160,6 +195,7 @@ def _judge(crop_png, a, i):
         # quietly do nothing at all.
         if not (e.code == 400 and _THINKING["value"]
                 and "reasoning" in str(e).lower()):
+            _breaker_note(False)
             return "ja", "", "", "call failed"
         _THINKING["value"] = None
         try:
@@ -167,9 +203,12 @@ def _judge(crop_png, a, i):
                              timeout=a.timeout, temperature=0.0,
                              max_tokens=a.max_tokens, thinking=None)
         except Exception:
+            _breaker_note(False)
             return "ja", "", "", "call failed"
     except Exception:
+        _breaker_note(False)
         return "ja", "", "", "call failed"
+    _breaker_note(True)
     answer, number, _rationale, parse_error, check = parse_answer(raw)
     note = "off" if not key else ""
     if key:
