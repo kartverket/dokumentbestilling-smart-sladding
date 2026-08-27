@@ -41,6 +41,10 @@ logconfig_dict = {
     "version": 1,
     # dictConfig must not disable gunicorn's own loggers.
     "disable_existing_loggers": False,
+    # gunicorn merges this over its own defaults, whose root logger points at a
+    # "console" handler replaced below. Empty rather than stdout, because
+    # app.py configures root itself and basicConfig is a no-op once it has one.
+    "root": {"handlers": []},
     "formatters": {
         "rå": {"format": "%(message)s"},
         "tidsstemplet": {"format": "%(asctime)s [%(levelname)s] %(message)s"},
