@@ -18,6 +18,10 @@ x-common: &common
   environment:
     HTTP_PROXY: ${PROXY:-http://159.162.48.7:3128}
     HTTPS_PROXY: ${PROXY:-http://159.162.48.7:3128}
+
+    # PaddleX initialises its training-repo manager on import and raises if
+    # that happens twice in one process. Inference never needs it.
+    PADDLE_PDX_EAGER_INIT: "0"
     # Log paths inside the container. The host mounts in under ${LOG_ROOT},
     # which deploy.sh takes from SLADD_LOGS in server.env.
     GUNICORN_LOG_DIR: /data/gunicorn_logs
