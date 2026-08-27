@@ -28,13 +28,23 @@ RUN set -eux; \
         rm "${model}.tar"; \
     done
 
+# Before requirements.txt, which names the same torch version. PyPI's default
+# wheel is a CUDA 13 build, and CUDA 13 dropped sm_70, which is this card.
+# Installed first, the cu126 build satisfies that pin and pip leaves it alone.
+RUN pip install --no-cache-dir torch==2.12.1 torchvision==0.27.1 \
+    --index-url https://download.pytorch.org/whl/cu126
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-
-RUN pip install --no-cache-dir torch==2.12.1 torchvision==0.27.1 \
-    --index-url https://download.pytorch.org/whl/cu126
 RUN pip install --no-cache-dir --force-reinstall --no-deps nvidia-cudnn-cu12==9.5.1.17
+
+# paddlepaddle-gpu pins its own nvidia-* wheels, and the NCCL it leaves behind is
+# missing symbols libtorch_cuda.so needs. Paddle uses NCCL only for distributed
+# training, so torch's pin wins.
+RUN NCCL=$(python3 -c "import importlib.metadata as m; print(next(r.split(';')[0].strip() for r in m.requires('torch') if r.startswith('nvidia-nccl')))") && \
+    echo "pinning $NCCL" && \
+    pip install --no-cache-dir --force-reinstall --no-deps "$NCCL"
 
 # The weights live outside the repo (see SLADD_WEIGHTS in server.env) and
 # docker only copies from the build context, so ./deploy.sh stages the chosen
