@@ -15,59 +15,14 @@ import sys
 
 import fitz  # PyMuPDF
 import numpy as np
-from paddleocr import PaddleOCR
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.join(_UTILS, "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
-from config import PDF_DPI, PADDLE_MODEL_SET, DET_PAGE_LEN, REC_BATCH
-
-# Model paths, the same as in paddle_ocr_model_fnr.py
-_NAME = {
-    "v5": ("PP-OCRv5_server_det", "PP-OCRv5_server_rec"),
-    "v6": ("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec"),
-}
-DET_MODEL, REC_MODEL = _NAME[PADDLE_MODEL_SET]
-_MODEL_DIR = os.path.abspath(_APP)
-DET_MODEL_DIR = os.path.join(_MODEL_DIR, DET_MODEL + "_infer")
-REC_MODEL_DIR = os.path.join(_MODEL_DIR, REC_MODEL + "_infer")
-
-
-def _has_gpu():
-    try:
-        import paddle
-        return paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
-    except Exception:
-        return False
-
-
-def _make_reader():
-    """PaddleOCR reader with the same config as the rest of the project."""
-    gpu = _has_gpu()
-    print(f"GPU available: {gpu}")
-
-    kwargs = dict(
-        lang="en",
-        device="gpu" if gpu else "cpu",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        text_det_limit_type="max",
-        text_det_limit_side_len=DET_PAGE_LEN,
-        text_recognition_batch_size=REC_BATCH * 2 if gpu else REC_BATCH,
-        text_detection_model_name=DET_MODEL,
-        text_recognition_model_name=REC_MODEL,
-        text_detection_model_dir=DET_MODEL_DIR,
-        text_recognition_model_dir=REC_MODEL_DIR,
-    )
-    if gpu:
-        kwargs["precision"] = "fp16"
-    else:
-        kwargs["enable_mkldnn"] = True
-
-    return PaddleOCR(**kwargs)
+from config import PDF_DPI
+from paddle_ocr_model_fnr import fetch_reader
 
 
 def render_page(page, dpi=PDF_DPI):
@@ -125,7 +80,7 @@ def make_pdf_with_text(in_pdf_path, out_pdf_path, visible=True, background_opaci
     bakgrunn_opacity fades the original page underneath it.
     """
     print("Initialising PaddleOCR...")
-    reader = _make_reader()
+    reader = fetch_reader()
 
     in_doc = fitz.open(in_pdf_path)
     out_doc = fitz.open()
@@ -239,9 +194,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-

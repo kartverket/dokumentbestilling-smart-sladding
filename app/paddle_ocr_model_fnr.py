@@ -43,7 +43,8 @@ def _has_gpu():
         return False
 
 
-def _fetch_reader():
+def fetch_reader():
+    """The project's shared PaddleOCR reader, built on first use."""
     global reader
     if reader is None:
         # Imported here, not at the top: cache readers use only the pure text
@@ -338,7 +339,7 @@ def lines_with_fnr_marks(tokens):
 
 
 def read_tokens_batched(images, batch_size=None):
-    reader = _fetch_reader()
+    reader = fetch_reader()
     chunk_size = batch_size or PAGES_PER_OCR_BATCH
 
     tokens_per_page = []
