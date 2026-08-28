@@ -40,16 +40,20 @@ MODEL="${MODEL:-${SLADD_VLM_MODEL:-}}"
 URL="${URL:-${SLADD_VLM_URL:-http://127.0.0.1:8080/v1}}"
 
 # name|flags. The name becomes the output directory. Ordered so the pairs that
-# answer the most run first: six geometries may not fit one night.
+# answer the most run first: seven geometries may not fit one night. Arms 2 to
+# 4 are one resolution ladder at the same margin, so they are the comparison
+# that survives a night that runs short.
 # 2480 px is exactly what A4 portrait renders to at 300 dpi, so --max-px 2480
 # leaves those pages alone and caps only what is wider. Uncapped, a landscape
 # page comes to 2442 image tokens and overruns the 3072-token slot, which
 # would read as a bad geometry rather than a crop that never fit.
 CONFIGS=(
+    "up100_full_px1024|--margin-up 100 --full-width --margin-down 60 --max-px 1024"
+    "up100_left250_px1024|--margin-up 100 --margin-left full --margin-right 250 --margin-down 60 --max-px 1024"
     "up150_full|--margin-up 150 --full-width --margin-down 60"
+    "up100_full|--margin-up 100 --full-width --margin-down 60"
     "up100_full_native|--margin-up 100 --full-width --margin-down 60 --max-px 2480"
     "up150_full_px1600|--margin-up 150 --full-width --margin-down 60 --max-px 1600"
-    "up100_full|--margin-up 100 --full-width --margin-down 60"
     "up150_left|--margin-up 150 --margin-left full --margin-right 30 --margin-down 30"
     "up100_left|--margin-up 100 --margin-left full --margin-right 30 --margin-down 30"
 )
