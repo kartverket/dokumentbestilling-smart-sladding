@@ -207,37 +207,41 @@ ranger() {
 }
 
 fase_probe() {
-    local tiar
-    tiar=$(awk '/^WORST_DECADE/ {print $3}' "$LOGDIR/rangering.txt" | tail -1)
-    [[ "$tiar" =~ ^[0-9]+$ ]] || { log "Ingen entydig verste-tiår, dropper proben."; return 0; }
-    local navn="${TAG}_probe_$tiar"
+    local kode
+    kode=$(awk '/^WORST_CODE/ {print $3}' "$LOGDIR/rangering.txt" | tail -1)
+    [[ "$kode" =~ ^[A-Z0-9_]+$ ]] || { log "Ingen entydig verste-kode, dropper proben."; return 0; }
+    local navn="${TAG}_probe_$kode"
     if [[ -f "$SLADD_WEIGHTS/$navn/$navn.pt" ]]; then
         log "$navn er allerede publisert, hopper over."
         return 0
     fi
     local pd="$DATASET-probe"
-    log "Probe: eget modell-forsøk for tiåret $tiar ..."
+    log "Probe: eget modell-forsøk for rettsstiftelsen $kode ..."
     rm -rf "$pd"; mkdir -p "$pd/images_all" "$pd/labels_all"
-    python - "$tiar" "$DATASET" "$pd" <<'EOF'
+    python - "$kode" "$DATASET" "$pd" <<'EOF'
 import os, sys
 import pandas as pd
-tiar, kilde, maal = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-aar = {}
+kode, kilde, maal = sys.argv[1], sys.argv[2], sys.argv[3]
+har_kode = set()
 for f in (os.environ["SLADD_METADATA"] + "/uttrekk_4.csv",
           os.environ["SLADD_METADATA"] + "/uttrekk_6.csv"):
     m = pd.read_csv(f)
-    y = pd.to_numeric(m["dokument_aar"], errors="coerce")
-    aar.update({str(d): int(v) for d, v in zip(m["fil_revisjon_id"], y) if not pd.isna(v)})
+    rst = m.get("rettsstiftelsestyper")
+    if rst is None:
+        continue
+    for d, koder in zip(m["fil_revisjon_id"], rst.fillna("")):
+        if any(p.strip().partition(" - ")[0].strip() == kode
+               for p in str(koder).split(",")):
+            har_kode.add(str(d))
 n = 0
 for fn in os.listdir(kilde + "/images_all"):
-    doc = fn.rsplit("_p", 1)[0]
-    if tiar <= aar.get(doc, -1) < tiar + 10:
+    if fn.rsplit("_p", 1)[0] in har_kode:
         os.link(f"{kilde}/images_all/{fn}", f"{maal}/images_all/{fn}")
         lbl = fn.rsplit(".", 1)[0] + ".txt"
         if os.path.exists(f"{kilde}/labels_all/{lbl}"):
             os.link(f"{kilde}/labels_all/{lbl}", f"{maal}/labels_all/{lbl}")
         n += 1
-print(f"{n} sider i probedatasettet")
+print(f"{n} sider i probedatasettet for {kode}")
 EOF
     python "$SCRIPTS/split_train_val.py" --dataset "$pd" \
         --train-ratio 0.8 --val-ratio 0.1 --seed 42 || return 1
@@ -263,7 +267,7 @@ fase_rapport() {
         echo "Kostnadsmodell: kostnad = $COST * tapte fnr + oversladdede bokser."
         echo "Dommer: uttrekk 6 holdout ($LIST_HOLDOUT), aldri sett under trening."
         echo "NB: tapte_manuell er tallet som unnslipper sirkulariteten i ML-godkjente labels."
-        echo "Probe-modellen skal kun leses på sitt eget tiår i tiårslinjen."
+        echo "Probe-modellen skal kun leses på sin egen rettsstiftelse i kodelinjen."
         echo
         echo '```'
         cat "$LOGDIR/rangering.txt" 2>/dev/null || echo "(ingen rangering)"

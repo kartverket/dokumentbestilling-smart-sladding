@@ -8,7 +8,9 @@ would silently leave the scope. The YOLO confidence cutoff is swept per model;
 cost = cost_w * missed fnr + oversladd boxes, and the winner is the
 (model, conf) pair. Misses are also reported on manual-only fasit, since
 ML-accepted rows are the incumbent's own suggestions and the manual slice is
-the number that escapes that circularity.
+the number that escapes that circularity, plus per decade and per
+rettsstiftelseskode (a doc with several codes counts under each), with
+WORST_DECADE/WORST_CODE lines for the specialist probe to read.
 
 Kjør:
     python train/scripts/rank_models.py \
@@ -59,7 +61,7 @@ def _manual_ids(truth_csv):
     return manual
 
 
-def _measure(name, res_csv, truth, processed, manual, decade_of, cost_w):
+def _measure(name, res_csv, truth, processed, manual, decade_of, codes_of, cost_w):
     ds = build_dataset(truth, read_predictions(res_csv),
                        include_unlabelled=True, processed_doc=processed)
 
@@ -87,6 +89,7 @@ def _measure(name, res_csv, truth, processed, manual, decade_of, cost_w):
     def slice_counts(c):
         miss_manual = 0
         miss_decade = defaultdict(int)
+        miss_code = defaultdict(int)
         for j, fb in enumerate(ds.truth_boxes):
             mc = maxconf[j]
             if mc is not None and mc >= c:
@@ -94,18 +97,25 @@ def _measure(name, res_csv, truth, processed, manual, decade_of, cost_w):
             if fb["label_id"] in manual:
                 miss_manual += 1
             miss_decade[decade_of.get(fb["doc_no"], "ukjent")] += 1
-        return miss_manual, dict(miss_decade)
+            for kode in codes_of.get(fb["doc_no"], ("ukjent",)):
+                miss_code[kode] += 1
+        return miss_manual, dict(miss_decade), dict(miss_code)
 
     truth_decade = defaultdict(int)
+    truth_code = defaultdict(int)
     for fb in ds.truth_boxes:
         truth_decade[decade_of.get(fb["doc_no"], "ukjent")] += 1
+        for kode in codes_of.get(fb["doc_no"], ("ukjent",)):
+            truth_code[kode] += 1
     n_manual = sum(1 for fb in ds.truth_boxes if fb["label_id"] in manual)
 
     miss, ov, total = at(best_c)
-    miss_manual, miss_decade = slice_counts(best_c)
+    miss_manual, miss_decade, miss_code = slice_counts(best_c)
     miss_s, ov_s, total_s = at(STD_CONF)
-    miss_manual_s, _ = slice_counts(STD_CONF)
+    miss_manual_s, _, _ = slice_counts(STD_CONF)
     worst = max(miss_decade, key=lambda k: miss_decade[k], default="")
+    worst_code = max((k for k in miss_code if k != "ukjent"),
+                     key=lambda k: miss_code[k], default="")
 
     return {
         "navn": name, "res_csv": res_csv,
@@ -120,6 +130,11 @@ def _measure(name, res_csv, truth, processed, manual, decade_of, cost_w):
         "tapte_per_tiar": ";".join(
             f"{k}:{miss_decade[k]}/{truth_decade[k]}"
             for k in sorted(truth_decade, key=str) if k in miss_decade),
+        "verste_kode": worst_code,
+        "tapte_verste_kode": miss_code.get(worst_code, 0),
+        "tapte_per_kode": ";".join(
+            f"{k}:{miss_code[k]}/{truth_code[k]}"
+            for k in sorted(miss_code, key=lambda k: -miss_code[k])[:8]),
     }
 
 
@@ -140,15 +155,23 @@ def main():
     processed = read_processed_docs(args.processed_list)
     manual = _manual_ids(args.truth_csv)
     decade_of = {}
+    codes_of = {}
     for path in args.metadata:
         m = pd.read_csv(path)
         years = pd.to_numeric(m["dokument_aar"], errors="coerce")
-        for doc, y in zip(m["fil_revisjon_id"], years):
+        rst = (m["rettsstiftelsestyper"] if "rettsstiftelsestyper" in m.columns
+               else pd.Series([""] * len(m)))
+        for doc, y, codes in zip(m["fil_revisjon_id"], years, rst.fillna("")):
+            try:
+                doc = int(doc)
+            except (TypeError, ValueError):
+                continue
             if not pd.isna(y):
-                try:
-                    decade_of[int(doc)] = int(y) // 10 * 10
-                except (TypeError, ValueError):
-                    pass
+                decade_of[doc] = int(y) // 10 * 10
+            parsed = {part.strip().partition(" - ")[0].strip()
+                      for part in str(codes).split(",") if part.strip()}
+            if parsed:
+                codes_of[doc] = parsed
 
     rows = []
     for spec in args.run:
@@ -156,7 +179,7 @@ def main():
         if not res_csv:
             raise SystemExit(f"--run must be NAVN=RESULTAT.CSV, got: {spec}")
         rows.append(_measure(name, res_csv, truth, processed, manual,
-                             decade_of, args.cost))
+                             decade_of, codes_of, args.cost))
     rows.sort(key=lambda r: r["kostnad"])
 
     hdr = f"{'navn':<24} {'conf':>5} {'tapte':>5} {'man':>4} {'oversl':>6} {'kostnad':>7}"
@@ -169,7 +192,9 @@ def main():
               f"{r['tapte_manuell']:>4} {r['oversladd']:>6} {r['kostnad']:>7.0f}"
               f"   | {r['tapte_std']}/{r['oversladd_std']}/{r['kostnad_std']:.0f}")
         print(f"{'':<24} tiår: {r['tapte_per_tiar']}")
+        print(f"{'':<24} kode: {r['tapte_per_kode']}")
     print(f"\nWORST_DECADE {rows[0]['navn']} {rows[0]['verste_tiar']}")
+    print(f"WORST_CODE {rows[0]['navn']} {rows[0]['verste_kode']}")
 
     if args.out:
         with open(args.out, "w", newline="") as f:
