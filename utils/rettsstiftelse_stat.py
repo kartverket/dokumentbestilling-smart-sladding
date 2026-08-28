@@ -68,6 +68,8 @@ def main():
     p.add_argument("--truth-csv", required=True)
     p.add_argument("--res-csv", required=True)
     p.add_argument("--threshold", type=float, default=HIT_THRESHOLD)
+    p.add_argument("--sort", choices=("bom", "tapte"), default="bom",
+                   help="sort codes by bom (default) or by lost fnr")
     p.add_argument("--criterion", default=STD_CRITERION)
     p.add_argument("--oversize-factor", type=float, default=STD_SLOPPINESS_FACTOR)
     p.add_argument("--exclude-unlabelled", dest="include_unlabelled",
@@ -90,8 +92,11 @@ def main():
                        criterion=args.criterion)
 
     truth_per_doc = defaultdict(int)
-    for fb in ds.truth_boxes:
+    miss_per_doc = defaultdict(int)
+    for j, fb in enumerate(ds.truth_boxes):
         truth_per_doc[fb["doc_no"]] += 1
+        if ds.coverage_before[j] == 0:
+            miss_per_doc[fb["doc_no"]] += 1
 
     pred_per_doc = defaultdict(list)
     for pr in ds.pred:
@@ -101,7 +106,7 @@ def main():
 
     def _new():
         return {"dok_meta": 0, "dok_kjort": 0, "fasit": 0, "treff": 0,
-                "bom": 0, **{f"bom_{k}": 0 for k in SOURCES}}
+                "tapte": 0, "bom": 0, **{f"bom_{k}": 0 for k in SOURCES}}
 
     per_code = defaultdict(_new)
     elektronisk = {False: _new(), True: _new()}
@@ -113,6 +118,7 @@ def main():
             return
         row["dok_kjort"] += 1
         row["fasit"] += truth_per_doc.get(doc, 0)
+        row["tapte"] += miss_per_doc.get(doc, 0)
         for pr in pred_per_doc.get(doc, ()):
             if pr["klasse"] == "BOM":
                 row["bom"] += 1
@@ -142,7 +148,7 @@ def main():
           "sum to more than the total.\n")
 
     header = (f"  {'code':<8} {'docs':>6} {'run':>6} {'truth':>6} "
-            f"{'fnr/doc':>8} {'hits':>6} {'bom':>6} {'bom/doc':>8} "
+            f"{'fnr/doc':>8} {'hits':>6} {'lost':>6} {'bom':>6} {'bom/doc':>8} "
             f"{'bom%':>6}  {'b/y/p':>13}  description")
     print(header)
     print(f"  {'─' * (len(header) + 8)}")
@@ -151,7 +157,7 @@ def main():
         kj = r["dok_kjort"]
         print(f"  {name:<8} {r['dok_meta']:>6} {kj:>6} {r['fasit']:>6} "
               f"{(r['fasit'] / kj if kj else 0):>8.2f} "
-              f"{r['treff']:>6} {r['bom']:>6} "
+              f"{r['treff']:>6} {r['tapte']:>6} {r['bom']:>6} "
               f"{(r['bom'] / kj if kj else 0):>8.2f} "
               f"{r['bom'] / total_miss * 100:>5.1f}%  "
               f"{r['bom_begge']:>4}/{r['bom_yolo']:>4}/{r['bom_paddle']:>3}  "
@@ -159,7 +165,7 @@ def main():
 
     rows = [(k, r) for k, r in per_code.items()
              if r["dok_kjort"] >= args.min_doc]
-    rows.sort(key=lambda kr: -kr[1]["bom"])
+    rows.sort(key=lambda kr: -kr[1][args.sort])
     hidden = len(per_code) - len(rows)
     if args.top:
         hidden += max(0, len(rows) - args.top)
