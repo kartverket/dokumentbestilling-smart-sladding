@@ -30,7 +30,7 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (PDF_DPI, VLM_API_KEY, VLM_BREAKER_COOLDOWN,
-                    VLM_BREAKER_FAILURES, VLM_CONCURRENT, VLM_ENABLED,
+                    VLM_BREAKER_FAILURES, VLM_CACHE, VLM_CONCURRENT, VLM_ENABLED,
                     VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,
                     VLM_MARGIN_RIGHT_PT, VLM_MARGIN_UP_PT, VLM_MAX_PX,
                     VLM_MAX_TOKENS, VLM_MODEL, VLM_SOURCES, VLM_TIMEOUT,
@@ -127,7 +127,7 @@ def config_from_env():
     if not VLM_ENABLED or not VLM_URL or not VLM_MODEL:
         return None
     return VlmConfig([u.strip() for u in VLM_URL.split(",") if u.strip()],
-                     VLM_MODEL)
+                     VLM_MODEL, cache_dir=VLM_CACHE or None)
 
 
 def _px(margin_pt):

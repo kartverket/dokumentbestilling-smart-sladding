@@ -151,6 +151,9 @@ VLM_MODEL = _os.environ.get("SLADD_VLM_MODEL", "")
 VLM_API_KEY = _os.environ.get("SLADD_VLM_API_KEY") or None
 VLM_TIMEOUT = float(_os.environ.get("SLADD_VLM_TIMEOUT", "20"))   # seconds per box
 VLM_CONCURRENT = int(_os.environ.get("SLADD_VLM_CONCURRENT", "4"))  # boxes in flight per page
+# Judgement cache directory for the in-pipeline verifier (compose mounts
+# /data/vlm_cache). Empty = no cache: every box is judged fresh each run.
+VLM_CACHE = _os.environ.get("SLADD_VLM_CACHE", "").strip()
 VLM_MAX_TOKENS = 150
 
 # Circuit breaker. A hung endpoint costs one full VLM_TIMEOUT per box, so a

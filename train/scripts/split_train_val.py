@@ -1,5 +1,10 @@
 """Split images_all/labels_all into train/val/test sets.
 
+Whole documents go to one subset: pages of the same document share handwriting,
+stamps and layout, so splitting per page leaks train into val/test and inflates
+both early stopping and selection. Ratios are filled by image count, negatives
+are whole zero-fnr documents.
+
 Strategies: random, yearly (group by dokument_aar), doc_type (filter by
 rettsstiftelsestyper) and year_and_doc_type (both).
 
@@ -29,49 +34,77 @@ def _is_negative(img: Path, labels_all: Path) -> bool:
     return not label.exists() or label.stat().st_size == 0
 
 
+def _group_by_doc(imgs: list) -> dict:
+    """{document id -> [page images]} from image stems like <id>_p<N>."""
+    docs = defaultdict(list)
+    for img in imgs:
+        docs[img.stem.rsplit("_p", 1)[0]].append(img)
+    return dict(docs)
+
+
 def _separate_positives_negatives(imgs: list, labels_all: Path) -> tuple[list, list]:
+    """Doc granularity: (doc, [imgs]) lists; a doc is positive if any page has boxes."""
     positives = []
     negatives = []
-    for img in imgs:
-        if _is_negative(img, labels_all):
-            negatives.append(img)
+    for doc, group in sorted(_group_by_doc(imgs).items()):
+        if all(_is_negative(img, labels_all) for img in group):
+            negatives.append((doc, group))
         else:
-            positives.append(img)
+            positives.append((doc, group))
     return positives, negatives
 
 
+def _n_imgs(doc_groups: list) -> int:
+    return sum(len(g) for _, g in doc_groups)
+
+
 def _add_negatives(splits: list, negatives: list, ratio: float = NEGATIVE_RATIO):
-    """Adds negatives to each subset in proportion to its positive count."""
+    """Adds whole negative documents until each subset holds about `ratio`
+    negative images per positive image."""
     random.shuffle(negatives)
-    offset = 0
+    it = iter(negatives)
     for i, (subset, positives) in enumerate(splits):
-        n_neg = int(len(positives) * ratio)
-        selected_neg = negatives[offset:offset + n_neg]
-        offset += n_neg
-        splits[i] = (subset, positives + selected_neg)
-        if selected_neg:
-            print(f"  {subset}: +{len(selected_neg)} negatives")
+        target = int(_n_imgs(positives) * ratio)
+        selected, n_neg = [], 0
+        while n_neg < target:
+            try:
+                doc, group = next(it)
+            except StopIteration:
+                break
+            selected.append((doc, group))
+            n_neg += len(group)
+        splits[i] = (subset, positives + selected)
+        if selected:
+            print(f"  {subset}: +{n_neg} negative images from {len(selected)} documents")
     return splits
 
 
-def _do_split(imgs: list, train_ratio: float, val_ratio: float):
-    """Compute train/val/test split boundaries on an already-shuffled list."""
-    n = len(imgs)
-    train = int(n * train_ratio)
-    val= int(n * (train_ratio + val_ratio))
-    return [("train", imgs[:train]), ("val", imgs[train:val]), ("test", imgs[val:])]
+def _do_split(doc_groups: list, train_ratio: float, val_ratio: float):
+    """Allocate already-shuffled documents to train/val/test by image quota."""
+    total = _n_imgs(doc_groups)
+    bounds = [("train", total * train_ratio),
+              ("val", total * (train_ratio + val_ratio)),
+              ("test", float("inf"))]
+    out = {"train": [], "val": [], "test": []}
+    filled = 0
+    for doc, group in doc_groups:
+        subset = next(name for name, limit in bounds if filled < limit)
+        out[subset].append((doc, group))
+        filled += len(group)
+    return [(name, out[name]) for name in ("train", "val", "test")]
 
 
 def _copy_and_log(dataset: Path, splits: list, log_lines: list):
     labels_all = dataset / "labels_all"
-    for subset, group in splits:
+    for subset, doc_groups in splits:
         img_dest = dataset / "images" / subset
         label_dest = dataset / "labels" / subset
         img_dest.mkdir(parents=True, exist_ok=True)
         label_dest.mkdir(parents=True, exist_ok=True)
 
+        group = [img for _, imgs in doc_groups for img in imgs]
         log_lines.append(f"--- {subset}: {len(group)} images ---")
-        doc_ids = sorted(set(img.stem.rsplit("_p", 1)[0] for img in group))
+        doc_ids = sorted(doc for doc, _ in doc_groups)
         log_lines.append(f"Documents ({len(doc_ids)}):")
         for doc_id in doc_ids:
             log_lines.append(f" {doc_id}")
@@ -83,9 +116,9 @@ def _copy_and_log(dataset: Path, splits: list, log_lines: list):
                 shutil.copy(label, label_dest / label.name)
 
         log_lines.append("")
-        print(f"  {subset}: {len(group)} images")
+        print(f"  {subset}: {len(group)} images in {len(doc_ids)} documents")
 
-    total = sum(len(g) for _, g in splits)
+    total = sum(_n_imgs(g) for _, g in splits)
     log_path = dataset / "split_log.txt"
     log_path.write_text("\n".join(log_lines))
     print(f"  Log written to {log_path}")
@@ -102,42 +135,45 @@ def _shuffle_and_split(dataset: Path, imgs: list, train_ratio: float, val_ratio:
     splits = _do_split(positives, train_ratio, val_ratio)
     splits = _add_negatives(splits, negatives)
 
-    log_header.append(f"Negatives: {sum(len(s) for _, s in splits) - len(positives)} of {len(negatives)} available")
+    log_header.append(f"Negatives: {sum(_n_imgs(s) for _, s in splits) - _n_imgs(positives)} images"
+                      f" of {_n_imgs(negatives)} available")
     log_header.append("")
     _copy_and_log(dataset, splits, log_header)
 
 
 def _split_per_group(dataset: Path, groups: dict, per_group: int,
                      train_ratio: float, val_ratio: float, seed: int, log_header: list):
-    """Splits each group on its own, capped at per_group, then merges the subsets."""
+    """Splits each group on its own, capped at per_group images, then merges the subsets."""
     labels_all = dataset / "labels_all"
     random.seed(seed)
     train, val, test = [], [], []
     all_negatives = []
 
     for key in sorted(groups):
-        g = groups[key]
-        positives, negatives = _separate_positives_negatives(g, labels_all)
+        positives, negatives = _separate_positives_negatives(groups[key], labels_all)
         random.shuffle(positives)
-        selected = positives[:per_group]
+        selected = []
+        for doc, group in positives:
+            if _n_imgs(selected) >= per_group:
+                break
+            selected.append((doc, group))
         s = _do_split(selected, train_ratio, val_ratio)
         train.extend(s[0][1])
         val.extend(s[1][1])
         test.extend(s[2][1])
         all_negatives.extend(negatives)
-        print(f"  {key}: {len(positives)} positives available, {len(selected)} selected, {len(negatives)} negatives")
-
-    for key in sorted(groups):
-        pos_in_group = [img for img in groups[key] if not _is_negative(img, labels_all)]
-        log_header.append(f"  {key}: {min(len(pos_in_group), per_group)} used of {len(pos_in_group)} available")
+        print(f"  {key}: {_n_imgs(positives)} positive images available, "
+              f"{_n_imgs(selected)} selected, {_n_imgs(negatives)} negative")
+        log_header.append(f"  {key}: {_n_imgs(selected)} used of {_n_imgs(positives)} available")
     log_header.append("")
 
-    total_positives = len(train) + len(val) + len(test)
+    total_positives = _n_imgs(train) + _n_imgs(val) + _n_imgs(test)
     splits = [("train", train), ("val", val), ("test", test)]
     splits = _add_negatives(splits, all_negatives)
-    total_negatives = sum(len(s) for _, s in splits) - total_positives
+    total_negatives = sum(_n_imgs(s) for _, s in splits) - total_positives
 
-    log_header.append(f"Negatives: {total_negatives} added from {len(all_negatives)} available")
+    log_header.append(f"Negatives: {total_negatives} images added from "
+                      f"{_n_imgs(all_negatives)} available")
     _copy_and_log(dataset, splits, log_header)
 
 

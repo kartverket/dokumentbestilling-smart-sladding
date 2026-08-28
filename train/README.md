@@ -50,6 +50,12 @@ Each step can also be run on its own, which helps when you already have a datase
 `scripts/convert_csv_to_yolo.py` reads the CSV of bounding-box annotations, renders each
 PDF page to PNG, and writes normalised YOLO labels into `images_all` under `OUTPUT_DIR`.
 
+Rows go through `filter_common.iter_label_rows`, so training and evaluation see the same
+fasit: REJECTED and `ugyldige_labels.txt` rows are excluded, `manglende_labels.csv` rows
+are included. On a re-run, labels for already-rendered documents in the run's scope are
+rewritten from the current CSV without re-rendering, so a dataset directory can be reused
+across label washes. Documents from another CSV sharing the directory keep their labels.
+
 ```bash
 make convert \
   PDFS=/path/to/pdf-folder \
@@ -61,6 +67,11 @@ make convert \
 
 `scripts/split_train_val.py` distributes images and labels into train/val/test (70/15/15
 by default) and logs the split to `split_log.txt`.
+
+The split is per document: pages of the same document share handwriting, stamps and
+layout, so splitting per page leaks train into val/test and inflates both early stopping
+and model selection. Ratios are filled by image count, and negatives are whole zero-fnr
+documents added until each subset holds about 10% negative images per positive image.
 
 ```bash
 # Random split (default)

@@ -649,6 +649,13 @@ def main():
         total_time += time_used
         timings[name] = time_used
         _collect_stats(doc_stats)
+        if vlm is not None and i % 250 == 0 and vlm_total["judged"]:
+            unanswered = sum(vlm_total["not_cached"].get(r, 0)
+                             for r in ("call failed", "breaker open"))
+            print(f"  vlm so far: {vlm_total['judged']} judged, "
+                  f"{vlm_total['dropped']} removed, "
+                  f"{vlm_total['cache_hits']} from cache, "
+                  f"{unanswered} unanswered", flush=True)
 
         if args.ocr_log:
             if not warned_about_lines and pages and "linjer" not in pages[0]:

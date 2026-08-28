@@ -3,6 +3,12 @@
 Rendering is the whole cost, pure CPU and disk, so documents run in parallel
 processes: each one is independent, with its own PDF handle and output files.
 
+Rows come through filter_common.iter_label_rows, so training sees the same
+fasit as evaluation: REJECTED and ugyldige_labels.txt rows are out,
+manglende_labels.csv rows are in. Labels for already-rendered documents in
+this run's scope are rewritten from the current CSV, so a re-run refreshes
+stale label files without re-rendering.
+
 CSV coordinates are PDF points with (x, y) at the TOP-LEFT corner and the
 y-axis growing downwards, the same convention as the image, so no flip.
 
@@ -18,13 +24,12 @@ from pathlib import Path
 
 import fitz
 import numpy as np
-import pandas as pd
 
 # ugyldige_labels.txt lives at the repo root; reuse the reader in utils/.
 _UTILS = str(Path(__file__).resolve().parents[2] / "utils")
 if _UTILS not in sys.path:
     sys.path.insert(0, _UTILS)
-from filter_common import read_invalid_label_ids
+from filter_common import iter_label_rows
 
 
 DPI = 300
@@ -34,6 +39,33 @@ SCALE = DPI / 72.0
 def _default_workers():
     """One process per physical core, roughly, capped to keep RAM sane."""
     return min(max((os.cpu_count() or 4) // 2, 1), 32)
+
+
+def _write_label(labels_dir, stem, boxes_pt, img_w, img_h):
+    """Writes one YOLO label file from boxes in PDF points; empty file if none."""
+    if not boxes_pt:
+        (Path(labels_dir) / f"{stem}.txt").write_text("")
+        return 0
+    arr = np.asarray(boxes_pt, dtype=float) * SCALE
+    x_px, y_px, w_px, h_px = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+    x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
+    y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
+    bw = np.clip(w_px / img_w, 0.0, 1.0)
+    bh = np.clip(h_px / img_h, 0.0, 1.0)
+    lines = [f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"
+             for xc, yc, w, h in zip(x_center, y_center, bw, bh)]
+    (Path(labels_dir) / f"{stem}.txt").write_text("\n".join(lines))
+    return len(lines)
+
+
+def _png_size(path):
+    """(width, height) from the PNG header, without decoding the image."""
+    with open(path, "rb") as f:
+        head = f.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return (int.from_bytes(head[16:20], "big"),
+            int.from_bytes(head[20:24], "big"))
 
 
 def _render_document(job):
@@ -68,17 +100,7 @@ def _render_document(job):
             stem = f"{file_id}_p{page_no}"
             pix.save(str(images_dir / f"{stem}.png"))
 
-            arr = np.asarray(boxes, dtype=float) * SCALE
-            x_px, y_px, w_px, h_px = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
-            x_center = np.clip((x_px + w_px / 2) / img_w, 0.0, 1.0)
-            y_center = np.clip((y_px + h_px / 2) / img_h, 0.0, 1.0)
-            bw = np.clip(w_px / img_w, 0.0, 1.0)
-            bh = np.clip(h_px / img_h, 0.0, 1.0)
-
-            lines = [f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"
-                     for xc, yc, w, h in zip(x_center, y_center, bw, bh)]
-            (labels_dir / f"{stem}.txt").write_text("\n".join(lines))
-            out["boxes"] += len(lines)
+            out["boxes"] += _write_label(labels_dir, stem, boxes, img_w, img_h)
             out["pages"] += 1
 
         # Unannotated pages become negatives (empty label files)
@@ -108,35 +130,32 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(csv_path)
-    print(f"Total documents in CSV: {df['fil_revisjon_id'].nunique()}, total boxes: {len(df)}")
+    # One fasit policy for training and evaluation: iter_label_rows drops
+    # REJECTED and ugyldige_labels.txt rows and appends manglende_labels.csv.
+    info = {}
+    doc_pages = {}
+    n_boxes = 0
+    for r in iter_label_rows(str(csv_path), info=info):
+        try:
+            doc = str(int(float(r["fil_revisjon_id"])))
+            page = int(float(r["sidetall"]))
+            box = (float(r["x"]), float(r["y"]),
+                   float(r["width"]), float(r["height"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if only_ids is not None and doc not in only_ids:
+            continue
+        doc_pages.setdefault(doc, {}).setdefault(page, []).append(box)
+        n_boxes += 1
 
-    if only_ids:
-        df = df[df["fil_revisjon_id"].astype(str).isin(only_ids)]
-        print(f"Filtered to {df['fil_revisjon_id'].nunique()} documents matching --ids")
-
-    invalid = read_invalid_label_ids()
-    if invalid and "id" in df.columns:
-        listed = df["id"].astype(str).str.strip().isin(invalid)
-        if listed.any():
-            print(f"Excluded {int(listed.sum())} boxes listed in ugyldige_labels.txt")
-            df = df[~listed]
-    elif invalid:
-        print(f"WARNING: ugyldige_labels.txt has {len(invalid)} ids, but the "
-              f"labels CSV has no id column - nothing excluded.")
-
-    df["ml_status"] = df["ml_status"].astype(str).str.strip().str.upper()
-    df["ml_generated"] = (
-        df["ml_generated"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "YES"])
-    )
-
-    # Keep ml_generated=TRUE + ACCEPTED, plus every hand-placed box.
-    ml_accepted = (df["ml_generated"]) & (df["ml_status"] == "ACCEPTED")
-    manual = ~df["ml_generated"]
-    rejected = (df["ml_generated"]) & (df["ml_status"] == "REJECTED")
-    df = df[ml_accepted | manual]
-    print(f"Filtered to {len(df)} boxes ({ml_accepted.sum()} ML accepted, {manual.sum()} manual, {rejected.sum()} ML rejected excluded)")
-    print(f"Unique documents after filtering: {df['fil_revisjon_id'].nunique()}, unique pages: {df[['fil_revisjon_id', 'sidetall']].drop_duplicates().shape[0]}")
+    discarded = dict(info.get("discarded", {}))
+    added = dict(info.get("added", {}))
+    print(f"Kept {n_boxes} boxes in {len(doc_pages)} documents"
+          + (f" (matching --ids)" if only_ids is not None else ""))
+    if discarded:
+        print(f"Discarded: {discarded}")
+    if added:
+        print(f"Added from manglende_labels.csv: {added}")
 
     missing = set()
     skipped_docs = 0
@@ -155,18 +174,13 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
         jobs.append({"fil_id": file_id, "pdf_path": str(pdf_path), "pages": pages,
                      "images_dir": str(images_dir), "labels_dir": str(labels_dir)})
 
-    for file_id, doc_group in df.groupby("fil_revisjon_id"):
-        pages = {
-            int(page_no): page_group[["x", "y", "width", "height"]].values.tolist()
-            for page_no, page_group in doc_group.groupby("sidetall")
-        }
+    for file_id, pages in sorted(doc_pages.items()):
         _add_to(file_id, pages)
 
     # Documents in the ID list but not in the CSV are pure negatives
     negative_docs = 0
     if only_ids:
-        labeled_ids = set(df["fil_revisjon_id"].astype(str).unique())
-        unlabeled_ids = only_ids - labeled_ids
+        unlabeled_ids = only_ids - set(doc_pages)
         if unlabeled_ids:
             print(f"Rendering {len(unlabeled_ids)} unlabeled documents as negatives...")
         for file_id in sorted(unlabeled_ids):
@@ -197,6 +211,32 @@ def convert(csv_path: str, pdf_dir: str, output_dir: str, only_ids: set = None,
     print(f"Wrote {done} page-images with {total_boxes} boxes total, {negatives} negative pages ({negative_docs} fully negative docs)")
     if skipped_docs:
         print(f"Skipped {skipped_docs} already converted documents")
+
+    # Scope guard: another uttrekk sharing the directory keeps its labels.
+    rendered_now = {j["fil_id"] for j in jobs}
+    scope = set(doc_pages) | (set(only_ids) if only_ids else set())
+    refreshed = refreshed_boxes = orphan_rows = 0
+    for png in sorted(images_dir.glob("*_p*.png")):
+        doc, _, page_str = png.stem.rpartition("_p")
+        if doc in rendered_now or doc not in scope:
+            continue
+        size = _png_size(png)
+        if size is None:
+            continue
+        boxes = doc_pages.get(doc, {}).get(int(page_str), [])
+        refreshed_boxes += _write_label(labels_dir, png.stem, boxes, *size)
+        refreshed += 1
+    for doc, pages in doc_pages.items():
+        if doc in rendered_now or doc in missing:
+            continue
+        orphan_rows += sum(len(b) for p, b in pages.items()
+                           if not (images_dir / f"{doc}_p{p}.png").exists())
+    if refreshed:
+        print(f"Refreshed labels for {refreshed} cached page-images "
+              f"({refreshed_boxes} boxes)")
+    if orphan_rows:
+        print(f"WARNING: {orphan_rows} boxes reference pages with no rendered "
+              f"image (cached documents rendered before those rows existed)")
     if missing:
         print(f"Missing PDFs: {len(missing)}")
     if skipped_pages:
@@ -220,7 +260,8 @@ if __name__ == "__main__":
     only_ids = None
     if args.ids:
         with open(args.ids) as f:
-            only_ids = {line.strip() for line in f if line.strip()}
+            only_ids = {line.strip().removesuffix(".pdf") for line in f
+                        if line.strip() and not line.lstrip().startswith("#")}
         print(f"Loaded {len(only_ids)} IDs from {args.ids}")
 
     convert(args.csv, args.pdfs, args.output, only_ids=only_ids, workers=args.workers)
