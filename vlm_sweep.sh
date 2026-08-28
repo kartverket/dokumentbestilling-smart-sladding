@@ -86,6 +86,7 @@ CONFIGS=(
     "p1600_uten_100||--prompt-file $SLADD_REPO/prompts/uten_100.txt|up100_full_px1600"
     "p1600_femsiffer||--prompt-file $SLADD_REPO/prompts/femsiffer.txt|up100_full_px1600"
     "p1600_kort||--prompt-file $SLADD_REPO/prompts/kort.txt|up100_full_px1600"
+    "p1600_femsiffer_liste||--prompt-file $SLADD_REPO/prompts/femsiffer_uten_liste.txt|up100_full_px1600"
 )
 
 # ── Preflight ────────────────────────────────────────────────────
