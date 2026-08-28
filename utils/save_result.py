@@ -69,10 +69,10 @@ def write_result_files(result, folder=".", description=None, log=None):
             w.writerow([])
             w.writerow(["## VLM"])
             w.writerow(["model", "documents", "documents_judged",
-                        "documents_with_profile", "boxes_judged",
+                        "boxes_judged",
                         "boxes_removed", "cache_hits", "seconds"])
             w.writerow([vlm.get("model", ""), vlm.get("docs", 0),
-                        vlm.get("docs_judged", 0), vlm.get("docs_profile", 0),
+                        vlm.get("docs_judged", 0),
                         vlm.get("judged", 0), vlm.get("dropped", 0),
                         vlm.get("cache_hits", 0),
                         round(vlm.get("seconds", 0.0), 1)])

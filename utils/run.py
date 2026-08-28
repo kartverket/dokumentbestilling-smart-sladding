@@ -211,7 +211,6 @@ def _vlm_report(v):
     judged, cached, sec = v["judged"], v["cache_hits"], v.get("seconds", 0.0)
     lines = ["VLM verifier:", f"  {'Model':<28}{v.get('model', '')}"]
     for label, n in (("Documents seen", v["docs"]),
-                     ("... skipped (rule profile)", v["docs_profile"]),
                      ("... with boxes judged", v["docs_judged"]),
                      ("Boxes judged", judged),
                      ("Boxes removed", v["dropped"])):
@@ -478,8 +477,7 @@ def main():
                        else int(os.environ.get("SLADD_VLM_CONCURRENT", "4")),
             cache_dir=None if args.no_vlm_cache else args.vlm_cache)
         print(f"VLM verifier: {model} at {', '.join(vlm.urls)} "
-              f"(kilde {'/'.join(sorted(vlm.sources))}, documents without a "
-              f"rule profile)")
+              f"(kilde {'/'.join(sorted(vlm.sources))}, all documents)")
         if vlm.cache_dir:
             print(f"  Judgement cache: {vlm.cache_dir}")
         else:
@@ -615,7 +613,7 @@ def main():
     sladd_boxes, yolo_boxes, csv_boxes, failed = {}, {}, {}, []
     timings = {}
     phase_time = defaultdict(float)
-    vlm_total = {"docs": 0, "docs_judged": 0, "docs_profile": 0,
+    vlm_total = {"docs": 0, "docs_judged": 0,
                  "judged": 0, "dropped": 0, "cache_hits": 0,
                  "judged_per_kilde": defaultdict(int),
                  "dropped_per_kilde": defaultdict(int),
@@ -724,8 +722,6 @@ def main():
         if v is None:
             return
         vlm_total["docs"] += 1
-        if v.get("profile_skipped"):
-            vlm_total["docs_profile"] += 1
         if v.get("judged"):
             vlm_total["docs_judged"] += 1
         for field in ("judged", "dropped", "cache_hits"):

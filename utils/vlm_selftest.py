@@ -294,14 +294,14 @@ def check_verifier(rot):
               "an unprotected «nei» removes the box")
         check(counter["n"] == before + 1, "exactly one box was judged")
 
-        # Documents with a rule profile are outside the stratum: the profiles
-        # already clean up there, and the measured gain is elsewhere.
-        before = counter["n"]
+        # A rule profile changes the rules, not the verifier: it runs after
+        # them and judges profiled documents like any other.
         for code, name in (("SR_JOU", "koordfam"), ("SE_SEK", "seksjonering")):
+            before = counter["n"]
             n = len(model_main.run_model_on_pdf_bytes(
                 pdf, vlm=a, rettsstiftelsestyper=[code]))
-            check(n == 1 and counter["n"] == before,
-                  f"a {name} document is not judged at all")
+            check(n == 0 and counter["n"] == before + 1,
+                  f"a {name} document is judged like any other")
 
         # Only kilde «yolo» is worth the GPU: the gain measured on the other
         # kilder was 1 box of 332.

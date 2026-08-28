@@ -363,11 +363,10 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
                     seksjonering=seksjonering, postfilter=postfilter)
 
         if vlm is not None and vlm_verifier.needs_image(
-                boxes_with_source, vlm, koordfam, seksjonering):
+                boxes_with_source, vlm):
             with _take_time(t, "vlm"):
                 boxes_with_source, judged, dropped = vlm_verifier.verify_page(
                     boxes_with_source, _pages_as_ocr_saw_them()[si], lines, vlm,
-                    koordfam=koordfam, seksjonering=seksjonering,
                     stats=vlm_stats)
                 n_judged += judged
                 n_dropped += dropped
@@ -389,7 +388,6 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
         stats["ocr_cache_hit"] = ocr_hit
         stats["yolo_cache_hit"] = yolo_hit
         if vlm is not None:
-            vlm_stats["profile_skipped"] = koordfam or seksjonering
             stats["vlm"] = vlm_stats
 
     return _to_flat(pages, page_field)

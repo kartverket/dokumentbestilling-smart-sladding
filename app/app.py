@@ -41,8 +41,6 @@ def _vlm_log(stats):
     v = stats.get("vlm")
     if not v:
         return ''
-    if v.get("profile_skipped"):
-        return ', vlm=skipped (rule profile)'
     if not v.get("judged"):
         return ', vlm=nothing to judge'
     return f', vlm={v["dropped"]}/{v["judged"]} removed'

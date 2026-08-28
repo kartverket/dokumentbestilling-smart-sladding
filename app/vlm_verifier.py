@@ -247,30 +247,25 @@ def _judge(crop_png, a, i):
     return answer, number, check.get("linjen", ""), note
 
 
-def in_stratum(source, a, koordfam=False, seksjonering=False):
+def in_stratum(source, a):
     """Whether this box is one the verifier is allowed to judge.
 
-    Documents that get a rule profile are left alone: the profiles already
-    remove the oversladding there, and the measured gain sits in the boxes no
-    rule touches.
+    Rule profiles change the rules, not the verifier: it runs after them,
+    judges every kilde in VLM_SOURCES and can only remove.
     """
-    if koordfam or seksjonering:
-        return False
     return source in a.sources
 
 
-def needs_image(boxes_with_source, a, koordfam=False, seksjonering=False):
+def needs_image(boxes_with_source, a):
     """Whether the page holds a box the verifier may judge.
 
     The caller asks before rasterising: a page with nothing in the stratum
     never needs an image.
     """
-    return any(in_stratum(pair[1], a, koordfam, seksjonering)
-               for pair in boxes_with_source)
+    return any(in_stratum(pair[1], a) for pair in boxes_with_source)
 
 
-def verify_page(boxes_with_source, image, lines, a, koordfam=False,
-                seksjonering=False, stats=None):
+def verify_page(boxes_with_source, image, lines, a, stats=None):
     """Judge one page's boxes and return the survivors.
 
     `boxes_with_source` is the internal per-box list from model_main,
@@ -286,7 +281,7 @@ def verify_page(boxes_with_source, image, lines, a, koordfam=False,
 
     tasks = []
     for i, pair in enumerate(boxes_with_source):
-        if not in_stratum(pair[1], a, koordfam, seksjonering):
+        if not in_stratum(pair[1], a):
             continue
         crop_png = _crop(image, pair[0], a)
         if crop_png is not None:
