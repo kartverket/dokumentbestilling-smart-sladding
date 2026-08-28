@@ -113,7 +113,7 @@ _THINKING = {"value": "none"}
 STD_PROMPT = """\
 Du ser et utsnitt fra et skannet norsk tinglysingsdokument. Den røde rammen markerer et område som er foreslått sladdet.
 
-Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over.
+Norske fødselsnumre har elleve sifre: fødselsdato (DDMMÅÅ) fulgt av fem sifre personnummer. Sladdingen skal som regel bare dekke de fem siste sifrene, så rammen inneholder ofte bare en bit av nummeret. Datoen kan stå foran på linjen eller på linjen over. Fem sifre alene i rammen er derfor oftest personnummerdelen av et fødselsnummer, selv når datoen ikke synes i utsnittet.
 
 Spørsmålet: berører rammen et fødselsnummer, helt eller delvis?
 
