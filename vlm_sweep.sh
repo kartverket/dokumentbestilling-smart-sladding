@@ -70,6 +70,7 @@ fi
 # would read as a bad geometry rather than a crop that never fit.
 CONFIGS=(
     "up100_full_px1024|--margin-up 100 --full-width --margin-down 60 --max-px 1024"
+    # The crops are up100_full_px1024's: the «up150» in the name is wrong.
     "up150_full_etikett||--prompt-file $PROMPT_FILE|up100_full_px1024"
     "up100_left250_px1024|--margin-up 100 --margin-left full --margin-right 250 --margin-down 60 --max-px 1024"
     "up150_full|--margin-up 150 --full-width --margin-down 60"
@@ -78,6 +79,9 @@ CONFIGS=(
     "up150_full_px1600|--margin-up 150 --full-width --margin-down 60 --max-px 1600"
     "up150_left|--margin-up 150 --margin-left full --margin-right 30 --margin-down 30"
     "up100_left|--margin-up 100 --margin-left full --margin-right 30 --margin-down 30"
+    "up100_full_px1600|--margin-up 100 --full-width --margin-down 60 --max-px 1600"
+    "up100_native_uleselig||--prompt-file $SLADD_REPO/prompts/uleselig.txt|up100_full_native"
+    "up100_px1600_uleselig||--prompt-file $SLADD_REPO/prompts/uleselig.txt|up100_full_px1600"
 )
 
 # ── Preflight ────────────────────────────────────────────────────
