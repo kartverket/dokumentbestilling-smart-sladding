@@ -769,6 +769,16 @@ def main():
         # Results are consumed in submission order, so CSV and output match a
         # sequential run.
         print(f"Parallel cache reads: {processes} processes")
+        if vlm is not None:
+            # 8 processes x concurrent 4 against a 3-slot server queues every
+            # call past VLM_TIMEOUT and trips the breaker in each process: the
+            # report then shows thousands of «breaker open»/«call failed» and
+            # the verifier removes nearly nothing while looking like it ran.
+            in_flight = processes * vlm.concurrent
+            print(f"NB: --vlm with {processes} processes allows up to "
+                  f"{in_flight} calls in flight. Keep that at or under the "
+                  f"server's --parallel slots (--vlm-concurrent 1 and/or "
+                  f"fewer processes), or raise SLADD_VLM_TIMEOUT.")
         with ProcessPoolExecutor(max_workers=processes) as pool:
             futures = [pool.submit(_process_from_cache, pdf_path,
                                    args.ocr_cache, args.yolo_cache,
