@@ -39,11 +39,28 @@ def health():
 def _vlm_log(stats):
     """The verifier's part of the request log line, empty when it was off."""
     v = stats.get("vlm")
-    if not v or not v.get("judged"):
+    if not v:
         return ''
-    seconds = stats.get("timings", {}).get("vlm", 0.0)
-    return (f', vlm={v["dropped"]}/{v["judged"]} removed'
-            f' in {seconds:.1f}s')
+    if v.get("profile_skipped"):
+        return ', vlm=skipped (rule profile)'
+    if not v.get("judged"):
+        return ''
+    return f', vlm={v["dropped"]}/{v["judged"]} removed'
+
+
+
+_PHASE_ORDER = ("render", "orientation", "ocr", "yolo+match", "vlm",
+                "postprocessing")
+
+
+def _time_log(stats):
+    """The phase seconds as one log segment, empty without timings."""
+    t = stats.get("timings") or {}
+    if not t:
+        return ''
+    phases = ([p for p in _PHASE_ORDER if p in t]
+              + sorted(set(t) - set(_PHASE_ORDER)))
+    return ', t=' + ' '.join(f'{p} {t[p]:.1f}s' for p in phases)
 
 
 def _warn_on_vlm_failure(filrevisjonid, stats):
@@ -96,7 +113,7 @@ def get_bounding_boxes():
         logging.info(f'Document {_log_safe(filrevisjonid)}: '
                      f'{len(bounding_boxes_result)} boxes, rettsstiftelsestyper='
                      f'{_log_safe(",".join(rettsstiftelsestyper))}'
-                     f'{_vlm_log(stats)}')
+                     f'{_vlm_log(stats)}{_time_log(stats)}')
         _warn_on_vlm_failure(filrevisjonid, stats)
         return jsonify(bounding_boxes_result)
 
