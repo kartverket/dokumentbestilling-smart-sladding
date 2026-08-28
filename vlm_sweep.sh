@@ -82,6 +82,10 @@ CONFIGS=(
     "up100_full_px1600|--margin-up 100 --full-width --margin-down 60 --max-px 1600"
     "up100_native_uleselig||--prompt-file $SLADD_REPO/prompts/uleselig.txt|up100_full_native"
     "up100_px1600_uleselig||--prompt-file $SLADD_REPO/prompts/uleselig.txt|up100_full_px1600"
+    "p1600_uten_liste||--prompt-file $SLADD_REPO/prompts/uten_liste.txt|up100_full_px1600"
+    "p1600_uten_100||--prompt-file $SLADD_REPO/prompts/uten_100.txt|up100_full_px1600"
+    "p1600_femsiffer||--prompt-file $SLADD_REPO/prompts/femsiffer.txt|up100_full_px1600"
+    "p1600_kort||--prompt-file $SLADD_REPO/prompts/kort.txt|up100_full_px1600"
 )
 
 # ── Preflight ────────────────────────────────────────────────────

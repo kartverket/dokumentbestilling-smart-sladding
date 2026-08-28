@@ -220,3 +220,7 @@ d927bf3b-0089-42aa-91f2-4ccbcf952bc5    # én sladd sladd over 29 fnr (mangler-3
 d4c29e23-fa56-4dbb-ac7a-180ea9d213c9    # én sladd sladd over 3 fnr (mangler-c56d7378ea03, mangler-102e4c9e72fd)
 ed8c1574-0018-4ff3-b843-9be17f1d7a1b    # én sladd sladd over 4 fnr (mangler-135f29a2d515, mangler-1f063be018d4, mangler-91ad961e17e0, mangler-c57fd4873d66)
 5cad3574-96a5-470a-bc9e-9b4f500b6801    # én sladd sladd over 4 fnr (mangler-c07d5704584a, mangler-1332f33a9c15, mangler-401a96680664, mangler-c4b061d9e8bf)
+ccde4879-506c-4059-aeb2-1a01a786dc3e    # kontonr
+f0f327ef-a8cb-4437-a186-867b7c6cfbd9    # 5 sifre i kanten av dokument, greit å sladde, dårlig for trening
+1da7aa78-f45a-46e7-a449-69eead84001a    # unødvendig, 3 sifre i kanten av dokument
+22e2e9c3-05c4-4475-8c58-1ffa2d45078f    # unødvendig, 4 sifre i kanten av dokument
