@@ -15,6 +15,10 @@ name: smsl
 
 x-common: &common
   restart: unless-stopped
+  # Gives the containers a name for the host, so SLADD_VLM_URL_DOCKER can
+  # point at llama-server there. Resolves to the host's bridge address.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   environment:
     HTTP_PROXY: ${PROXY:-http://159.162.48.7:3128}
     HTTPS_PROXY: ${PROXY:-http://159.162.48.7:3128}
@@ -29,10 +33,11 @@ x-common: &common
     LOG_BACKUP_DAYS: ${LOG_BACKUP_DAYS:-30}
     # VLM verifier, off unless SLADD_VLM=1 with an endpoint. deploy.sh sources
     # server.env, so the values come from there. The URL is reached from
-    # inside the container, so localhost is the container itself: use the
-    # host's address, or host.docker.internal.
+    # inside the container, so localhost is the container itself:
+    # SLADD_VLM_URL_DOCKER carries the container-visible address and falls
+    # back to SLADD_VLM_URL, which stays loopback for the host-side tools.
     SLADD_VLM: ${SLADD_VLM:-}
-    SLADD_VLM_URL: ${SLADD_VLM_URL:-}
+    SLADD_VLM_URL: ${SLADD_VLM_URL_DOCKER:-${SLADD_VLM_URL:-}}
     SLADD_VLM_MODEL: ${SLADD_VLM_MODEL:-}
     SLADD_VLM_TIMEOUT: ${SLADD_VLM_TIMEOUT:-20}
     SLADD_VLM_CONCURRENT: ${SLADD_VLM_CONCURRENT:-4}
