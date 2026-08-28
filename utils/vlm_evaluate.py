@@ -19,6 +19,9 @@ Run:
     python utils/vlm_evaluate.py \
         --manifest /data2/vlm/uttrekk6_kalibrering/manifest.csv \
         --judge   /data2/vlm/uttrekk6_kalibrering/judge_image.csv
+
+    # and the documents worth another round, for --processed-list
+    python utils/vlm_evaluate.py ... --hard-list harde.txt --hard-limit 300
 """
 
 import argparse
@@ -378,6 +381,43 @@ LOST_FIELD = ["nr", "fil", "side", "label_id", "reason", "kilde", "conf",
              "pred_bredde_pt", "pred_hoyde_pt", "utsnitt", "vurdering"]
 
 
+def hard_rows(row_list, kinds):
+    """The rows where the model did badly, by kind.
+
+    loss    a covering box judged «nei»: prod would drop a real fnr
+    missed  a BOM box the model kept, so the oversladding survives
+    error   no usable answer, which counts as «ja» and costs gain
+
+    Read AFTER --fnr-override, so «loss» is what prod would actually lose.
+    """
+    out = []
+    for r in row_list:
+        bom = _group(r) == "BOM"
+        if (("loss" in kinds and not bom and r["svar"] == "nei")
+                or ("missed" in kinds and bom and r["svar"] != "nei")
+                or ("error" in kinds and r.get("feil"))):
+            out.append(r)
+    return out
+
+
+def write_hard_list(row_list, path, kinds, limit=0):
+    """Documents to carry into the next round, one filename per line.
+
+    Ranked by how many bad boxes each document holds, so a --hard-limit keeps
+    the densest ones. Returns (documents written, bad boxes counted).
+    """
+    per_file = defaultdict(int)
+    for r in hard_rows(row_list, kinds):
+        per_file[r["fil"]] += 1
+    ranked = sorted(per_file.items(), key=lambda kv: (-kv[1], kv[0]))
+    if limit:
+        ranked = ranked[:limit]
+    with open(path, "w", encoding="utf-8") as f:
+        for name, _n in ranked:
+            f.write(f"{name}\n")
+    return len(ranked), sum(n for _f, n in ranked)
+
+
 def write_manifest(row_list, path, field=LOST_FIELD):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=field, extrasaction="ignore")
@@ -418,6 +458,20 @@ def main():
     p.add_argument("--out-dir", default=None,
                    help="Directory for lost.csv/gain.csv (default: next to "
                         "the judgements)")
+    p.add_argument("--hard-list", default=None, metavar="FIL",
+                   help="Write the documents the model did badly on, one "
+                        "filename per line, for --processed-list in the next "
+                        "round. Shortens the loop at the cost of a scope that "
+                        "is no longer a random sample: gain and loss RATES "
+                        "from such a run do not carry back to the uttrekk.")
+    p.add_argument("--hard-kinds", nargs="+", default=["loss", "missed"],
+                   choices=("loss", "missed", "error"), metavar="KIND",
+                   help="What counts as badly: loss (a covering box judged "
+                        "«nei»), missed (a BOM box kept), error (no usable "
+                        "answer). Default loss + missed.")
+    p.add_argument("--hard-limit", type=int, default=0, metavar="N",
+                   help="Keep only the N documents with the most bad boxes "
+                        "(default 0 = all)")
     p.add_argument("--fnr-override", action="store_true",
                    help="Force the verdict to «ja» when the model's own "
                         "transcription OR PaddleOCR's line from the manifest "
@@ -536,6 +590,12 @@ def main():
           f"   ← review these manually (label_id included)")
     print(f"  {len(gain):>6} rows in {gain_path}"
           f"   ← spot check on the gain")
+
+    if a.hard_list:
+        n_file, n_box = write_hard_list(row_list, a.hard_list, set(a.hard_kinds),
+                                        a.hard_limit)
+        print(f"  {n_file:>6} documents in {a.hard_list}"
+              f"   ← {n_box} bad boxes ({'+'.join(sorted(a.hard_kinds))})")
 
     with open(os.path.join(out_dir, "oppsummering.json"), "w",
               encoding="utf-8") as f:

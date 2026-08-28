@@ -12,8 +12,14 @@
 # A geometry that finished is skipped on a re-run, so a sweep killed halfway
 # carries on. Delete <out-dir>/.ferdig to force one to run again.
 #
+# Each arm also writes hard.txt, the documents the model did badly on, and the
+# union lands in harde_dokumenter.txt. Pass that back as DOC_LIST to run the
+# next round on those documents alone. A chosen scope is not a random sample,
+# so counts from such a run compare against each other, not against the uttrekk.
+#
 # Variables: RES_CSV (required), UTTREKK=4, N_DOCS=2000, SEED=42,
-# HIT_SAMPLE=1000, OUT_ROOT, MODEL, URL, CONCURRENT=4, WORKERS=8.
+# HIT_SAMPLE=1000, OUT_ROOT, DOC_LIST, MODEL, URL, CONCURRENT=4, WORKERS=8,
+# HARD_KINDS="loss missed", HARD_LIMIT=0.
 
 set -euo pipefail
 
@@ -39,6 +45,9 @@ OUT_ROOT="${OUT_ROOT:-/data2/vlm/uttrekk${UTTREKK}_margin_sweep}"
 MODEL="${MODEL:-${SLADD_VLM_MODEL:-}}"
 URL="${URL:-${SLADD_VLM_URL:-http://127.0.0.1:8080/v1}}"
 PROMPT_FILE="${PROMPT_FILE:-$SLADD_REPO/prompts/etikettregel.txt}"
+# What each arm writes to hard.txt, for the next round's DOC_LIST.
+HARD_KINDS="${HARD_KINDS:-loss missed}"
+HARD_LIMIT="${HARD_LIMIT:-0}"
 
 # name|export flags|judge flags|reuse. The name becomes the output directory.
 # «reuse» names an EARLIER arm whose crops to judge again instead of exporting
@@ -88,14 +97,23 @@ if ! curl -s -o /dev/null -m 10 --noproxy '*' "${URL%/}/models"; then
 fi
 
 mkdir -p "$OUT_ROOT"
-DOC_LIST="$OUT_ROOT/dokumenter.txt"
 
 # ── The documents, drawn once ────────────────────────────────────
 # Only documents where YOLO actually proposed a box: the rest would sit in the
 # scope count without giving the model anything to judge. The draw is sorted
 # on a seeded key rather than piped through head, which would close the pipe
 # early and trip pipefail.
-if [[ ! -s "$DOC_LIST" ]]; then
+#
+# A DOC_LIST from outside is the short feedback loop: point it at the hard
+# list from an earlier round. It is never redrawn, and a missing one is an
+# error rather than a silent fall back to a fresh random 2000.
+if [[ -n "${DOC_LIST:-}" ]]; then
+    [[ -s "$DOC_LIST" ]] || { echo "ERROR: no document list: $DOC_LIST"; exit 1; }
+    echo "Documents given: $(wc -l < "$DOC_LIST" | tr -d ' ') from $DOC_LIST"
+    echo "NB: a chosen scope is not a random sample. Gain and loss RATES from"
+    echo "    this run do not carry back to the uttrekk, only the counts do."
+elif [[ ! -s "$OUT_ROOT/dokumenter.txt" ]]; then
+    DOC_LIST="$OUT_ROOT/dokumenter.txt"
     awk -F, -v seed="$SEED" '
         NR==1 { for (i=1; i<=NF; i++) {
                     if ($i == "navn")  name_col = i
@@ -109,13 +127,13 @@ if [[ ! -s "$DOC_LIST" ]]; then
     ' "$RES_CSV" | sort -n | awk -v n="$N_DOCS" 'NR <= n { print $2 }' \
         > "$DOC_LIST"
     echo "Documents drawn: $(wc -l < "$DOC_LIST" | tr -d ' ') to $DOC_LIST"
+    FOUND=$(wc -l < "$DOC_LIST" | tr -d ' ')
+    if (( FOUND < N_DOCS )); then
+        echo "NB: asked for $N_DOCS, the result CSV holds $FOUND with a yolo box."
+    fi
 else
+    DOC_LIST="$OUT_ROOT/dokumenter.txt"
     echo "Documents reused: $(wc -l < "$DOC_LIST" | tr -d ' ') from $DOC_LIST"
-fi
-
-FOUND=$(wc -l < "$DOC_LIST" | tr -d ' ')
-if (( FOUND < N_DOCS )); then
-    echo "NB: asked for $N_DOCS, the result CSV holds $FOUND with a yolo box."
 fi
 
 # ── The sweep ────────────────────────────────────────────────────
@@ -191,6 +209,9 @@ for entry in "${CONFIGS[@]}"; do
     "${PYTHON[@]}" "$SLADD_REPO/utils/vlm_evaluate.py" \
         --manifest "$MANIFEST" \
         --judge "$OUT/judge_image.csv" \
+        --hard-list "$OUT/hard.txt" \
+        --hard-kinds $HARD_KINDS \
+        --hard-limit "$HARD_LIMIT" \
         --fnr-override 2>&1 | tee -a "$LOG"
 
     touch "$OUT/.ferdig"
@@ -209,6 +230,19 @@ done
 echo "├──────────────────────────────────────────┤"
 printf "│ Results: %s\n" "$OUT_ROOT"
 echo "╰──────────────────────────────────────────╯"
+
+# Hard in ANY arm. A geometry that only one arm fails is exactly the case the
+# next round has to keep, so the union is the safe join, not the intersection.
+HARD_ALL="$OUT_ROOT/harde_dokumenter.txt"
+if compgen -G "$OUT_ROOT/*/hard.txt" > /dev/null; then
+    sort -u "$OUT_ROOT"/*/hard.txt > "$HARD_ALL"
+    echo
+    echo "$(wc -l < "$HARD_ALL" | tr -d ' ') documents were hard in at least one arm:"
+    echo "  $HARD_ALL"
+    echo "Next round on those alone:"
+    echo "  DOC_LIST=$HARD_ALL OUT_ROOT=${OUT_ROOT}_hard \\"
+    echo "    RES_CSV=$RES_CSV ./vlm_sweep.sh"
+fi
 echo
 for entry in "${CONFIGS[@]}"; do
     IFS='|' read -r NAME FLAGS JUDGE_FLAGS REUSE <<< "$entry"
