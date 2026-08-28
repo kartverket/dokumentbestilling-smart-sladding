@@ -19,7 +19,7 @@
 #
 # Variables: RES_CSV (required), UTTREKK=4, N_DOCS=2000, SEED=42,
 # HIT_SAMPLE=1000, OUT_ROOT, DOC_LIST, MODEL, URL, CONCURRENT=4, WORKERS=8,
-# HARD_KINDS="loss missed", HARD_LIMIT=0.
+# HARD_KINDS="loss missed", HARD_LIMIT=0, SKIP_GUARDED=1.
 
 set -euo pipefail
 
@@ -48,6 +48,14 @@ PROMPT_FILE="${PROMPT_FILE:-$SLADD_REPO/prompts/etikettregel.txt}"
 # What each arm writes to hard.txt, for the next round's DOC_LIST.
 HARD_KINDS="${HARD_KINDS:-loss missed}"
 HARD_LIMIT="${HARD_LIMIT:-0}"
+# The fnr guard already decides these boxes, so a call cannot change the
+# outcome. SKIP_GUARDED=0 judges them anyway, which is what measuring the cost
+# of the guard itself needs.
+if [[ "${SKIP_GUARDED:-1}" == "0" ]]; then
+    GUARD_FLAG="--no-skip-guarded"
+else
+    GUARD_FLAG="--skip-guarded"
+fi
 
 # name|export flags|judge flags|reuse. The name becomes the output directory.
 # «reuse» names an EARLIER arm whose crops to judge again instead of exporting
@@ -198,6 +206,7 @@ for entry in "${CONFIGS[@]}"; do
             --url "$URL" \
             --model "$MODEL" \
             --concurrent "$CONCURRENT" \
+            "$GUARD_FLAG" \
             $JUDGE_FLAGS 2>&1 | tee -a "$LOG"; then
         echo "!! $NAME: the judging failed, moving to the next arm"
         SUMMARY+=("$NAME  FAILED in the judging")

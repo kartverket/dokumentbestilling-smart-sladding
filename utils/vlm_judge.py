@@ -50,7 +50,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(
 # inside the pipeline judges with the same prompt as the pilot runs here.
 import vlm_cache
 from vlm_client import (STD_MAX_TOKENS, STD_PROMPT, STD_TIMEOUT, STD_URL,
-                        _THINKING, _build_melding, call_model, parse_answer)
+                        _THINKING, _build_melding, call_model, fnr_protects,
+                        parse_answer)
 from filter_common import (reclassify_invalid_covering,
                            reclassify_missing_covered)
 
@@ -487,6 +488,18 @@ def run(a):
         left = [r for r in left if r["nr"] in selected]
         print(f"  --no-file: {len(left)} of {before} rows selected "
               f"({len(selected)} nr in the file)")
+    if a.skip_guarded:
+        # PaddleOCR's line is one of the readings prod's fnr guard checks, and
+        # a valid run there overrules a «nei» whatever the model answers. The
+        # verdict is already decided, so the call cannot change an outcome.
+        before = len(left)
+        left = [r for r in left
+                if not fnr_protects([r.get("ocr_linje"), r.get("ocr_blokk")])]
+        print(f"  --skip-guarded: {before - len(left)} of {before} rows are "
+              f"already decided by the fnr guard, {len(left)} left to judge")
+        if before and not any(r.get("ocr_linje") for r in rows):
+            print("    ⚠ no ocr_linje in the manifest, so nothing could be "
+                  "skipped. Export with --ocr-cache to use this.")
     if a.max_items:
         left = left[:a.max_items]
     if not left:
@@ -662,6 +675,18 @@ def main():
                         "Build it with awk from an earlier judgement CSV to "
                         "iterate on the prompt against the cases that went "
                         "wrong.")
+    p.add_argument("--skip-guarded", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="(default on) Skip the boxes prod's fnr guard already "
+                        "decides: PaddleOCR's line in the manifest holds a "
+                        "valid fnr run, so a «nei» is overruled and the box "
+                        "kept whatever the model answers. Gain and loss come "
+                        "out the same, the calls are simply saved. Needs a "
+                        "manifest exported with --ocr-cache. "
+                        "--no-skip-guarded judges them anyway, which is what "
+                        "measuring the cost of the guard ITSELF needs: "
+                        "vlm_evaluate --without-caption has no verdict to "
+                        "work from for a box that was never judged.")
     p.add_argument("--max-items", type=int, default=None, metavar="N",
                    help="Judge only the first N rows (prompt testing)")
     p.add_argument("--resume", dest="resume", action="store_true", default=True,

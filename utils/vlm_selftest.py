@@ -38,6 +38,7 @@ from filter_common import SCALE
 from filter_review import rotate_box
 from vlm_export import _ocr_context
 from ocr_cache import Token, write_cache
+from vlm_client import fnr_protects
 from vlm_judge import parse_answer
 from vlm_evaluate import poisson_upper_bound
 
@@ -635,6 +636,24 @@ def main(keep):
                   for r in m_top if r["fil"] != "0100003.pdf"),
               "crops reach down from the top, not just around the box")
 
+        # ── The default skips what the fnr guard decides ─────
+        print("\n[3b] --skip-guarded is the default")
+        guarded_out = os.path.join(rot, "dom_guarded.csv")
+        printout = run_step(os.path.join(HERE, "vlm_judge.py"),
+             "--manifest", os.path.join(ut, "manifest.csv"),
+             "--out-csv", guarded_out,
+             "--url", "http://127.0.0.1:1/v1", "--model", "stub",
+             "--no-cache", "--timeout", "1", "--attempt", "1")
+        check("--skip-guarded" in printout,
+              "the skip is announced without being asked for")
+        rows_left = read(guarded_out)
+        check(all(not fnr_protects([r_["ocr_linje"]])
+                  for r_ in read(os.path.join(ut, "manifest.csv"))
+                  if r_["nr"] in {q["nr"] for q in rows_left}),
+              "no judged row sits on a line the guard already protects")
+        check(len(rows_left) < len(read(os.path.join(ut, "manifest.csv"))),
+              f"fewer rows judged than exported ({len(rows_left)})")
+
         # ── Judging: friendly stub (semantics) ───────────────
         print("\n[4] vlm_judge  (friendly stub)")
         # The stub's "model": it knows which crop shows what.
@@ -646,6 +665,7 @@ def main(keep):
         srv, url, _ = make_server(bad=False, answers=answers)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "2",
                  "--out-csv", os.path.join(ut, "judge_ok.csv"))
@@ -666,6 +686,7 @@ def main(keep):
         srv, url, counter = make_server(bad=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "1", "--attempt", "1", "--timeout", "20")
             image_csv = os.path.join(ut, "judge_image.csv")
@@ -681,6 +702,7 @@ def main(keep):
 
             # Resuming: the failed rows must be retried
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "1", "--resume")
             d2 = read(image_csv)
@@ -695,6 +717,7 @@ def main(keep):
         srv, url, counter = make_server(thinks=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_tenk.csv"), "--concurrent", "1")
             check(set(counter["reasoning"]) == {"none"},
@@ -706,6 +729,7 @@ def main(keep):
             # With --thinking auto the field is omitted and content comes back
             # empty: the error must SAY that thinking was the cause.
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_auto.csv"),
                  "--concurrent", "1", "--attempt", "1", "--thinking", "auto",
@@ -726,7 +750,8 @@ def main(keep):
             with open(no_file, "w", encoding="utf-8") as f:
                 f.write("# the hard ones\n2\n5\n")
             path = os.path.join(ut, "d_nr.csv")
-            printout = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
+            printout = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded", "--manifest",
                             os.path.join(ut, "manifest.csv"), "--url", url,
                             "--model", "stub", "--out-csv", path, "--concurrent", "1",
                             "--no-file", no_file)
@@ -742,18 +767,21 @@ def main(keep):
         srv, url, _ = make_server(bad=False, answers=answers)
         try:
             path = os.path.join(ut, "d_std.csv")
-            run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
+            run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded", "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
                  "stub", "--out-csv", path, "--concurrent", "1")
             check(len(read(path)) == 6, "the first run judges all 6")
-            ut2 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
+            ut2 = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded", "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
                        "--concurrent", "1")
             check("Nothing to do" in ut2 and len(read(path)) == 6,
                   "a second run without flags does NOTHING. Finished work is "
                   "not overwritten")
-            ut3 = run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
+            ut3 = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded", "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
                        "--concurrent", "1", "--restart")
@@ -766,6 +794,7 @@ def main(keep):
         srv, url, counter = make_server(reject_reasoning=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_400.csv"), "--concurrent", "1")
             d = read(os.path.join(ut, "d_400.csv"))
@@ -876,7 +905,8 @@ def main(keep):
                                if r["klasse"] == "BOM"))
         srv, url, _ = make_server(bad=False, answers=answers)
         try:
-            run_step(os.path.join(HERE, "vlm_judge.py"), "--manifest",
+            run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-skip-guarded", "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
                  "stub", "--concurrent", "1",
                  "--no-file", only_miss,
