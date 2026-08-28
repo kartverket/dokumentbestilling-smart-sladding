@@ -58,6 +58,35 @@ def _px(margin_pt):
     return margin_pt if margin_pt == FULL else float(margin_pt) * SCALE
 
 
+# A listed box and a prediction may come from different resultat.csv runs of
+# the same model, where the coordinates drift a pixel. Well under any margin,
+# far above rounding.
+BOX_MATCH_TOLERANCE_PX = 3.0
+
+
+def read_box_list(path):
+    """Box keys from vlm_evaluate --hard-boxes: {(fil, side): [box, ...]}."""
+    keys = defaultdict(list)
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            keys[(r["fil"], int(r["side"]))].append(
+                tuple(float(r[k]) for k in ("x0", "y0", "x1", "y1")))
+    return keys
+
+
+def filter_by_box_list(selected, keys):
+    """The predictions matching a key, every side within the tolerance."""
+    out = []
+    for p in selected:
+        px = p["px"]
+        for key in keys.get((p["navn"], p["side"]), ()):
+            if all(abs(a - b) <= BOX_MATCH_TOLERANCE_PX
+                   for a, b in zip(px, key)):
+                out.append(p)
+                break
+    return out
+
+
 def _margin(value):
     """CLI margin: points, or «full» for the page edge."""
     if str(value).strip().lower() == FULL:
@@ -401,6 +430,13 @@ def main():
                         "(pure BOM calibration), -1 = all. Default 1000.")
     p.add_argument("--max-miss", type=int, default=None, metavar="N",
                    help="Take only N random BOM boxes (default: all)")
+    p.add_argument("--box-list", default=None, metavar="FIL",
+                   help="Export ONLY the boxes in this file, written by "
+                        "vlm_evaluate --hard-boxes: fil/side plus pixel "
+                        "coordinates from the same resultat.csv. Overrides "
+                        "the sampling, and the factors in utvalg.json are "
+                        "set to 1: a picked set scales to nothing but "
+                        "itself.")
     p.add_argument("--seed", type=int, default=42, help="Sampling seed (42)")
     p.add_argument("--source", nargs="+", default=None, metavar="KILDE",
                    help="Limit to these sources (yolo/paddle/begge)")
@@ -480,6 +516,8 @@ def main():
     a = p.parse_args()
 
     processed = read_processed_docs(a.processed_list) if a.processed_list else None
+    if a.against_truth and a.box_list:
+        p.error("--box-list works on predictions, not with --against-truth")
     if a.against_truth:
         # Every label is a sladd a human made, so a «nei» here is a claim of
         # label noise. Read the outcome in gjennomgang_label.md.
@@ -536,9 +574,30 @@ def main():
                            processed_doc=processed, criterion=a.criterion)
         write_summary(ds)
 
-        hit_sample = None if a.hit_sample < 0 else a.hit_sample
-        selected, stat = select_boxes(ds, hit_sample, seed=a.seed,
-                                   max_miss=a.max_miss, sources=a.source)
+        if a.box_list:
+            # The list IS the selection: no sampling, and the factors are 1
+            # so nothing scales a picked set up to the uttrekk.
+            selected, stat = select_boxes(ds, None, seed=a.seed,
+                                       sources=a.source)
+            keys = read_box_list(a.box_list)
+            selected = filter_by_box_list(selected, keys)
+            n_key = sum(len(v) for v in keys.values())
+            stat.update({
+                "box_list": os.path.abspath(a.box_list),
+                "n_bom_total": sum(1 for p in selected
+                                   if p["klasse"] == "BOM"),
+                "n_covering_total": sum(1 for p in selected
+                                        if p["klasse"] != "BOM")})
+            print(f"  --box-list: {len(selected)} of {n_key} listed boxes "
+                  f"found in the result CSV")
+            if len(selected) < n_key:
+                print(f"    ({n_key - len(selected)} keys matched nothing — "
+                      f"another resultat.csv, or boxes filtered before "
+                      f"export)")
+        else:
+            hit_sample = None if a.hit_sample < 0 else a.hit_sample
+            selected, stat = select_boxes(ds, hit_sample, seed=a.seed,
+                                       max_miss=a.max_miss, sources=a.source)
         print(f"\nSelection for VLM judging:")
         print(f"  BOM:      {stat['n_bom_exported']:>6} of "
               f"{stat['n_bom_total']}   (factor {stat['bom_factor']:.2f})")

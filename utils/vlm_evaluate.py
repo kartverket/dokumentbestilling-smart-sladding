@@ -418,6 +418,28 @@ def write_hard_list(row_list, path, kinds, limit=0):
     return len(ranked), sum(n for _f, n in ranked)
 
 
+BOX_KEY_FIELD = ["fil", "side", "x0", "y0", "x1", "y1", "klasse"]
+
+
+def write_hard_boxes(row_list, path, kinds, limit=0):
+    """The bad BOXES themselves, as keys vlm_export --box-list understands.
+
+    fil + side + the prediction's pixel coordinates identify a box across
+    exports from the same resultat.csv, whatever crop geometry each export
+    used. klasse rides along for reading, the matcher ignores it. Returns the
+    row count.
+    """
+    rows = hard_rows(row_list, kinds)
+    if limit:
+        rows = rows[:limit]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=BOX_KEY_FIELD, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    return len(rows)
+
+
 def write_manifest(row_list, path, field=LOST_FIELD):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=field, extrasaction="ignore")
@@ -472,6 +494,11 @@ def main():
     p.add_argument("--hard-limit", type=int, default=0, metavar="N",
                    help="Keep only the N documents with the most bad boxes "
                         "(default 0 = all)")
+    p.add_argument("--hard-boxes", default=None, metavar="FIL",
+                   help="Write the bad BOXES as fil/side/coordinate keys for "
+                        "vlm_export --box-list, so the next round exports "
+                        "exactly these sladds and nothing else. --hard-kinds "
+                        "picks what counts, --hard-limit caps the rows.")
     p.add_argument("--fnr-override", action="store_true",
                    help="Force the verdict to «ja» when the model's own "
                         "transcription OR PaddleOCR's line from the manifest "
@@ -590,6 +617,13 @@ def main():
           f"   ← review these manually (label_id included)")
     print(f"  {len(gain):>6} rows in {gain_path}"
           f"   ← spot check on the gain")
+
+    if a.hard_boxes:
+        n_box = write_hard_boxes(row_list, a.hard_boxes, set(a.hard_kinds),
+                                 a.hard_limit)
+        print(f"  {n_box:>6} boxes in {a.hard_boxes}"
+              f"   ← for vlm_export --box-list "
+              f"({'+'.join(sorted(a.hard_kinds))})")
 
     if a.hard_list:
         n_file, n_box = write_hard_list(row_list, a.hard_list, set(a.hard_kinds),

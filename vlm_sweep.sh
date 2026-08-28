@@ -19,7 +19,8 @@
 #
 # Variables: RES_CSV (required), UTTREKK=4, N_DOCS=2000, SEED=42,
 # HIT_SAMPLE=1000, OUT_ROOT, DOC_LIST, MODEL, URL, CONCURRENT=4, WORKERS=8,
-# HARD_KINDS="loss missed", HARD_LIMIT=0, SKIP_GUARDED=1.
+# HARD_KINDS="loss missed", HARD_LIMIT=0, SKIP_GUARDED=1, BOX_LIST (exact
+# sladds from vlm_evaluate --hard-boxes, the shortest loop).
 
 set -euo pipefail
 
@@ -114,12 +115,22 @@ mkdir -p "$OUT_ROOT"
 #
 # A DOC_LIST from outside is the short feedback loop: point it at the hard
 # list from an earlier round. It is never redrawn, and a missing one is an
-# error rather than a silent fall back to a fresh random 2000.
-if [[ -n "${DOC_LIST:-}" ]]; then
+# error rather than a silent fall back to a fresh random 2000. BOX_LIST is the
+# shortest loop of all — exact sladds from vlm_evaluate --hard-boxes — and
+# replaces the document machinery entirely.
+if [[ -n "${BOX_LIST:-}" ]]; then
+    [[ -s "$BOX_LIST" ]] || { echo "ERROR: no box list: $BOX_LIST"; exit 1; }
+    N_BOX=$(( $(wc -l < "$BOX_LIST" | tr -d ' ') - 1 ))
+    echo "Boxes given: $N_BOX from $BOX_LIST"
+    echo "NB: a picked set of boxes. Counts compare arms against each other"
+    echo "    and nothing scales back to the uttrekk."
+    SCOPE_ARGS=(--box-list "$BOX_LIST")
+elif [[ -n "${DOC_LIST:-}" ]]; then
     [[ -s "$DOC_LIST" ]] || { echo "ERROR: no document list: $DOC_LIST"; exit 1; }
     echo "Documents given: $(wc -l < "$DOC_LIST" | tr -d ' ') from $DOC_LIST"
     echo "NB: a chosen scope is not a random sample. Gain and loss RATES from"
     echo "    this run do not carry back to the uttrekk, only the counts do."
+    SCOPE_ARGS=(--processed-list "$DOC_LIST")
 elif [[ ! -s "$OUT_ROOT/dokumenter.txt" ]]; then
     DOC_LIST="$OUT_ROOT/dokumenter.txt"
     awk -F, -v seed="$SEED" '
@@ -139,9 +150,11 @@ elif [[ ! -s "$OUT_ROOT/dokumenter.txt" ]]; then
     if (( FOUND < N_DOCS )); then
         echo "NB: asked for $N_DOCS, the result CSV holds $FOUND with a yolo box."
     fi
+    SCOPE_ARGS=(--processed-list "$DOC_LIST")
 else
     DOC_LIST="$OUT_ROOT/dokumenter.txt"
     echo "Documents reused: $(wc -l < "$DOC_LIST" | tr -d ' ') from $DOC_LIST"
+    SCOPE_ARGS=(--processed-list "$DOC_LIST")
 fi
 
 # ── The sweep ────────────────────────────────────────────────────
@@ -186,7 +199,7 @@ for entry in "${CONFIGS[@]}"; do
                 --truth-csv "$TRUTH_CSV" \
                 --folder "$FOLDER" \
                 --out-dir "$OUT" \
-                --processed-list "$DOC_LIST" \
+                "${SCOPE_ARGS[@]}" \
                 --ocr-cache "$OCR_CACHE" \
                 --source yolo \
                 --hit-sample "$HIT_SAMPLE" \
@@ -248,9 +261,6 @@ if compgen -G "$OUT_ROOT/*/hard.txt" > /dev/null; then
     echo
     echo "$(wc -l < "$HARD_ALL" | tr -d ' ') documents were hard in at least one arm:"
     echo "  $HARD_ALL"
-    echo "Next round on those alone:"
-    echo "  DOC_LIST=$HARD_ALL OUT_ROOT=${OUT_ROOT}_hard \\"
-    echo "    RES_CSV=$RES_CSV ./vlm_sweep.sh"
 fi
 echo
 for entry in "${CONFIGS[@]}"; do
