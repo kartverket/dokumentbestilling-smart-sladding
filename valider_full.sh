@@ -22,6 +22,8 @@
 #   images     'no'/0 skips the error images, or N draws at most N documents
 #              (default: all). Summary and resultat.csv are unaffected
 #   processes  worker processes for cache hits (default: auto = min(8, cores))
+#   live       'no' turns the live summary off, or N sets its interval in
+#              seconds (default 60). One line per tick from resultat.csv.
 #
 # Uses the OCR and YOLO caches ($SLADD_CACHE), so rerunning the same model is nearly free.
 # Requires server.env to be sourced (source activate.sh).
@@ -45,6 +47,7 @@ IMAGES="all"
 METADATA=""
 RULES="yes"
 PROCESSES=""
+LIVE=""
 EXTRA_FLAGS=()
 
 # The script has no positional arguments, so a bare word can only be the value
@@ -64,6 +67,7 @@ for arg in "$@"; do
         rules=*)   RULES="${arg#rules=}"; AFTER_FLAG=0 ;;
         images=*)  IMAGES="${arg#images=}"; AFTER_FLAG=0 ;;
         processes=*) PROCESSES="${arg#processes=}"; AFTER_FLAG=0 ;;
+        live=*)    LIVE="${arg#live=}"; AFTER_FLAG=0 ;;
         -*)        EXTRA_FLAGS+=("$arg"); AFTER_FLAG=1 ;;
         *)
             if [[ "$AFTER_FLAG" == 1 ]]; then
@@ -71,7 +75,7 @@ for arg in "$@"; do
                 AFTER_FLAG=0
             else
                 echo "ERROR: Unknown parameter: $arg"
-                echo "Valid: model=PATH|deploy=test uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N]"
+                echo "Valid: model=PATH|deploy=test uttrekk=N [list=NAME] [name=ALIAS] [precache=no] [rules=no] [metadata=yes] [images=N] [processes=N] [live=no|N]"
                 echo "run.py flags are passed on as they are, e.g. --vlm --vlm-concurrent 1"
                 exit 1
             fi
@@ -103,6 +107,15 @@ if [[ -n "$DEPLOY" && -n "$PROCESSES" ]]; then
     echo "       request at a time (gunicorn workers=1)."
     exit 1
 fi
+
+LIVE_INTERVAL=60
+case "$LIVE" in
+    ""|yes)   ;;
+    no|0)     LIVE_INTERVAL=0 ;;
+    *[!0-9]*) echo "ERROR: live= must be 'no' or a number of seconds (got: $LIVE)"
+              exit 1 ;;
+    *)        LIVE_INTERVAL="$LIVE" ;;
+esac
 
 if [[ -z "$UTTREKK_NR" ]]; then
     echo "ERROR: uttrekk= is required"
@@ -217,6 +230,14 @@ fi
 
 # Without list= all documents run: labels cover the whole uttrekk, so a document with no rows holds zero fnr.
 
+# ── Everything below goes to the run directory as well ───────────
+# Appended, not truncated: a rerun lands under a new date line in the same
+# file, so the log tells the whole story of the directory.
+mkdir -p "$OUT_DIR"
+LOG_FILE="$OUT_DIR/run.log"
+echo "════════ $(date '+%Y-%m-%d %H:%M:%S') ════════" >> "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # ── Show what is being run ───────────────────────────────────────
 echo "╭─────────────────────────────────────────────╮"
 if [[ -n "$DEPLOY" ]]; then
@@ -240,6 +261,10 @@ else
 fi
 printf "│ truth:    %s\n" "$TRUTH"
 printf "│ out dir:  %s\n" "$OUT_DIR"
+printf "│ logg:     %s\n" "$LOG_FILE"
+if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
+    printf "│ flagg:    %s\n" "${EXTRA_FLAGS[*]}"
+fi
 if [[ -n "$DEPLOY" ]]; then
     printf "│ cache:    (none: the container renders and reads every document itself)\n"
 else
@@ -251,8 +276,9 @@ echo ""
 # ── Fill the caches first ────────────────────────────────────────
 # precache.py does run.py's work in parallel processes against the same GPU, measured 3.3x on V100S.
 # With deploy= there is nothing to fill: the container keeps its own caches.
+START_TS=$(date +%s)
 if [[ "$PRECACHE" == "yes" && -z "$DEPLOY" ]]; then
-    echo "── Filling cache (precache.py) ──"
+    echo "── $(date '+%H:%M:%S') Filling cache (precache.py) ──"
     PRECACHE_CMD=(python -u "${SLADD_PRECACHE:-$SLADD_REPO/utils/precache.py}"
         --folder "$UTTREKK_DIR"
         --only both
@@ -322,4 +348,51 @@ if [[ -n "$PROCESSES" ]]; then
     CMD+=(--processes "$PROCESSES")
 fi
 
-"${CMD[@]}" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}
+# ── Live summary while the run goes ─────────────────────────────
+# resultat.csv grows one row per surviving box, so documents, boxes and the
+# kilde split can be counted live. Boxes the verifier drops never reach the
+# CSV; the judgement-cache growth stands in as "fresh VLM calls" instead,
+# counted from the first tick that sees the cache directory in the log.
+live_summary() {
+    local csv="$OUT_DIR/resultat.csv" cache="" base=""
+    while sleep "$LIVE_INTERVAL"; do
+        [[ -f "$csv" ]] || continue
+        if [[ -z "$cache" ]]; then
+            cache=$({ grep -m1 "Judgement cache: " "$LOG_FILE" 2>/dev/null || true; } | sed 's/.*Judgement cache: //')
+        fi
+        local extra=""
+        if [[ -n "$cache" && -d "$cache" ]]; then
+            local n_cache
+            n_cache=$(find "$cache" -type f 2>/dev/null | wc -l | tr -d ' ')
+            [[ -z "$base" ]] && base="$n_cache"
+            extra="  vlm-nydømt $((n_cache - base))"
+        fi
+        awk -F, -v extra="$extra" -v ts="$(date '+%H:%M:%S')" '
+            NR > 1 { n++; k[$9]++; if (!seen[$1]++) d++ }
+            END { printf "── live %s  dok %d  bokser %d", ts, d, n
+                  for (s in k) printf "  %s %d", s, k[s]
+                  printf "%s ──\n", extra }' "$csv"
+    done
+}
+
+echo "── $(date '+%H:%M:%S') Validation (run.py) ──"
+printf 'kommando:'
+printf ' %q' "${CMD[@]}" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}
+echo ""
+
+LIVE_PID=""
+if (( LIVE_INTERVAL > 0 )); then
+    live_summary &
+    LIVE_PID=$!
+fi
+
+RC=0
+"${CMD[@]}" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} || RC=$?
+if [[ -n "$LIVE_PID" ]]; then
+    kill "$LIVE_PID" 2>/dev/null || true
+fi
+MINUTES=$(( ($(date +%s) - START_TS) / 60 ))
+echo ""
+echo "── $(date '+%H:%M:%S') Done: exit $RC after $MINUTES min ──"
+echo "   Log: $LOG_FILE"
+exit $RC
