@@ -38,17 +38,21 @@ OCR_CACHE="${OCR_CACHE:-$SLADD_CACHE/uttrekk_$UTTREKK/ocr}"
 OUT_ROOT="${OUT_ROOT:-/data2/vlm/uttrekk${UTTREKK}_margin_sweep}"
 MODEL="${MODEL:-${SLADD_VLM_MODEL:-}}"
 URL="${URL:-${SLADD_VLM_URL:-http://127.0.0.1:8080/v1}}"
+PROMPT_FILE="${PROMPT_FILE:-$SLADD_REPO/prompts/etikettregel.txt}"
 
-# name|flags. The name becomes the output directory. Ordered so the pairs that
-# answer the most run first: seven geometries may not fit one night. Arms 2 to
-# 4 are one resolution ladder at the same margin, so they are the comparison
-# that survives a night that runs short.
+# name|export flags|judge flags|reuse. The name becomes the output directory.
+# «reuse» names an EARLIER arm whose crops to judge again instead of exporting
+# the same images twice: that is how a prompt is tested against a geometry
+# already measured. Ordered so the pairs that answer the most run first: eight
+# arms may not fit one night. Arms 2 to 4 are one resolution ladder at the same
+# margin, so they are the comparison that survives a night that runs short.
 # 2480 px is exactly what A4 portrait renders to at 300 dpi, so --max-px 2480
 # leaves those pages alone and caps only what is wider. Uncapped, a landscape
 # page comes to 2442 image tokens and overruns the 3072-token slot, which
 # would read as a bad geometry rather than a crop that never fit.
 CONFIGS=(
     "up100_full_px1024|--margin-up 100 --full-width --margin-down 60 --max-px 1024"
+    "up150_full_etikett||--prompt-file $PROMPT_FILE|up100_full_px1024"
     "up100_left250_px1024|--margin-up 100 --margin-left full --margin-right 250 --margin-down 60 --max-px 1024"
     "up150_full|--margin-up 150 --full-width --margin-down 60"
     "up100_full|--margin-up 100 --full-width --margin-down 60"
@@ -67,6 +71,14 @@ done
 [[ -d "$FOLDER" ]] || { echo "ERROR: no PDF directory: $FOLDER"; exit 1; }
 [[ -d "$OCR_CACHE" ]] || { echo "ERROR: no OCR cache: $OCR_CACHE"; exit 1; }
 [[ -n "$MODEL" ]] || { echo "ERROR: set MODEL (or SLADD_VLM_MODEL)"; exit 1; }
+
+for entry in "${CONFIGS[@]}"; do
+    IFS='|' read -r _ _ judge_flags _ <<< "$entry"
+    [[ "$judge_flags" == *--prompt-file* ]] || continue
+    file="${judge_flags##*--prompt-file }"
+    file="${file%% *}"
+    [[ -f "$file" ]] || { echo "ERROR: no prompt file: $file"; exit 1; }
+done
 
 # Liveness only: an endpoint that answers 404 here is still an endpoint.
 if ! curl -s -o /dev/null -m 10 --noproxy '*' "${URL%/}/models"; then
@@ -112,8 +124,7 @@ declare -a SUMMARY=()
 START=$(date +%s)
 
 for entry in "${CONFIGS[@]}"; do
-    NAME="${entry%%|*}"
-    FLAGS="${entry#*|}"
+    IFS='|' read -r NAME FLAGS JUDGE_FLAGS REUSE <<< "$entry"
     OUT="$OUT_ROOT/$NAME"
     LOG="$OUT_ROOT/logg/$NAME.log"
 
@@ -125,35 +136,52 @@ for entry in "${CONFIGS[@]}"; do
 
     echo
     echo "════════════════════════════════════════════════════════"
-    echo "== $NAME   $FLAGS"
+    echo "== $NAME   ${FLAGS:-crops from $REUSE}  $JUDGE_FLAGS"
     echo "   log: $LOG"
     echo "════════════════════════════════════════════════════════"
     mkdir -p "$OUT"
 
-    # shellcheck disable=SC2086 — FLAGS is a list of arguments on purpose.
-    if ! "${PYTHON[@]}" "$SLADD_REPO/utils/vlm_export.py" \
-            --res-csv "$RES_CSV" \
-            --truth-csv "$TRUTH_CSV" \
-            --folder "$FOLDER" \
-            --out-dir "$OUT" \
-            --processed-list "$DOC_LIST" \
-            --ocr-cache "$OCR_CACHE" \
-            --source yolo \
-            --hit-sample "$HIT_SAMPLE" \
-            --seed "$SEED" \
-            --workers "$WORKERS" \
-            $FLAGS 2>&1 | tee "$LOG"; then
-        echo "!! $NAME: the export failed, moving to the next geometry"
-        SUMMARY+=("$NAME  FAILED in the export")
-        continue
+    # The crops, and with them utvalg.json and the sampling factors, stay with
+    # the arm that exported them. vlm_judge and vlm_evaluate find both from the
+    # manifest path, so a reusing arm only writes its own judgements.
+    if [[ -n "$REUSE" ]]; then
+        MANIFEST="$OUT_ROOT/$REUSE/manifest.csv"
+        if [[ ! -f "$MANIFEST" ]]; then
+            echo "!! $NAME: $REUSE has not exported, nothing to judge"
+            SUMMARY+=("$NAME  SKIPPED, $REUSE has no manifest")
+            continue
+        fi
+        echo "   crops from $REUSE"
+    else
+        MANIFEST="$OUT/manifest.csv"
+        # shellcheck disable=SC2086 — FLAGS is a list of arguments on purpose.
+        if ! "${PYTHON[@]}" "$SLADD_REPO/utils/vlm_export.py" \
+                --res-csv "$RES_CSV" \
+                --truth-csv "$TRUTH_CSV" \
+                --folder "$FOLDER" \
+                --out-dir "$OUT" \
+                --processed-list "$DOC_LIST" \
+                --ocr-cache "$OCR_CACHE" \
+                --source yolo \
+                --hit-sample "$HIT_SAMPLE" \
+                --seed "$SEED" \
+                --workers "$WORKERS" \
+                $FLAGS 2>&1 | tee "$LOG"; then
+            echo "!! $NAME: the export failed, moving to the next arm"
+            SUMMARY+=("$NAME  FAILED in the export")
+            continue
+        fi
     fi
 
+    # shellcheck disable=SC2086 — JUDGE_FLAGS is a list of arguments too.
     if ! "${PYTHON[@]}" "$SLADD_REPO/utils/vlm_judge.py" \
-            --manifest "$OUT/manifest.csv" \
+            --manifest "$MANIFEST" \
+            --out-csv "$OUT/judge_image.csv" \
             --url "$URL" \
             --model "$MODEL" \
-            --concurrent "$CONCURRENT" 2>&1 | tee -a "$LOG"; then
-        echo "!! $NAME: the judging failed, moving to the next geometry"
+            --concurrent "$CONCURRENT" \
+            $JUDGE_FLAGS 2>&1 | tee -a "$LOG"; then
+        echo "!! $NAME: the judging failed, moving to the next arm"
         SUMMARY+=("$NAME  FAILED in the judging")
         continue
     fi
@@ -161,7 +189,7 @@ for entry in "${CONFIGS[@]}"; do
     # The fnr guard runs in prod, so the number that describes prod is the
     # one measured with it on.
     "${PYTHON[@]}" "$SLADD_REPO/utils/vlm_evaluate.py" \
-        --manifest "$OUT/manifest.csv" \
+        --manifest "$MANIFEST" \
         --judge "$OUT/judge_image.csv" \
         --fnr-override 2>&1 | tee -a "$LOG"
 
@@ -183,10 +211,10 @@ printf "│ Results: %s\n" "$OUT_ROOT"
 echo "╰──────────────────────────────────────────╯"
 echo
 for entry in "${CONFIGS[@]}"; do
-    NAME="${entry%%|*}"
+    IFS='|' read -r NAME FLAGS JUDGE_FLAGS REUSE <<< "$entry"
     LOG="$OUT_ROOT/logg/$NAME.log"
     [[ -f "$LOG" ]] || continue
-    echo "── $NAME   ${entry#*|}"
+    echo "── $NAME   ${FLAGS:-crops from $REUSE}  $JUDGE_FLAGS"
     sed -n '/^RESULT$/,/per lost fnr/p' "$LOG" | sed '1d;/^==*$/d'
     echo
 done
