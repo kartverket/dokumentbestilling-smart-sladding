@@ -49,7 +49,8 @@ sys.path.insert(0, os.path.normpath(os.path.join(
 # The prompt, the call and the parsing live in app/, so the verifier that runs
 # inside the pipeline judges with the same prompt as the pilot runs here.
 import vlm_cache
-from vlm_client import (STD_MAX_TOKENS, STD_PROMPT, STD_TIMEOUT, STD_URL,
+from vlm_client import (hold_vlm_lock,
+                        STD_MAX_TOKENS, STD_PROMPT, STD_TIMEOUT, STD_URL,
                         _THINKING, _build_melding, call_model, fnr_protects,
                         parse_answer)
 from filter_common import (reclassify_invalid_covering,
@@ -414,6 +415,7 @@ def write_missing_candidates(out_path, rows, a):
 
 
 def run(a):
+    vlm_lock = hold_vlm_lock()  # held until the process exits
     with open(a.manifest, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     reclassified = reclassify_invalid_covering(rows)

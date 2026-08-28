@@ -16,9 +16,12 @@ interpreted — timeout, HTTP error, unparsable answer — becomes «ja», NEVER
 forced «ja» apart from one the model actually gave.
 """
 
+import fcntl
 import json
 import os
 import re
+import sys
+import time as _time
 import urllib.error
 import urllib.request
 
@@ -102,6 +105,44 @@ def crop_with_marker(image, box, *, margin_up, margin_down, margin_left,
         return None, "marker"
     ImageDraw.Draw(ut).rectangle(m, outline=MARKER, width=stroke)
     return ut, m
+
+
+# ── One consumer at a time ────────────────────────────
+
+def hold_vlm_lock():
+    """Take the single-consumer lock for the llama server, or exit loudly.
+
+    The server has three slots. A second judging process does not fail, it
+    just doubles every call's latency, and past the timeout the calls die and
+    the boxes are silently kept. The kernel drops the lock when the holder
+    exits, killed or not, so it can never go stale. SLADD_VLM_LOCK=0 shares
+    the server on purpose. The caller keeps the returned fd alive for the
+    lifetime of the run.
+    """
+    if os.environ.get("SLADD_VLM_LOCK", "").strip() in ("0", "off"):
+        return None
+    path = os.path.join(os.environ.get("SLADD_CACHE", "/tmp"), "vlm.lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        holder = ""
+        try:
+            holder = os.read(fd, 400).decode("utf-8", "replace").strip()
+        except OSError:
+            pass
+        os.close(fd)
+        raise SystemExit(
+            "ERROR: another process is already judging against the VLM "
+            "server:\n"
+            f"  {holder or '(holder unknown)'}\n"
+            "Wait for it or kill it. To share the three slots on purpose: "
+            "SLADD_VLM_LOCK=0.")
+    os.ftruncate(fd, 0)
+    started = _time.strftime("%Y-%m-%d %H:%M:%S")
+    os.write(fd, f"pid {os.getpid()} since {started}: "
+                 f"{' '.join(sys.argv)[:300]}".encode())
+    return fd
 
 
 # ── Prompt ────────────────────────────────────────────

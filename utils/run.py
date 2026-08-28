@@ -33,6 +33,7 @@ from yolo_cache import cache_dir_for_weights
 from load_pdf import PDF_DPI
 import vlm_verifier
 from vlm_client import STD_URL as VLM_STD_URL
+from vlm_client import hold_vlm_lock
 import traceback
 from save_result import write_result_files
 
@@ -468,6 +469,7 @@ def main():
             return
         url = (args.vlm_url or os.environ.get("SLADD_VLM_URL")
                or VLM_STD_URL)
+        vlm_lock = hold_vlm_lock()  # held until the process exits
         vlm = vlm_verifier.VlmConfig(
             [u.strip() for u in url.split(",") if u.strip()], model,
             timeout=args.vlm_timeout if args.vlm_timeout is not None
