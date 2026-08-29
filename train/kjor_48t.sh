@@ -9,7 +9,9 @@ COST="${COST:-20}"
 IMGSZ="${IMGSZ:-1280}"
 PATIENCE="${PATIENCE:-12}"
 RESERVE_H="${RESERVE_H:-5}"        # hours held back for eval + ranking
-B_MIN_H="${B_MIN_H:-6}"           # run B is skipped below this budget
+B_MIN_H="${B_MIN_H:-8}"           # run B is skipped below this budget
+# Fixed batch: AutoBatch fragments on the V100S and lands on batch 2.
+BATCH="${BATCH:-8}"
 MIN_FREE_GB="${MIN_FREE_GB:-80}"
 SEED="${SEED:-48}"
 HOLDOUT_SHARE="${HOLDOUT_SHARE:-0.4}"
@@ -137,18 +139,20 @@ import pandas as pd
 r = pd.read_csv(sys.argv[1] + "/results.csv")
 r.columns = [c.strip() for c in r.columns]
 t = r["time"]
-print(int(t.iloc[-1] - t.iloc[-2]) if len(t) > 1 else int(t.iloc[-1]))
+d = t.iloc[-1] - t.iloc[-2] if len(t) > 1 else t.iloc[-1]
+print(int(d) if d > 0 else int(t.iloc[-1] / len(t)))
 EOF
 }
 
 # Stdout is the measured number alone; everything else must go to stderr.
+# The run name carries the batch, so a pilot at another batch never shortcuts.
 fase_pilot() {
-    local navn=$1 base=$2
+    local navn="${1}_b${BATCH}" base=$2
     local run="$LOGDIR/pilot/$navn"
     if [[ ! -f "$run/results.csv" ]]; then
-        log "Pilot $navn (2 epoker, autobatch) ..." >&2
-        yolo detect train data="$DATASET/data.yaml" model="$base" epochs=2 \
-            imgsz="$IMGSZ" batch=-1 device=0 workers=16 plots=False \
+        log "Pilot $navn (1 epoke, batch $BATCH) ..." >&2
+        yolo detect train data="$DATASET/data.yaml" model="$base" epochs=1 \
+            imgsz="$IMGSZ" batch="$BATCH" device=0 workers=16 plots=False \
             project="$LOGDIR/pilot" name="$navn" exist_ok=True >&2 || return 1
     fi
     sekunder_per_epoke "$run"
@@ -156,13 +160,14 @@ fase_pilot() {
 
 tren() {
     local navn=$1 base=$2 epoker=$3 datayaml=$4
-    log "Trener $navn: $epoker epoker fra $base ..."
+    local halv=$(( BATCH / 2 )); (( halv >= 1 )) || halv=1
+    log "Trener $navn: $epoker epoker fra $base, batch $BATCH ..."
     if ! yolo detect train data="$datayaml" model="$base" epochs="$epoker" \
-            imgsz="$IMGSZ" batch=-1 device=0 workers=16 patience="$PATIENCE" \
+            imgsz="$IMGSZ" batch="$BATCH" device=0 workers=16 patience="$PATIENCE" \
             project="$SLADD_RUNS" name="$navn" exist_ok=True; then
-        log "$navn feilet, prøver igjen med batch=8 ..."
+        log "$navn feilet, prøver igjen med batch=$halv ..."
         yolo detect train data="$datayaml" model="$base" epochs="$epoker" \
-            imgsz="$IMGSZ" batch=8 device=0 workers=16 patience="$PATIENCE" \
+            imgsz="$IMGSZ" batch="$halv" device=0 workers=16 patience="$PATIENCE" \
             project="$SLADD_RUNS" name="$navn" exist_ok=True || return 1
     fi
 }
@@ -283,6 +288,7 @@ fase_rapport() {
 
 start() {
     [[ -n "${SLADD_REPO:-}" ]] || { echo "Kjør først: source activate.sh"; exit 1; }
+    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     mkdir -p "$LOGDIR/pilot"
     touch "$RUNLIST"
     [[ -f "$DEADLINE_FILE" ]] || echo $(( $(date +%s) + HOURS * 3600 )) > "$DEADLINE_FILE"
@@ -323,7 +329,7 @@ start() {
     budsjett=$(( $(left_s) - RESERVE_H * 3600 ))
     epoker=$(( budsjett / SEPOCH_XFT ))
     (( epoker > 60 )) && epoker=60
-    if (( epoker >= 12 )); then
+    if (( epoker >= 8 )); then
         kandidat "${TAG}_x_ft" "$SLADD_PRODWEIGHTS" "$epoker"
     else
         log "Hopper over ${TAG}_x_ft: bare $epoker epoker mulig."
