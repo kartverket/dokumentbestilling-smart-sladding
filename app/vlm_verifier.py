@@ -100,7 +100,9 @@ class VlmConfig:
         self.concurrent = max(1, int(concurrent))
         self.max_tokens = max_tokens
         self.api_key = api_key
-        self.sources = frozenset(sources)
+        # A bare string would dissolve into letters and empty the stratum.
+        self.sources = frozenset((sources,) if isinstance(sources, str)
+                                 else sources)
         self.margin_up_pt = margin_up_pt
         self.margin_down_pt = margin_down_pt
         self.margin_left_pt = margin_left_pt

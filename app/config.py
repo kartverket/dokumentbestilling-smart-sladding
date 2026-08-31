@@ -165,7 +165,7 @@ VLM_BREAKER_COOLDOWN = float(_os.environ.get("SLADD_VLM_BREAKER_COOLDOWN", "30")
 # The stratum. Measured on uttrekk4: after the fnr guard the gain is 806 of
 # 1027 removable boxes on kilde «yolo», 0 of 203 on «begge» and 1 of 129 on
 # «paddle» — judging the other two costs GPU and buys nothing.
-VLM_SOURCES = ("yolo")
+VLM_SOURCES = ("yolo",)
 
 # Crop geometry, read by prod and by utils/vlm_export.py alike. The crop is
 # cut in vlm_client.crop_with_marker; change either and prod shows the model
