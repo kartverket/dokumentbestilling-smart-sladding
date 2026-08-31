@@ -228,3 +228,11 @@ f0f327ef-a8cb-4437-a186-867b7c6cfbd9    # 5 sifre i kanten av dokument, greit å
 da903d11-f959-4eb1-bbf3-3d4a49a2f4d2    # én sladd dekker tre fødselsnumre (mangler-ccc5dbad4667, mangler-f8bb76851ce2, mangler-39338a9dfe7d)
 74542057-2309-4c91-aee3-b60ca6f6358c    # Grei, men for stor boks (mangler-5f4bbba7a782)
 416636be-bdce-42df-9e0b-b2363124af96    # én sladd dekker to fødselsnumre (mangler-5f31d1a579ec)
+8ba33710-27e8-4a01-a5cf-da24fd06c012    # én sladd dekker 10 fødselsnumre (mangler-175b1c5ed55a, mangler-c37592393c2b, mangler-bbaf0d3ccd51, mangler-b7534208f17e, mangler-6e08fc1e5a84, mangler-55f4a5155fd6, mangler-ee9b021e3456, mangler-affc4d46ae05, mangler-37721b7651e9)
+401dc438-4901-4153-b910-230e43607fa0    # én sladd dekker 3 fødselsnumre (mangler-f4351e20f0aa, mangler-4ae529b03f41)
+3083ff75-68fc-4072-8fb9-f8afe5667bcd    # én sladd dekker 2 fødselsnumre (mangler-a4cb8dbb8c7d)
+6fdeb1fe-f6af-41ce-9e3c-80bfe811b7d7    # én sladd dekker 4 fødselsnumre (mangler-ad9c839315ac, mangler-04834b9ee235)
+230fa133-bb4c-4147-a372-72162c6fdf20    # ugyldig, dekkes av sladden ovenfor
+3f56efb9-7b63-4eb4-935e-d09cc7a0ae49    # én sladd dekker 2 fødselsnumre (mangler-b4e13745bf08)
+c7b9f7f6-a701-4e19-a61e-e6aa3fd003c4    # én sladd dekker 2 fødselsnumre (mangler-40c5108d6f42)
+a7a11ed1-90b6-401a-a87a-d2012a2870c9    # Saksbehandlers sladd dekker navn i tillegg til pnr (mangler-b95eea7c65ad)
