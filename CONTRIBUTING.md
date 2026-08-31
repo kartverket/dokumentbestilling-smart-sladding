@@ -11,13 +11,19 @@ Built by Kartverket, published as open source under the MIT license.
 
 ## Checks
 
-CI runs `pytest` from `app/` on every push and pull request. Two self-tests run
-without a GPU, a server or access to any documents:
+CI runs three guards on every push and pull request to `main`. None of them
+needs a GPU, a model server or access to any documents, so you can run all
+three locally before you push:
 
 ```sh
 python utils/fnr_vakt.py --selftest    # the fnr guard catches what it should
+python utils/fnr_vakt.py --all         # no valid fødselsnummer in the tree
 python utils/vlm_selftest.py           # vlm_export -> vlm_judge -> vlm_evaluate
 ```
+
+The workflow installs only PyMuPDF, Pillow and numpy, which is what keeps it
+fast. Add a check that needs PaddleOCR or ultralytics and CI stops being cheap,
+so put that kind of test behind a flag instead.
 
 Do not commit sensitive data, test documents with real personal information, or
 environment secrets.

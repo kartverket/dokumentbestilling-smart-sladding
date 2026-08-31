@@ -22,7 +22,7 @@ Set by `server.env`, which `activate.sh` sources.
 | `SLADD_METADATA` | `.../smartsladding-uttrekk-metadata` | Metadata CSVs |
 | `SLADD_RUNS` | `/data2/runs` | Raw training runs |
 | `SLADD_WEIGHTS` | `/data2/vekter` | Published models |
-| `SLADD_PRODWEIGHTS` | `/data2/models/yolo-yearly-10000-docs.pt` | Default model |
+| `SLADD_PRODWEIGHTS` | `$SLADD_WEIGHTS/yolo-yearly-10000-docs/yolo-yearly-10000-docs.pt` | Default model |
 | `SLADD_VALIDATION` | `/data2/validering` | Validation results |
 | `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists |
 | `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk |
@@ -32,18 +32,24 @@ Set by `server.env`, which `activate.sh` sources.
 | `SLADD_LOGS` | `/data/docker` | Container log root on the host |
 | `SLADD_LOG_DAYS` | `30` | Days of log history per log file |
 | `SLADD_VLM` | empty | `1` turns the VLM verifier on |
-| `SLADD_VLM_URL` | `http://127.0.0.1:8080/v1` | llama-server endpoint |
+| `SLADD_VLM_URL` | `http://127.0.0.1:8080/v1` | llama-server endpoint, as the host sees it |
+| `SLADD_VLM_URL_DOCKER` | `http://host.docker.internal:8080/v1` | Same endpoint, as a container sees it |
 | `SLADD_VLM_MODEL` | `qwen3.8:27b` | Label only, llama-server serves one model |
+| `SLADD_VLM_TIMEOUT` | `20` | Seconds per box, then the box is kept |
+| `SLADD_VLM_CONCURRENT` | `4` | Boxes in flight per page |
 | `SLADD_VENV` | `.../venv/bin/activate` | Venv |
 
 `SLADD_LOGS` and `SLADD_LOG_DAYS` belong to deploy, not to training:
 `deploy.sh` reads them and passes them to compose as `LOG_ROOT` and
 `LOG_BACKUP_DAYS`.
 
-The three `SLADD_VLM` variables belong to both. `deploy.sh` passes them to the
-containers, and `utils/run.py` reads them as the defaults for `--vlm-url` and
-`--vlm-model`. All three are needed before anything happens. See the VLM
-verifier section in the README.
+The `SLADD_VLM` variables belong to both. `deploy.sh` sources this file and
+compose passes them to the containers, and `utils/run.py` reads them as the
+defaults for `--vlm-url` and `--vlm-model`. `SLADD_VLM` plus a URL and a model
+are needed before anything happens. The container gets
+`SLADD_VLM_URL_DOCKER` where the host-side tools get `SLADD_VLM_URL`, because
+loopback inside a container is the container. See the VLM verifier section in
+the README.
 
 An empty value after login means a stale shell, not a broken install. Run
 `source activate.sh` again in that pane.
@@ -126,7 +132,15 @@ post-filter (raw detection, for measuring what the rules contribute),
 `metadata=yes` sends rettsstiftelse types from `$SLADD_METADATA/uttrekk_N.csv`
 so the rule profiles match prod, `images=N` caps how many error images are
 drawn, `processes=N` sets the worker count. `precache=no` skips filling the
-cache first.
+cache first. `live=N` prints a running count of documents, boxes and kilder
+every N seconds; `live=no` turns it off, and the default is every 60 seconds.
+
+Anything starting with a dash is handed straight to `run.py`, so
+`--vlm --vlm-concurrent 1` works without the script knowing those flags.
+
+`deploy=test` replaces `model=` and sends every PDF over HTTP to a running
+container instead. The two cannot be combined, because the image carries its
+own weights and rules. See "Validating a deployment" in the README.
 
 ---
 
@@ -141,6 +155,8 @@ across runs. The cache is **on by default** when `SLADD_CACHE` is set.
   ocr/       ← PaddleOCR tokens + orientation
   yolo/      ← raw boxes, one subdirectory per weights hash
   dataset/   ← converted images + YOLO labels (training)
+/data2/cache/vlm/
+  <fingerprint>/  ← VLM verdicts, one directory per prompt and model
 ```
 
 The paths are derived from `--folder`, so `$SLADD_UTTREKK/uttrekk_5/` gives
@@ -148,6 +164,13 @@ The paths are derived from `--folder`, so `$SLADD_UTTREKK/uttrekk_5/` gives
 its own subdirectory, and a new model never reads another model's boxes. On a
 hit in both caches the PDF rendering is skipped too, so re-running the same
 model over the same uttrekk costs almost nothing.
+
+The VLM cache sits beside the uttrekk directories rather than inside one,
+because the key is the crop: the same box judged from another uttrekk gives the
+same answer. Its subdirectory name is a fingerprint of the prompt and the model
+settings, so editing the prompt starts a fresh directory and rejudges
+everything. Only `utils/run.py` writes it; the containers run without a
+judgement cache.
 
 Override or disable:
 
@@ -185,8 +208,10 @@ PDF rendering is not cached: the files are too large, roughly 25 MB per page.
 nothing outside training should point into it. `make publiser` is the bridge
 between the two.
 
-`$SLADD_PRODWEIGHTS` is the exception to this layout. It points at a flat file
-in `/data2/models`, not into the store.
+`$SLADD_PRODWEIGHTS` points at one of the published models in the store, the
+weights file itself and not the directory. That is the model `run.py` uses when
+`--yolo-weights` is omitted and the one `./deploy.sh build` bakes in without a
+`weights=` argument.
 
 ## File map
 
@@ -196,8 +221,10 @@ server.env         ← the SLADD_ variables (loaded by activate.sh)
 lag_liste.sh       ← generate document ID lists from metadata
 valider_yolo.sh    ← validation, YOLO only
 valider_full.sh    ← validation, full production logic (OCR + YOLO)
+deploy.sh          ← build, test and promote the container images
 app/ocr_cache.py   ← per-document OCR cache
 app/yolo_cache.py  ← per-document YOLO cache
+app/vlm_cache.py   ← per-crop cache of the verifier's answers
 train/Makefile     ← training pipeline
 train/scripts/publish_model.py  ← run → finished model in $SLADD_WEIGHTS
 ```

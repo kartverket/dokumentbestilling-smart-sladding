@@ -17,6 +17,12 @@ pip install ultralytics pymupdf pandas numpy
 
 The base model (for example yolo26x or yolo26l) downloads automatically.
 
+On a machine without direct internet this bites twice. The base model is one
+download, but ultralytics also fetches `yolo26n.pt` for its AMP check at every
+training start, and without the file in the working directory each start waits
+out a GitHub timeout first. Put `yolo26n.pt` in the repo root before a long run,
+or fetch both through the proxy.
+
 ## Full run
 
 ```bash

@@ -16,7 +16,7 @@ job/      the batch job that drives production; calls the API, no ML of its own
 train/    training pipeline for the YOLO model            (train/README.md)
 utils/    analysis and test tooling: run, draw, statistics
 config/   gunicorn config for the container
-docs/     technical description, server notes, diagrams   (docs/SERVER.md)
+docs/     technical description with diagrams, server notes (docs/SERVER.md)
 ```
 
 ## Install
@@ -277,17 +277,30 @@ container.
 
 ```sh
 export SLADD_VLM=1
-export SLADD_VLM_URL=http://<host>:8080/v1
+export SLADD_VLM_URL=http://127.0.0.1:8080/v1
+export SLADD_VLM_URL_DOCKER=http://host.docker.internal:8080/v1
 export SLADD_VLM_MODEL=qwen3.8:27b
 ```
 
-All three are needed. Without a URL and a model there is nothing to call, and
-the pipeline runs as it did before. The container reaches the URL from the
-inside, so `localhost` there is the container itself and not the host.
+`SLADD_VLM` plus a URL and a model are what turn the verifier on. Without a URL
+and a model there is nothing to call, and the pipeline runs as it did before.
+
+The two URLs exist because the same endpoint has two addresses. `SLADD_VLM_URL`
+is the one the host-side tools use, so it stays on loopback. Inside the
+container `localhost` is the container itself, so compose sends
+`SLADD_VLM_URL_DOCKER` instead and falls back to `SLADD_VLM_URL` when it is
+empty. `host.docker.internal` resolves through the `extra_hosts` entry in
+`docker-compose.yml`. Set only `SLADD_VLM_URL` and the container will call
+itself and get nothing.
+
+`SLADD_VLM_TIMEOUT` (seconds per box) and `SLADD_VLM_CONCURRENT` (boxes in
+flight per page) reach the container the same way, and default to 20 and 4.
 
 The container also runs with `HTTP_PROXY` set for traffic to the outside. VLM
-calls skip it, since the endpoint is on the inside. Set `SLADD_VLM_PROXY` if
-yours really does sit behind the proxy.
+calls skip it, since the endpoint is on the inside. `SLADD_VLM_PROXY` sends them
+through a proxy anyway, but it only works for the tools that run on the host:
+`docker-compose.yml` does not pass it into the container, so add it to the
+environment block there first if a container ever needs it.
 
 ### Turning it on in run.py
 
@@ -414,7 +427,7 @@ by line.
 ./deploy.sh rollback          # back to the previous prod tag
 ./deploy.sh start|stop prod|test
 ./deploy.sh logs prod|test
-./deploy.sh prune             # delete old images, cannot be undone
+./deploy.sh prune [keep]      # delete old images, cannot be undone
 ```
 
 `start` and `stop` never change version; they bring the tag already in `.env`

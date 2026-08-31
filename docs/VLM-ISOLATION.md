@@ -23,14 +23,19 @@ Ours does not. `app/vlm_client.py` builds this body and nothing else:
 ```python
 body = {"model": model, "messages": messages,
         "temperature": temperature, "max_tokens": max_tokens}
+if thinking:
+    body["reasoning_effort"] = thinking
 ```
 
-No `tools`, no `tool_choice`, no `function_call`. The reply goes to
-`parse_answer`, which reads it as JSON and keeps four strings. The verdict
-is `ja` or `nei`, and `vlm_verifier.verify_page` uses it for one decision:
-drop a box or keep it. Nothing from the model is executed,
-written to a path, or used to build a path. This holds as long as no one adds
-a `tools` field, so treat that as the line not to cross.
+Five keys at most, and `reasoning_effort` only says how much the model may
+think before answering. No `tools`, no `tool_choice`, no `function_call`. The
+reply goes to
+`parse_answer`, which reads it as JSON and keeps four strings and a small dict
+of checklist flags. The verdict is `ja` or `nei`, and
+`vlm_verifier.verify_page` uses it for one decision: drop a box or keep it.
+Nothing from the model is executed, written to a path, or used to build a path.
+This holds as long as no one adds a `tools` field, so treat that as the line
+not to cross.
 
 **Can the server process read files or reach the internet?** That depends
 entirely on which server you run and how the unit is written. It is the real
@@ -161,10 +166,13 @@ startup log rather than trusting the arithmetic.
 default. `vlm_client` caps the answer at 150 tokens, so a monologue eats the
 budget, the reply truncates, `parse_answer` cannot read it and every box falls
 back to «ja». The verifier would then run and remove nothing, which looks like
-success. `--reasoning off --reasoning-budget 0` turns it off at the
-server, which is why the request body needs no thinking field of its own.
-Measured after: 21 completion tokens, `finish_reason` stop, no `<think>` in
-`content`.
+success. It is turned off from both ends: `--reasoning off --reasoning-budget
+0` on the server, and `reasoning_effort: "none"` in every request. An endpoint
+that does not understand the field answers 400, and `vlm_verifier` drops it and
+retries once rather than answering «ja» to every box for the rest of the run.
+Answers from a call where the field was dropped stay out of the judgement
+cache, since they no longer match its fingerprint. Measured after: 21
+completion tokens, `finish_reason` stop, no `<think>` in `content`.
 
 **The GPU is a V100S, which is Volta, sm_70.** CUDA 13 dropped Volta, so the
 toolkit has to be a 12.x and the build wants
@@ -343,7 +351,8 @@ curl -s http://127.0.0.1:8080/v1/models
 
 **Prompt injection.** A scanned document can contain text aimed at the model,
 and the model reads the crop. It cannot do anything with an instruction: there
-are no tools, and the reply is parsed down to three values. The worst case is a
+are no tools, and the reply is parsed down to a verdict and a few strings that
+only ever get compared, never run. The worst case is a
 flipped verdict on one box. In the dangerous direction, a wrongly removed
 sladd, the fnr guard in `vlm_client.fnr_protects` sits behind it and reads the
 line again with `find_fnr`. Treat injection as a recall risk, not an
