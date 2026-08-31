@@ -318,6 +318,8 @@ fil_revisjon_id,sidetall,x,y,width,height,type,kommentar
 1148012360,15,371.50,125.25,41.71,15.02,,
 1153373046,10,161.04,123.36,33.60,16.32,,én sladd dekker 2 fødselsnumre
 1153373046,10,162.00,106.80,35.04,16.80,,én sladd dekker 2 fødselsnumre
-1153373046,11,163.92,106.80,36.72,15.12,,"dekkes av to andre sladds, mangler egen"1153373046,13,157.20,110.88,34.56,16.56,,én sladd dekker 2 fødselsnumre
+1153373046,11,163.92,106.80,36.72,15.12,,dekkes av to andre sladds, mangler egen
+1153373046,13,157.20,110.88,34.56,16.56,,én sladd dekker 2 fødselsnumre
 1153373046,13,159.84,94.08,35.04,17.04,,én sladd dekker 2 fødselsnumre
 1161120448,8,154.08,255.84,28.56,10.08,,Saksbehandlers sladd dekker navn i tillegg til pnr
+837426,5,413.07,367.67,33.97,8.42,,Saksbehandlers sladd dekker fødselsdato, ikke pnr

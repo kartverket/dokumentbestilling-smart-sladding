@@ -238,3 +238,19 @@ c7b9f7f6-a701-4e19-a61e-e6aa3fd003c4    # én sladd dekker 2 fødselsnumre (mang
 a7a11ed1-90b6-401a-a87a-d2012a2870c9    # Saksbehandlers sladd dekker navn i tillegg til pnr (mangler-b95eea7c65ad)
 d3c17768-ba2e-4035-b5f4-4aaa439402bf    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
 de9fdd92-e786-4f23-8e01-334f1d0a6ce7    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+b4e8207d-795a-4574-a239-6ad8fa5603cf    # Saksbehandlers sladd dekker fødselsdato, ikke pnr (mangler-8cc3cba74e82)
+8ecb2d5b-bc03-4874-bd6c-284846dbb24f    # koordinat
+88c089fc-e3b3-4a07-b39b-5b13dc0d264a    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller (utenom det som er sladdet av annen sladd)
+8fc36257-43e0-4dad-9440-a8db3dfd5e01    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+a9682341-cb1e-4ebc-be4e-0bbbb9bbcbbd    # kontonummer
+2cac197f-0d88-4008-b9e5-3598d402f064    # Dekker deler av fnr som dekkes av andre sladdebokser
+2fdd7ba4-6198-40c6-b015-d750c6f19980    # Dato
+ca2d718e-005e-4047-84b5-2a8409160b61    # Beløp
+75908ee1-d476-4c8f-8e77-43a1080bdead    # Kontonummer
+6b189614-b9ba-4636-9564-843b095f0b38    # totalbom
+0a4fde6f-a35e-4ed2-9168-26d4a2a13a21    # totalbom
+27fb853f-29d8-4daa-9ff4-d122be59a600    # kontonummer
+73e84088-524c-4769-b353-94dcae122223    # totalbom
+5edf0411-d0c9-4ffc-81b7-a6890e9aee01    # totalbom
+ab6a4c5a-37e8-438d-bc5b-85547df9003d    # kontonummer
+c9236993-18c3-443c-8e07-21e2735378bc    # referanse
