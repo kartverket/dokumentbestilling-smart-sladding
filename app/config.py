@@ -66,7 +66,7 @@ RULE_LINE_EVIDENCE = {"reject_run_6_10": 8, "reject_orgnr": 1,
 # An 11-digit window stitched across a decimal or a gap outside the legal
 # positions (after digit 2/4/6) is a coordinate column, not an fnr.
 # max_gap is in digit widths; handwritten fnr reach ~6.
-RULE_WINDOW = {"max_gap": 8.0, "reject_decimal_gap": 1}
+RULE_WINDOW = {"max_gap": 6.5, "reject_decimal_gap": 1}
 
 # ── Rule profile per rettsstiftelsestype ──────────────────────────
 # The coordinate family is maps, measurement tables and coordinate lists.
