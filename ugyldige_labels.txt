@@ -254,3 +254,4 @@ ca2d718e-005e-4047-84b5-2a8409160b61    # Beløp
 5edf0411-d0c9-4ffc-81b7-a6890e9aee01    # totalbom
 ab6a4c5a-37e8-438d-bc5b-85547df9003d    # kontonummer
 c9236993-18c3-443c-8e07-21e2735378bc    # referanse
+87d84fe8-9a73-4048-b4b6-17cfb4a9d57e    # siste 5 sifre av kontonummer
