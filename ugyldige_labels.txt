@@ -224,3 +224,7 @@ ccde4879-506c-4059-aeb2-1a01a786dc3e    # kontonr
 f0f327ef-a8cb-4437-a186-867b7c6cfbd9    # 5 sifre i kanten av dokument, greit å sladde, dårlig for trening
 1da7aa78-f45a-46e7-a449-69eead84001a    # unødvendig, 3 sifre i kanten av dokument
 22e2e9c3-05c4-4475-8c58-1ffa2d45078f    # unødvendig, 4 sifre i kanten av dokument
+9a666c66-b5d9-45bd-b242-a7ecaf778855    # én sladd dekker to fødselsnumre (mangler-04917c4f76ef)
+da903d11-f959-4eb1-bbf3-3d4a49a2f4d2    # én sladd dekker tre fødselsnumre (mangler-ccc5dbad4667, mangler-f8bb76851ce2, mangler-39338a9dfe7d)
+74542057-2309-4c91-aee3-b60ca6f6358c    # Grei, men for stor boks (mangler-5f4bbba7a782)
+416636be-bdce-42df-9e0b-b2363124af96    # én sladd dekker to fødselsnumre (mangler-5f31d1a579ec)
