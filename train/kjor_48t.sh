@@ -77,6 +77,13 @@ preflight() {
           https_proxy="$PROXY" HTTPS_PROXY="$PROXY" \
           python -c "from ultralytics import YOLO; YOLO('$BASE_L')" ) || ok=1
     fi
+    # Uten yolo26n.pt i arbeidskatalogen henger hver treningsstart i github-timeouts.
+    if [[ ! -f "$SLADD_REPO/yolo26n.pt" ]]; then
+        log "Henter yolo26n.pt (AMP-sjekken) via proxy ..."
+        ( cd "$SLADD_REPO" &&
+          https_proxy="$PROXY" HTTPS_PROXY="$PROXY" \
+          python -c "from ultralytics import YOLO; YOLO('yolo26n.pt')" ) || ok=1
+    fi
     python -c "import torch, ultralytics, fitz, pandas" || ok=1
     if (( ok == 0 )); then
         log "Preflight OK. Start med:  tmux new -s 48t '$SLADD_REPO/train/kjor_48t.sh start'"
@@ -288,6 +295,7 @@ fase_rapport() {
 
 start() {
     [[ -n "${SLADD_REPO:-}" ]] || { echo "Kjør først: source activate.sh"; exit 1; }
+    cd "$SLADD_REPO" || exit 1
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     mkdir -p "$LOGDIR/pilot"
     touch "$RUNLIST"

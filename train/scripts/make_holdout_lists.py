@@ -3,7 +3,10 @@
 Labeled documents (fasit via iter_label_rows, so manglende_labels.csv counts)
 are split per decade at document level. Zero-fnr documents (no fasit rows;
 human review covers every document in an uttrekk, so no rows means no fnr)
-are sampled per decade into both sides. Documents in
+are sampled per decade into both sides. Documents the metadata does not know
+are dropped: manglende_labels.csv is global, so the fasit reader also yields
+rows for other uttrekk, and those documents are never processed here.
+Documents in
 --force-train, typically the overlap with another training uttrekk, never land
 in holdout: labeled ones go to the train list, unlabeled ones are dropped
 because the other uttrekk already carries them. The split is seeded, so the
@@ -103,9 +106,14 @@ def main():
     decade_of = {d: int(y) // 10 * 10 for d, y in zip(meta_ids, years)
                  if d and not pd.isna(y)}
 
-    if labeled - alle_dok:
-        print(f"NB: {len(labeled - alle_dok)} labeled docs missing from "
-              f"metadata (kept, decade 'ukjent')")
+    # manglende_labels.csv is global: its rows for other uttrekk never get
+    # processed here, so in a list they would count as lost fnr for every model.
+    foreign = labeled - alle_dok
+    if foreign:
+        print(f"Excluded {len(foreign)} documents that are not in the metadata "
+              f"(rows from manglende_labels.csv for another uttrekk)")
+        labeled -= foreign
+        manual_docs -= foreign
 
     def stratified_split(docs, take):
         """Seeded per-decade shuffle; returns (taken, rest)."""
