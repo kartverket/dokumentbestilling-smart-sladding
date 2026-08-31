@@ -236,3 +236,5 @@ da903d11-f959-4eb1-bbf3-3d4a49a2f4d2    # én sladd dekker tre fødselsnumre (ma
 3f56efb9-7b63-4eb4-935e-d09cc7a0ae49    # én sladd dekker 2 fødselsnumre (mangler-b4e13745bf08)
 c7b9f7f6-a701-4e19-a61e-e6aa3fd003c4    # én sladd dekker 2 fødselsnumre (mangler-40c5108d6f42)
 a7a11ed1-90b6-401a-a87a-d2012a2870c9    # Saksbehandlers sladd dekker navn i tillegg til pnr (mangler-b95eea7c65ad)
+d3c17768-ba2e-4035-b5f4-4aaa439402bf    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+de9fdd92-e786-4f23-8e01-334f1d0a6ce7    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
