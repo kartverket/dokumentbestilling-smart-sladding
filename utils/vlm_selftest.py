@@ -390,6 +390,12 @@ def check_verifier(rot):
 
 def main(keep):
     rot = tempfile.mkdtemp(prefix="vlm_selftest_")
+    # The judge subprocesses default to $SLADD_CACHE/vlm; on a machine with
+    # that set they would share the real judgement cache and serve each
+    # other's stub answers.
+    os.environ["SLADD_CACHE"] = os.path.join(rot, "cache")
+    os.makedirs(os.environ["SLADD_CACHE"], exist_ok=True)
+    os.environ.pop("SLADD_VLM_CACHE", None)
     try:
         print(f"Work directory: {rot}")
         pdf_dir, ocr_dir, truth_csv, res_csv = build_data(rot)
@@ -666,6 +672,7 @@ def main(keep):
         srv, url, _ = make_server(bad=False, answers=answers)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "2",
@@ -687,6 +694,7 @@ def main(keep):
         srv, url, counter = make_server(bad=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "1", "--attempt", "1", "--timeout", "20")
@@ -703,6 +711,7 @@ def main(keep):
 
             # Resuming: the failed rows must be retried
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--concurrent", "1", "--resume")
@@ -718,6 +727,7 @@ def main(keep):
         srv, url, counter = make_server(thinks=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_tenk.csv"), "--concurrent", "1")
@@ -730,6 +740,7 @@ def main(keep):
             # With --thinking auto the field is omitted and content comes back
             # empty: the error must SAY that thinking was the cause.
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_auto.csv"),
@@ -752,6 +763,7 @@ def main(keep):
                 f.write("# the hard ones\n2\n5\n")
             path = os.path.join(ut, "d_nr.csv")
             printout = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded", "--manifest",
                             os.path.join(ut, "manifest.csv"), "--url", url,
                             "--model", "stub", "--out-csv", path, "--concurrent", "1",
@@ -769,11 +781,13 @@ def main(keep):
         try:
             path = os.path.join(ut, "d_std.csv")
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded", "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
                  "stub", "--out-csv", path, "--concurrent", "1")
             check(len(read(path)) == 6, "the first run judges all 6")
             ut2 = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded", "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
@@ -782,6 +796,7 @@ def main(keep):
                   "a second run without flags does NOTHING. Finished work is "
                   "not overwritten")
             ut3 = run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded", "--manifest",
                        os.path.join(ut, "manifest.csv"), "--url", url,
                        "--model", "stub", "--out-csv", path,
@@ -795,6 +810,7 @@ def main(keep):
         srv, url, counter = make_server(reject_reasoning=True)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded",
                  "--manifest", os.path.join(ut, "manifest.csv"),
                  "--url", url, "--model", "stub", "--out-csv", os.path.join(ut, "d_400.csv"), "--concurrent", "1")
@@ -907,6 +923,7 @@ def main(keep):
         srv, url, _ = make_server(bad=False, answers=answers)
         try:
             run_step(os.path.join(HERE, "vlm_judge.py"),
+                 "--no-cache",
                  "--no-skip-guarded", "--manifest",
                  os.path.join(ut, "manifest.csv"), "--url", url, "--model",
                  "stub", "--concurrent", "1",
