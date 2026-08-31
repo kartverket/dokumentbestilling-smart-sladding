@@ -44,7 +44,7 @@ def default_weights():
 
 
 # ---- YOLO --------------------------------------------------
-YOLO_CONF          = 0.12      # predict threshold
+YOLO_CONF          = 0.05      # predict threshold
 YOLO_CONF_NO_TEXT = 0.40   # required when Paddle read nothing in the box
 YOLO_CONF_VERTICAL = 0.90
 VERTICAL_FACTOR    = 1.3       # height > 1.3 x width counts as vertical
