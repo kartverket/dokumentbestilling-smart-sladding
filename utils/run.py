@@ -399,8 +399,8 @@ def main():
                         "verifier answers without it")
     p.add_argument("--vlm", action="store_true",
                    help="run the VLM verifier: every box in the stratum (see "
-                        "VLM_SOURCES in config, only documents without a rule "
-                        "profile) is sent to the model as a crop, and dropped "
+                        "VLM_SOURCES in config) is sent to the model as a "
+                        "crop, and dropped "
                         "on a clear «nei». Needs --vlm-model and an endpoint. "
                         "The crops come from the page image, so a fully cached "
                         "document renders only if it has a box in the stratum")

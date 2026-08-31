@@ -303,12 +303,16 @@ def check_verifier(rot):
             check(n == 0 and counter["n"] == before + 1,
                   f"a {name} document is judged like any other")
 
-        # Only kilde «yolo» is worth the GPU: the gain measured on the other
-        # kilder was 1 box of 332.
+        # «begge» and vertical detections stay outside the stratum.
         left, judged, dropped = vlm_verifier.verify_page(
-            boxes("begge", "paddle", "yolo_vertikal"), image, [], a)
-        check((judged, dropped, len(left)) == (0, 0, 3),
-              "begge, paddle and yolo_vertikal never reach the model")
+            boxes("begge", "yolo_vertikal"), image, [], a)
+        check((judged, dropped, len(left)) == (0, 0, 2),
+              "begge and yolo_vertikal never reach the model")
+
+        left, judged, dropped = vlm_verifier.verify_page(
+            boxes("paddle"), image, [], a)
+        check((judged, dropped, len(left)) == (1, 1, 0),
+              "kilde paddle is in the stratum and an unprotected «nei» removes it")
 
         # The fnr guard: the model says «nei» to digits that are shaped like a
         # fnr. Both readings of the line must overrule it.

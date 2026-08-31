@@ -8,8 +8,7 @@ verifier can only remove sladdinger, never add or move one.
 
 Two guards sit in front of the «nei»:
 
-  stratum   Only kilder in VLM_SOURCES, and only in documents that get no rule
-            profile. A box the rules already handle is not worth the GPU.
+  stratum   Only kilder in VLM_SOURCES reach the model.
   fnr guard PaddleOCR's line and the model's own transcription are re-read by
             find_fnr. A valid 11-digit run, or a fnr ledetekst next to a
             five-digit run, overrules the «nei». The model reads better than
