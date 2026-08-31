@@ -303,16 +303,13 @@ def check_verifier(rot):
             check(n == 0 and counter["n"] == before + 1,
                   f"a {name} document is judged like any other")
 
-        # «begge» and vertical detections stay outside the stratum.
+        # Only kilde «yolo» is worth the GPU: the fnr guard vetoes the
+        # other kilder, measured as 1 removable box of 332 on uttrekk4 and
+        # 0 of 33 paddle boxes on holdout48.
         left, judged, dropped = vlm_verifier.verify_page(
-            boxes("begge", "yolo_vertikal"), image, [], a)
-        check((judged, dropped, len(left)) == (0, 0, 2),
-              "begge and yolo_vertikal never reach the model")
-
-        left, judged, dropped = vlm_verifier.verify_page(
-            boxes("paddle"), image, [], a)
-        check((judged, dropped, len(left)) == (1, 1, 0),
-              "kilde paddle is in the stratum and an unprotected «nei» removes it")
+            boxes("begge", "paddle", "yolo_vertikal"), image, [], a)
+        check((judged, dropped, len(left)) == (0, 0, 3),
+              "begge, paddle and yolo_vertikal never reach the model")
 
         # The fnr guard: the model says «nei» to digits that are shaped like a
         # fnr. Both readings of the line must overrule it.
