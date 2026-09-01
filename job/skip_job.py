@@ -25,7 +25,7 @@ def hentDokumenterTilSladding():
 
         er_elektronisk_tinglyst = document.get('erElektroniskTinglyst')
         if er_elektronisk_tinglyst:
-            logging.info(f'Document {docid} is elektronisk tinglyst')
+            logging.info(f'Document {ident} is elektronisk tinglyst')
 
         dokumentStatus = requests.get(f'{database_base_url()}/dokumentstatus/{dokumentaar}/{dokumentnummer}/{embetenummer}')
 
