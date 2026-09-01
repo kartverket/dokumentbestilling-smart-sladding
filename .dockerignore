@@ -1,2 +1,16 @@
-Dockerfile
-docker-compose.yml
+*
+!app/
+!config/
+!requirements.txt
+# The model ./deploy.sh stages here just before the build. If it is not in the
+# context, the Dockerfile cannot copy it in.
+!.byggvekter/
+app/logs/
+app/__pycache__/
+app/*.tar
+# Leftovers from the old weights submodule. The weights come from .byggvekter/.
+app/weights/
+# The paddle models are downloaded in the Dockerfile. If they are in the build
+# context too they get copied on top, and the image carries them twice —
+# ~139 MB of extra disk per image, for nothing.
+app/PP-*/

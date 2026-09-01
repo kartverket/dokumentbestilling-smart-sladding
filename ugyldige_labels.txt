@@ -1,0 +1,257 @@
+# Invalid labels — rows in the labels CSV that are wrong
+# Please note what is wrong with each one
+
+72704437-82d6-4099-92f7-57e3eb0abce3
+5e9b6b42-3cf5-456f-bcfd-8b664d8ed418
+1099bae9-fc22-442c-a2a5-858ca8712699
+137a79b8-7254-4a58-8224-4f895bf20bae
+a5057285-e134-4786-af36-3b4aaa8b56b8
+5eb7359e-cea6-4c99-859d-201da9a9438e    # kontonummer
+a124cc18-1258-4c14-a084-a35a8bb2ac49    # kontonummer
+2f948d21-76f9-4caf-8d45-8f8888edf6d4    # koordinat
+cfa26e5c-42b2-4813-9700-a5462b953f87    # koordinat
+37b4dd44-03e0-4e63-86ec-bff55b02b152    # koordinat
+9f6181ae-1cc9-4941-afa8-8c4972783853    # koordinat
+0898e6b9-31ec-4987-b78b-d85a582b20f9    # koordinat
+1b13b51b-ae78-46e1-bd0a-091d6f687f14    # referanse
+09358e83-e28a-4b8b-8bc3-890e9e7f4015    # orgnr
+8389b633-c73a-42e8-adcd-5778add7974b    # kontonummer
+133a5750-273d-4189-a3df-73008737c01f    # kontonummer
+0c29f27f-3004-45a8-8353-d7b2a916a12d    # referanse
+2bbfa6e4-9afa-4311-a430-d60c13874f44    # kontonummer
+d73b681d-e8cc-4a07-bbf0-4744ee730764    # referanse
+3645c061-7027-47e3-949c-f26c25b84a59    # referanse
+ab7b7959-aa88-497b-b911-6d116991839e
+8f43cb26-ee78-4d72-b1b7-621b87a8109a    # kontonummer
+8e15c1a7-0206-4b4b-a201-449908f8b721    # orgnr
+7147f2f5-6364-4106-b6d0-6976fe195808    # kontonummer
+98f34ebf-5105-4231-9a57-18ce214743f5    # totalbom
+13e08131-bf08-454e-b1b1-5a855bb50a7d    # kontonummer
+b4e183c7-38b2-4167-bdeb-1ac9b4ea7ee7    # kontonummer
+f2d17f16-d297-47e5-ba2c-86f05c3d9cbe    # kontonummer
+a409056f-9655-4186-bec2-8955942ca007    # kontonummer
+68f4e265-5e73-4b6a-bf72-e38b85ee3fab    # kontonummer
+3384e493-ec74-48c7-85f1-54632aaa85d9    # kontonummer
+7fa0ec56-345f-43e3-a2e2-0a8139b59602    # kontonummer
+d04586b8-e25e-43cf-80e4-bc6e773e3355    # kontonummer
+4c39f7e6-7e91-433b-b941-f513c21585ca    # kontonummer
+64881297-6c93-4612-acef-e060aaf3aebc    # kontonummer
+197b019b-3810-40ba-86fb-b77cee023181    # kontonummer
+3b3719d6-7e46-472b-a9ca-b91c51aa37dc    # kontonummer
+95c490bb-91c1-485e-9b60-4497d87cbdc7    # kontonummer
+ac29665b-7be6-41ec-a14f-77a3453b57d1    # kontonummer
+948c4a99-7914-46c3-899e-e6c26b375b6d    # kontonummer
+786a7433-5f2c-4ce6-89cb-044e0e631812    # kontonummer
+59d2e0bb-9922-47a7-bfdd-a1ce61e27298    # kontonummer
+1cd98e35-a573-45ce-a962-ab3692a5c374    # orgnr
+de137d10-7bbc-4496-9d55-0d9e4481f9a0    # orgnr
+4ebfdbe6-0e80-4df8-b1a3-412920a47f69    # orgnr
+d637c295-43d1-4dbd-ad3a-fde61b57e6d1    # kontonummer
+73a1c5ef-3f1f-4c01-8c25-2cec3a4cb098    # kontonummer
+dd3cdb2b-d2db-4a5e-8afa-5e231614accf    # orgnr
+efd8e851-4a6a-4467-8602-b9a1eb2dd7a0    # orgnr
+8d9b554e-3097-4341-981c-d4115e7905ed    # kontonummer
+509f8554-c6c5-458f-9cab-e30e27ece131    # kontonummer
+6b3ece0a-72f0-4b6f-bfc7-0d49f581879c    # kontonummer
+616d3858-be42-4163-988b-c9482ae49a9e    # liten boks (over orgnr)
+984b0107-37bb-4444-bec2-e8049b73816a    # liten boks (over orgnr)
+7deb1870-e3c4-4c48-b327-c85160ff760c    # orgnr
+2c7df17f-3edf-4463-a55b-34e58dea19d8    # liten boks (over orgnr)
+9905e412-8f2a-4b64-ba76-bbde1d0729ad    # orgnr
+776bba54-4bed-49ec-822b-63bffef1d35f    # liten boks (over orgnr)
+5d86b4b6-4e1b-44b4-8b26-c50f1758f259    # kontonummer
+18ef8843-fbc1-4098-9803-b71f90942809    # gnr/bnr
+eaee165d-c312-4d48-adb8-42e0798dfdec    # kontonummer
+767b0a01-07ac-411a-a2e8-e58d6f3fd3c4    # kontonummer
+cfb5af60-b4ac-4aa2-90f7-1a05011a0ef0    # kontonummer
+39fcf2d0-36b2-4bc7-8d9c-478f19d8fee5    # kontonummer
+ab69ff62-e1a4-468d-942a-e2acec65aa07    # kontonummer
+cdc0bc04-15bc-45b1-b7fa-7ce6b2692dcb    # kontonummer
+c3cda255-07ce-4144-b75d-2183870fa1c0    # kontonummer
+980b86fb-940c-41bd-9d6f-ce9b9c6755fc    # orgnr
+17a6734c-7984-4fcc-a200-ea96723ed1db    # kontonummer
+94aad662-1ea8-40f7-a879-ba368ea4d058    # kontonummer
+890ca3fb-9064-4345-b31a-0d67f63665f4    # orgnr
+1a0afeac-695c-4a3d-9bed-01efe0b44b3f    # totalbom
+6db08d90-0751-4671-af6b-da34c20bb521    # kontonummer
+9329d44b-2939-4c75-a598-25686a05840d    # kontonummer
+dc20b876-bd0f-440e-9271-33d679507175    # kontonummer
+0cf519d0-072a-44b2-9ba3-63d8afce8a7e    # orgnr
+76298dc1-fd4e-4e70-b13b-17f5210229b8    # orgnr
+036fa63a-3dac-4e64-a4de-b2704195f688    # andelsbrøk (opp ned!)
+7bd88c78-60b4-40c1-afbe-d6e4689bdf21    # kontonummer
+2fb4680d-8c3d-419d-b90a-9a24c7421710    # totalbom
+dbff4ca1-7bc6-4905-8fd8-2cff5320dcd4    # totalbom
+f56ecdef-5afc-4707-9963-fe2c96558507    # orgnr
+a0f28ac5-0d09-4db4-ba29-f2887326ec6c    # orgnr
+accf5615-083d-4d51-9257-0b4c336585a0    # orgnr
+1be4873f-8e8f-40bf-93cf-58b49825614c    # tilfeldige tall
+13244ad4-50d1-4c04-8beb-6f553d3d4d32    # tilfeldige tall
+ff9475ed-d068-47a3-a41d-9144ca2b9722    # tilfeldige tall
+1547b75a-362b-4aea-b303-72cbce209652    # tilfeldige tall
+0b46ceaa-f325-4ac6-bb8f-4a10881b3e7f    # orgnr
+5068c9b5-af1a-48d9-8e07-fbfa06aa1dfb    # orgnr
+d138f05f-dbcc-4c8e-8a3f-0400bfe5adcd    # orgnr
+2bcbe1e7-f3c2-4832-ba55-a2807efc29a3    # kontonummer
+2b54361e-f6b9-47e2-b3d8-9c658362c744    # kontonummer
+0ad3bd66-dee7-4eb8-be48-f264204d905c    # kontonummer
+54c00e8b-278a-406c-bc6a-30fb7b8ece95    # kontonummer
+d841b5fd-7dad-4da8-aa96-d9737314d7b7    # orgnr
+7ac07960-16db-4aa6-ac5f-4c5f8b7bf051    # kontonummer
+694cb858-b862-4943-820e-091cdbce3229    # kontonummer
+145d3194-620d-486f-8875-8046ba776843    # kontonummer
+1438f4f5-92f1-4000-b422-141ce475ebf4    # kontonummer
+f8fdf6c6-f219-4931-858a-3cc42fa4ace8    # kontonummer
+1d40a9cd-7fb9-4a38-8971-1698f695ae4b    # kontonummer
+186b783a-19f5-4d2d-a35f-71f81e4fad96    # kontonummer
+69d0ef1b-9cde-4afc-a2ae-1dda79ce36a4    # kontonummer
+8758b4c1-791a-4fd0-b5b6-150cd7c04849    # kontonummer
+c933f196-7644-4504-8a97-88c40933a652    # kontonummer
+e4e1ac47-f3fe-4c72-a1a9-b302d64a74e0    # kontonummer
+53c84b44-9d9b-4b88-a32d-aea9d75068fd    # kontonummer
+e6acda37-0aa2-40ed-9468-2700931166bc    # orgnr
+d4627fdd-7903-4cfc-a1d5-a519bd5da7b6    # kontonummer
+8378cb93-5301-4864-aa7c-0567f007a212    # totalbom
+d08d54b0-1050-4282-ac65-f177df9456f8    # kontonummer
+a2a6dec2-2c21-4b70-a2b4-a9cefbe4240d    # kontonummer
+ce9d9f4a-dfcf-471c-929d-9bcd3abfdbc0    # kontonummer
+85e16d68-ec4c-4b7a-a1cf-07566d1af4d8    # liten boks (over fnr)
+12db501b-381a-4db4-b2bc-b05a5ea15aa1    # dekker bare halve pnr
+b0fd8bfa-e290-4532-b9da-94bae9bf7acb    # kontonummer
+04758f59-5e37-4b39-81ea-aee9376d7f04    # kontonummer
+dba820d8-9a86-4173-b3bd-e321398888f6    # kontonummer
+9eaf7e4a-2a1a-450f-9e55-e0e46c5978ea    # kontonummer
+a00ee728-e2ce-40b2-88fa-98b8afce9eef    # totalbom
+f9f8ace7-aa97-4203-aca7-3cdacaf83fb6    # orgnr
+449c9ec7-5a33-4471-8482-2130cbfc6d73    # kontonummer
+6fb83b03-0003-45d1-ac34-5f993651b963    # kontonummer
+b2892cc4-2e28-41cb-a57e-96b33c3caac8    # saksnummer
+f9d6787b-a990-4325-99fa-ec46aca9a503    # kontonummer
+6d878e72-e8a2-4b5b-a6f8-30cf371c2339    # kontonummer
+532cb5bf-cf6e-4667-b201-fb898d1bd8d0    # kontonummer
+a11a3038-dc26-41d5-a3e8-531b89ebaad2    # kontonummer
+04c86150-159b-4813-9b85-3b1fa6976429    # totalbom
+297aa26b-4b26-4f49-8d7f-eb87d5094541    # orgnr
+cb7ffed9-18cb-4d6b-b4c1-1a45425e0be9    # orgnr
+3d5fa46e-c6df-4d44-8bc6-b0e038cb16c9    # orgnr
+15ea0089-4f19-40b9-b4f8-8a03916cb406    # kontonummer
+73e2c40b-7bb4-4f67-bb18-c8f148d940f1    # kontonummer
+687fc242-e8c1-412a-a125-d4b9ae9efbe5    # orgnr
+de50f706-98b9-4d0c-9b5b-7034bc6a5b54    # kontonummer
+c32047ad-8ac6-4687-a53c-a573b9191677    # kontonummer
+7b49a37c-6e47-4788-acd6-b89966103fdb    # kontonummer
+0849b426-1894-40b7-8bb0-8207836dda8b    # kontonummer
+7f6671e9-ca74-4d5d-90a7-49dfda258eff    # kontonummer
+c89727ca-6be3-4dd7-8a07-7d61d5abeeca    # kontonummer
+99e2a5ae-fcab-4858-a124-b5b0cdebbbbe    # kontonummer
+4a9f32bb-14cd-4967-97c4-ef0cd27f25b0    # kontonummer
+ba6aca29-f7e3-405f-8954-8c32cf60fd48    # kontonummer
+2731efde-d08f-48a3-aa56-e0c63b460313    # kontonummer
+4054a87f-7d70-4a73-b44e-483ed9108541    # kontonummer
+b1a9c161-ddcb-49b2-a481-c75c9ba86b84    # kontonummer
+4f5fb984-cb08-45bb-8bd1-f3e2551e4195    # kontonummer
+9c0bd431-cadc-4b11-898b-74a82ca1609e    # kontonummer
+8e3d9f54-4435-49a4-a7eb-a4a74640e407    # kontonummer
+1cd5d23b-69fd-4d58-86a2-1023636f88b4    # orgnr
+2e3fe1ea-43d2-4c96-bef1-b7332206050d    # kontonummer
+e5bff55f-1b04-46b7-b3e2-2c430532df0f    # kontonummer
+7679a2a8-d048-48a9-8fd8-4532918bf02b    # kontonummer
+bb3f1f7a-925e-455b-936e-b882c03e8386    # kontonummer
+d9b8284b-59d3-49b0-8507-5dea98cfd813    # kontonummer
+2419b6d3-1213-46ab-8ff6-aebac7617856    # orgnr
+07250bbe-80cb-4e16-b5b1-76b3efb9e7e3    # orgnr
+09396254-a7c6-40ad-b4a2-5c0f10642f07    # kontonummer
+7eba54e2-0578-43cf-9180-21c2d7c65b14    # totalbom
+59535d3f-303e-466a-8e60-badc76668c8f    # kontonummer
+fa77145f-34e9-4dd2-a97d-38bc6c53d5a5    # kontonummer
+c22e328d-8b03-4c19-bc63-0145142f7bb6    # orgnr
+5fe9ac88-39c1-4e5f-801f-af1f6dfb8649    # orgnr
+ba4309a9-41cd-42f6-8b58-5a301683b968    # orgnr
+dc2fcce7-7108-483e-8929-e2b14b23f680    # kontonummer
+9988e2ff-a334-4a0f-85ca-a116bc025ec9    # orgnr
+60a631ac-afd2-4f0c-ad56-f346cd4bb01c    # kontonummer
+ab649dee-4441-4d8a-be6e-31ffc59dba89    # kontonummer
+fe3df6cf-9d36-49fe-b8e4-54561257b4fc    # orgnr
+e633f9b1-4389-4f4a-91da-cf78345298ad    # kontonummer
+afa31239-b9b7-4207-b562-9d2f205f949c    # kontonummer
+b3d93a96-1685-479b-bbda-bdced8230e79    # kontonummer
+2394daaa-38a7-478a-8a5c-780af74b8070    # kontonummer
+366c4bce-cff2-4fcd-af77-d64491856032    # kontonummer
+105cc2e5-da5d-478d-aa85-75cd8618a165    # dato
+aa7cd3f0-2693-4342-8233-93aaede68baf    # kontonummer
+cd74eeea-59b7-4849-8189-3697bae25642    # kontonummer
+8349f159-a4da-43a2-8389-2bdba8ff40ae    # kontonummer
+1d90b4e9-ce65-4a84-9a25-70c21542764a    # kontonummer
+7b47a9a6-b036-4b1f-81f0-31eaee83e85a    # kontonummer
+8919955f-458d-4136-baf7-b6e2c5a6aa97    # kontonummer
+d7d03474-fbbc-4872-9abe-ffbffbc527f8    # kontonummer
+15e38df5-dcdb-4e15-bc6d-b4c41bc46fe5    # kontonummer
+5b18236e-04f5-4e09-88cd-25c54ae11cfe    # kontonummer
+2b8e95fb-83cb-4fa9-a43d-8167395015e2    # kontonummer
+c4ef8431-8e07-4b78-b2a3-5099a129fb69    # kontonummer
+3dbb407e-c5ca-4e20-b84f-e884705bdc1b    # kontonummer
+a210b336-6d64-4719-955d-ad8b5b33ffb2    # kontonummer
+56e83f1c-3a6f-40ff-a20c-856b5a0bb10c    # kontonummer
+a09a033b-9730-4b29-8638-6e526afff537    # kontonummer
+36591b6e-d381-4be4-9b46-32229100f4ef    # orgnr
+24d05362-48c2-4370-a6c1-a4c0a2f7a465    # orgnr
+bd81b27f-9932-4239-9c94-dc13780a4e59    # kontonummer
+15839c10-6319-43fc-aa94-f9b87a906b19    # orgnr
+fcf47a4e-860c-4b31-b1e7-2133f1dbef0f    # orgnr
+66dfdc68-e65f-4341-bd77-f49d89174707    # kontonummer
+f285e5ba-8612-4ac8-a31a-8e3e4ce191ec    # kontonummer
+bc0cd090-90bb-4013-835c-2b18b2296fa6    # kontonummer
+21291424-0186-4609-bcca-ec6a5d050944    # kontonummer
+ee74366c-c457-4eb8-b692-45642d115f5e    # kontonummer
+3788c0b7-f14f-45bf-afc6-75b83d2d05de    # kontonummer
+99e23751-a720-4deb-8c1b-07eebece2c16    # kontonummer
+6c0fccf7-03a5-4690-96f9-cd943681f329    # kontonummer
+1b60a6ce-5a37-46e3-bf14-7f7ed645b2ae    # orgnr
+1b84b6ff-93c9-409e-b65a-63cf0e3dc44e    # utenfor siden
+4bdbf952-a4e8-42ee-8046-55a3c45ef6c1    # én sladding over to numre (mangler-5747d3eb6439, mangler-0be60277a0cd)
+112a7fb8-359e-45e2-9955-119a060a4a71    # depotnummer?
+0b5bde87-3c84-4ed1-ae35-8ebfc880fa52    # orgnr
+07eaef38-56e0-4577-8a34-fb8e135c782d    # én sladd over 2 fnr (mangler-ac97c015c2ec)
+36abb01f-991d-4d52-b92b-e2947006dd19    # én sladd over 2 fnr (mangler-f527304024f5)
+814fb09d-cfa0-400a-bdfd-789dcbdda3dd    # én sladd over 2 fnr (mangler-137e42a83391, mangler-2e8ff5a78b3a)
+8bfa817e-dc92-4399-8b7e-bf6c6de01e87    # én sladd over 2 fnr (mangler-4642055de044, mangler-6503db200297)
+f35cc9b8-8cd9-4cfa-9074-eb53651a8197    # én sladd sladd over 26 fnr (mangler-865a4024d6c6, mangler-5053855982eb, mangler-87fa4aa7f752, mangler-b4fefd98aaf7, mangler-363c254d5ca0, mangler-afba97a09538, mangler-ea68734fbf23, mangler-f52ee073ea53, mangler-4dba60319a3f, mangler-8c0c58c6c515, mangler-c6a27a446f51, mangler-ca409a0a41cc, mangler-e4b208ae082b, mangler-c7b151e347a3, mangler-08c63b09eb13, mangler-3bf00e26c163, mangler-c8ecd15dec49, mangler-dfbe243c70db, mangler-9edbdb5a3692, mangler-298e042efff6, mangler-68a3af4fa87a, mangler-e563dded07df, mangler-994f8162c4df, mangler-dd90802ac6ea, mangler-33deb31107c5, mangler-443fa7b4d789)
+d927bf3b-0089-42aa-91f2-4ccbcf952bc5    # én sladd sladd over 29 fnr (mangler-33d44d92567d, mangler-df6902428b98, mangler-ed773ef6f1f9, mangler-580b7adc129e, mangler-3f8925d4340b, mangler-73b4d2f074eb, mangler-8688cef1fb14, mangler-569a6f5baa1e, mangler-d0caaca10c46, mangler-95a5b657457e, mangler-e965bcca62aa, mangler-8f41ed0314c7, mangler-03ddf8de18a9, mangler-4836d3dc9a14, mangler-06d2190ce342, mangler-5d1ede581b87, mangler-48e6375db67a, mangler-89752e0f7a3d, mangler-b93b25fc8470, mangler-a4b831fb51ea, mangler-d5fd26494a6d, mangler-3aad6367895b, mangler-268bf1a9777c, mangler-5062a6ddfb16, mangler-f3b6ea81b57a, mangler-2c535d5b28df, mangler-4bb1e12c4bca, mangler-5a66c6796fb7, mangler-0bc8c7ebba3c)
+d4c29e23-fa56-4dbb-ac7a-180ea9d213c9    # én sladd sladd over 3 fnr (mangler-c56d7378ea03, mangler-102e4c9e72fd)
+ed8c1574-0018-4ff3-b843-9be17f1d7a1b    # én sladd sladd over 4 fnr (mangler-135f29a2d515, mangler-1f063be018d4, mangler-91ad961e17e0, mangler-c57fd4873d66)
+5cad3574-96a5-470a-bc9e-9b4f500b6801    # én sladd sladd over 4 fnr (mangler-c07d5704584a, mangler-1332f33a9c15, mangler-401a96680664, mangler-c4b061d9e8bf)
+ccde4879-506c-4059-aeb2-1a01a786dc3e    # kontonr
+f0f327ef-a8cb-4437-a186-867b7c6cfbd9    # 5 sifre i kanten av dokument, greit å sladde, dårlig for trening
+1da7aa78-f45a-46e7-a449-69eead84001a    # unødvendig, 3 sifre i kanten av dokument
+22e2e9c3-05c4-4475-8c58-1ffa2d45078f    # unødvendig, 4 sifre i kanten av dokument
+9a666c66-b5d9-45bd-b242-a7ecaf778855    # én sladd dekker to fødselsnumre (mangler-04917c4f76ef)
+da903d11-f959-4eb1-bbf3-3d4a49a2f4d2    # én sladd dekker tre fødselsnumre (mangler-ccc5dbad4667, mangler-f8bb76851ce2, mangler-39338a9dfe7d)
+74542057-2309-4c91-aee3-b60ca6f6358c    # Grei, men for stor boks (mangler-5f4bbba7a782)
+416636be-bdce-42df-9e0b-b2363124af96    # én sladd dekker to fødselsnumre (mangler-5f31d1a579ec)
+8ba33710-27e8-4a01-a5cf-da24fd06c012    # én sladd dekker 10 fødselsnumre (mangler-175b1c5ed55a, mangler-c37592393c2b, mangler-bbaf0d3ccd51, mangler-b7534208f17e, mangler-6e08fc1e5a84, mangler-55f4a5155fd6, mangler-ee9b021e3456, mangler-affc4d46ae05, mangler-37721b7651e9)
+401dc438-4901-4153-b910-230e43607fa0    # én sladd dekker 3 fødselsnumre (mangler-f4351e20f0aa, mangler-4ae529b03f41)
+3083ff75-68fc-4072-8fb9-f8afe5667bcd    # én sladd dekker 2 fødselsnumre (mangler-a4cb8dbb8c7d)
+6fdeb1fe-f6af-41ce-9e3c-80bfe811b7d7    # én sladd dekker 4 fødselsnumre (mangler-ad9c839315ac, mangler-04834b9ee235)
+230fa133-bb4c-4147-a372-72162c6fdf20    # ugyldig, dekkes av sladden ovenfor
+3f56efb9-7b63-4eb4-935e-d09cc7a0ae49    # én sladd dekker 2 fødselsnumre (mangler-b4e13745bf08)
+c7b9f7f6-a701-4e19-a61e-e6aa3fd003c4    # én sladd dekker 2 fødselsnumre (mangler-40c5108d6f42)
+a7a11ed1-90b6-401a-a87a-d2012a2870c9    # Saksbehandlers sladd dekker navn i tillegg til pnr (mangler-b95eea7c65ad)
+d3c17768-ba2e-4035-b5f4-4aaa439402bf    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+de9fdd92-e786-4f23-8e01-334f1d0a6ce7    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+b4e8207d-795a-4574-a239-6ad8fa5603cf    # Saksbehandlers sladd dekker fødselsdato, ikke pnr (mangler-8cc3cba74e82)
+8ecb2d5b-bc03-4874-bd6c-284846dbb24f    # koordinat
+88c089fc-e3b3-4a07-b39b-5b13dc0d264a    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller (utenom det som er sladdet av annen sladd)
+8fc36257-43e0-4dad-9440-a8db3dfd5e01    # Finner ikke sladden på siden, ingenting å sladde i dokumentet heller
+a9682341-cb1e-4ebc-be4e-0bbbb9bbcbbd    # kontonummer
+2cac197f-0d88-4008-b9e5-3598d402f064    # Dekker deler av fnr som dekkes av andre sladdebokser
+2fdd7ba4-6198-40c6-b015-d750c6f19980    # Dato
+ca2d718e-005e-4047-84b5-2a8409160b61    # Beløp
+75908ee1-d476-4c8f-8e77-43a1080bdead    # Kontonummer
+6b189614-b9ba-4636-9564-843b095f0b38    # totalbom
+0a4fde6f-a35e-4ed2-9168-26d4a2a13a21    # totalbom
+27fb853f-29d8-4daa-9ff4-d122be59a600    # kontonummer
+73e84088-524c-4769-b353-94dcae122223    # totalbom
+5edf0411-d0c9-4ffc-81b7-a6890e9aee01    # totalbom
+ab6a4c5a-37e8-438d-bc5b-85547df9003d    # kontonummer
+c9236993-18c3-443c-8e07-21e2735378bc    # referanse
+87d84fe8-9a73-4048-b4b6-17cfb4a9d57e    # siste 5 sifre av kontonummer
