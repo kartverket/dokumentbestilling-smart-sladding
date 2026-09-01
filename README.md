@@ -119,7 +119,7 @@ and returns the sladd boxes as JSON.
 
 | Status | Body |
 |--------|------|
-| 200 | the list described below |
+| 200 | the object described below |
 | 400 | empty request body |
 | 500 | `{"error": "<description>"}` |
 
@@ -132,27 +132,50 @@ call.
 
 #### Response format
 
-A **flat list of boxes**, not grouped by page. Pages with no findings simply
-contribute no entries, and an empty document returns `[]`.
+An object with the pipeline version, one entry per page, and the boxes as a
+**flat list**, not grouped by page. Pages with no findings simply contribute
+no boxes, and an empty document returns `"boxes": []` with the pages still
+listed.
 
 ```json
-[
-  {
-    "page": 1,
-    "x": 205.61, "y": 288.74, "width": 34.12, "height": 8.93,
-    "kilde": "begge",
-    "yolo_conf": 0.871,
-    "paddle_rec_score": 0.99412
-  },
-  {
-    "page": 3,
-    "x": 118.2, "y": 512.44, "width": 31.7, "height": 9.41,
-    "kilde": "yolo",
-    "yolo_conf": 0.53,
-    "trekk": { "har_tokens": 1, "n_siffer": 11, "n_bokstaver": 0 }
-  }
-]
+{
+  "pipeline_version": "yolo-48t-l",
+  "pages": [
+    { "page": 1, "rotation": 0 },
+    { "page": 2, "rotation": 90 },
+    { "page": 3, "rotation": 0 }
+  ],
+  "boxes": [
+    {
+      "page": 1,
+      "x": 205.61, "y": 288.74, "width": 34.12, "height": 8.93,
+      "kilde": "begge",
+      "yolo_conf": 0.871,
+      "paddle_rec_score": 0.99412
+    },
+    {
+      "page": 3,
+      "x": 118.2, "y": 512.44, "width": 31.7, "height": 9.41,
+      "kilde": "yolo",
+      "yolo_conf": 0.53,
+      "trekk": { "har_tokens": 1, "n_siffer": 11, "n_bokstaver": 0 }
+    }
+  ]
+}
 ```
+
+`pipeline_version` names the model that answered: `SLADD_PIPELINE_VERSION`
+from the environment if set, otherwise the `name` field of the `modell.json`
+that sits next to the weights, otherwise `unknown`. The batch job stores it
+with every label, so review outcomes can be attributed to the model that
+proposed them.
+
+`rotation` is the number of degrees the analysis turned the page
+counterclockwise to make it upright. 0 means the page already stood upright.
+The batch job turns nonzero values into `ROTERT_SIDE` findings in the
+dokumentbestilling database.
+
+Each entry in `boxes`:
 
 | Field | Description |
 |-------|-------------|

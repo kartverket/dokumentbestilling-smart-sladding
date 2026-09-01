@@ -1,7 +1,9 @@
 import logging
+
 from flask import Flask, jsonify, request
 import model_main
 import vlm_verifier
+import yolo_fnr
 import zipped_timed_rotating_file_handler
 import os
 from dotenv import load_dotenv
@@ -19,6 +21,22 @@ LOG_BACKUP_DAYS = int(os.getenv('LOG_BACKUP_DAYS', '30'))
 # The VLM verifier, off unless SLADD_VLM=1 and an endpoint is configured. Built
 # once, not per request: it holds no state beyond the settings.
 VLM = vlm_verifier.config_from_env()
+
+
+def _pipeline_version():
+    """The version stamped on every response.
+
+    SLADD_PIPELINE_VERSION wins so a deploy can name itself; otherwise the
+    name from modell.json next to the weights. "unknown" means the weights
+    were copied by hand and carry no metadata.
+    """
+    configured = os.getenv('SLADD_PIPELINE_VERSION')
+    if configured:
+        return configured
+    return yolo_fnr.model_info().get('name') or 'unknown'
+
+
+PIPELINE_VERSION = _pipeline_version()
 
 
 def _log_safe(value, max_len=100):
@@ -84,25 +102,22 @@ def get_bounding_boxes():
         return jsonify({'error': 'No data provided in the request body'}), 400
 
     filrevisjonid = request.args.get('filrevisjonid') or None
+    elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
+    # Comma-separated XX_YYY codes from the grunnbok, e.g.
+    # ?rettsstiftelsestyper=SR_JOU,SR_BSK enables per-document-type rule
+    # profiles (see KOORDFAM_CODES in config). Omitted/empty = global.
+    rettsstiftelsestyper = [
+        code.strip()
+        for value in request.args.getlist('rettsstiftelsestyper')
+        for code in value.split(',') if code.strip()]
+    # ?vlm=false turns the verifier off for one request even when the
+    # container runs with it on, so the two can be compared on the same
+    # document without a redeploy.
+    vlm = VLM if request.args.get('vlm', 'true').lower() != 'false' else None
+    stats = {}
 
     try:
-        elektronisk_tinglyst = request.args.get('elektronisk_tinglyst', 'false').lower() == 'true'
-        # Comma-separated XX_YYY codes from the grunnbok, e.g.
-        # ?rettsstiftelsestyper=SR_JOU,SR_BSK enables per-document-type rule
-        # profiles (see KOORDFAM_CODES in config). Omitted/empty = global.
-        # getlist, because a caller that sends the codes as a JSON array gets
-        # one param per code, and args.get would keep only the first.
-        rettsstiftelsestyper = [
-            code.strip()
-            for value in request.args.getlist('rettsstiftelsestyper')
-            for code in value.split(',') if code.strip()]
-        # ?vlm=false turns the verifier off for one request even when the
-        # container runs with it on, so the two can be compared on the same
-        # document without a redeploy. It can never turn it on: without an
-        # endpoint there is nothing to call.
-        vlm = VLM if request.args.get('vlm', 'true').lower() != 'false' else None
         pdf_file_stream = request.get_data()
-        stats = {}
         bounding_boxes_result = model_main.run_model_on_pdf_bytes(
             pdf_file_stream, name=filrevisjonid,
             elektronisk_tinglyst=elektronisk_tinglyst,
@@ -113,7 +128,14 @@ def get_bounding_boxes():
                      f'{_log_safe(",".join(rettsstiftelsestyper))}'
                      f'{_vlm_log(stats)}{_time_log(stats)}')
         _warn_on_vlm_failure(filrevisjonid, stats)
-        return jsonify(bounding_boxes_result)
+        # rotation is degrees counterclockwise the analysis turned the page to
+        # make it upright; 0 means the page already stood upright.
+        return jsonify({
+            'pipeline_version': PIPELINE_VERSION,
+            'pages': [{'page': i + 1, 'rotation': 90 * k}
+                      for i, k in enumerate(stats.get('rotations', []))],
+            'boxes': bounding_boxes_result,
+        })
 
     except Exception as e:
         logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')

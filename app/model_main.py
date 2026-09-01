@@ -242,8 +242,9 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     entirely from the caches is rendered the first time a page has a box in
     the stratum, and not at all if no page does.
 
-    stats: an optional dict this document's phase timings, cache hits and VLM
-    counters are written to. Left untouched on a cache miss under only_cache.
+    stats: an optional dict this document's phase timings, page rotations,
+    cache hits and VLM counters are written to. Left untouched on a cache
+    miss under only_cache.
     """
     t = {}
     n_judged = n_dropped = 0
@@ -385,6 +386,7 @@ def run_model_on_pdf_bytes(pdf_bytes, write_time=False, with_lines=False, name=N
     if stats is not None:
         stats["timings"] = dict(t)
         stats["pages"] = n_pages
+        stats["rotations"] = [int(k) for k in rotations]    # np.rot90 quarter turns
         stats["ocr_cache_hit"] = ocr_hit
         stats["yolo_cache_hit"] = yolo_hit
         if vlm is not None:
