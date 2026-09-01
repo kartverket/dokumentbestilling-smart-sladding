@@ -88,10 +88,8 @@ KOORDFAM_CODES = frozenset((
 ))
 
 # A number without fnr evidence in a koordfam document is a coordinate.
-# Token-less boxes are map graphics with no text evidence, so they need
-# detection conf instead. Loses real fnr outside koordfam.
-RULE_KOORDFAM = {"require_fnr_candidate": 1, "reject_decimal": 1,
-                 "without_text_conf": 0.7}
+# Loses real fnr outside koordfam.
+RULE_KOORDFAM = {"require_fnr_candidate": 1, "reject_decimal": 1}
 
 # SE_SEK documents are table-heavy and the false positives are table cells.
 # The koordfam rules lose real fnr here, hence a separate profile. Only
