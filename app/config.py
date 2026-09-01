@@ -9,10 +9,14 @@ MIN_ELONGATION     = 1.44
 MAX_ELONGATION    = 9         # 3-4x wider than the field itself
 MIN_SHORT_SIDE_PT    = 6
 
-# Kilde "yolo" only ("begge", paddle and "yolo_vertikal" are spared).
-# Short side applies at any conf; long side sits behind the exemption.
+# Kilde "yolo" only ("begge" and paddle are spared). Never exempted by conf:
+# a confident detection of the wrong shape is still the wrong shape.
 MIN_SHORT_SIDE_YOLO_PT = 7
 MIN_LONG_SIDE_YOLO_PT = 20      # too short to hold 5 digits
+MAX_ELONGATION_YOLO = 6         # a whole line stitched into one box
+
+# Kilde "yolo_vertikal" only, and like the two above never exempted by conf.
+MIN_LONG_SIDE_VERTICAL_PT = 30
 
 # Kilde "paddle" only, never exempted by conf: OCR conf is read quality, not
 # detection certainty. Paddle noise is thin strokes.

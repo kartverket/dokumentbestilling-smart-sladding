@@ -18,7 +18,8 @@ from paddle_ocr_model_fnr import (read_tokens_batched, sladd_boxes_from_tokens,
 from orientation import find_rotations_batch, unrotate_box
 from yolo_fnr import (find_yolo_boxes, lenient_check, tokens_in_box,
                       is_vertical, is_too_small, has_wrong_ratio, is_too_thin,
-                      is_too_narrow_yolo, is_too_short_yolo, has_paddle_noise_shape)
+                      has_yolo_noise_shape, is_too_short_vertical,
+                      has_paddle_noise_shape)
 from box_features import features_for_box
 from ocr_cache import read_cache as read_ocr_cache, write_cache as write_ocr_cache
 from yolo_cache import read_cache as read_yolo_cache, write_cache as write_yolo_cache
@@ -82,10 +83,9 @@ def _find_boxes_only_yolo(yolo_boxes):
     boxes = []
     for (x0, y0, x1, y1, conf) in yolo_boxes:
         yb = (x0, y0, x1, y1)
-        if not is_too_small(yb) and not is_too_narrow_yolo(yb) and (
+        if not is_too_small(yb) and not has_yolo_noise_shape(yb) and (
                 _skip_over_geometry_filter(round(conf, 3), "yolo")
-                or (not has_wrong_ratio(yb) and not is_too_thin(yb)
-                    and not is_too_short_yolo(yb))):
+                or (not has_wrong_ratio(yb) and not is_too_thin(yb))):
             boxes.append([(x0, y0, x1, y1), "yolo", round(conf, 3), None, None])
     return [tuple(pair) for pair in boxes]
 
@@ -135,19 +135,18 @@ def _find_boxes_with_source(tokens, lines, yolo_boxes, koordfam=False,
                   if not _rules_discard(pair, koordfam, seksjonering)]
 
         # ── Dimension filters ──────────────────────────────────
-        # Universal limits; only high yolo confidence exempts. On top: the
-        # short-side limit for "yolo" and the full noise shape for "paddle"
-        # apply at any confidence; the long-side limit for "yolo" sits behind
-        # the conf gate.
+        # Universal limits, which high yolo confidence exempts. The per-kilde
+        # noise shapes on top of them apply at any confidence.
         boxes = [pair for pair in boxes
                   if not is_too_small(pair[0])
-                  and not (pair[1] == "yolo" and is_too_narrow_yolo(pair[0]))
+                  and not (pair[1] == "yolo" and has_yolo_noise_shape(pair[0]))
                   and not (pair[1] == "paddle" and has_paddle_noise_shape(pair[0]))
+                  and not (pair[1] == "yolo_vertikal"
+                           and is_too_short_vertical(pair[0]))
                   and (
                       _skip_over_geometry_filter(pair[2], pair[1])
-                      or (not has_wrong_ratio(pair[0]) and not is_too_thin(pair[0])
-                          and not (pair[1] == "yolo"
-                                   and is_too_short_yolo(pair[0])))
+                      or (not has_wrong_ratio(pair[0])
+                          and not is_too_thin(pair[0]))
                   )]
 
     return [tuple(pair) for pair in boxes]

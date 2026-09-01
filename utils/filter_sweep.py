@@ -534,8 +534,8 @@ def _prod_specs(sources):
 
     Each entry carries a LIST of specs because prod ORs its rules and one
     dict cannot hold them: the two decimal tiers use different
-    (rec_veto, ocr_conf_exempt) pairs, and the yolo short-side limit bites at
-    any conf while the rest of the geometry sits behind the conf gate.
+    (rec_veto, ocr_conf_exempt) pairs, and the per-kilde noise shapes bite at
+    any conf while the universal limits sit behind the conf gate.
 
     Scoped as `_rules_discard` scopes them: the OCR rules see kilde «yolo»,
     the window rules kilde «paddle». The rettsstiftelse profiles are left out
@@ -546,8 +546,10 @@ def _prod_specs(sources):
                             RULE_LINE_EVIDENCE, RULE_WINDOW,
                             MIN_BOX_AREA, MIN_ELONGATION, MAX_ELONGATION,
                             MIN_SHORT_SIDE_PT, MIN_SHORT_SIDE_YOLO_PT,
-                            MIN_LONG_SIDE_YOLO_PT, MIN_SHORT_SIDE_PADDLE_PT,
+                            MIN_LONG_SIDE_YOLO_PT, MAX_ELONGATION_YOLO,
+                            MIN_SHORT_SIDE_PADDLE_PT,
                             MIN_LONG_SIDE_PADDLE_PT, MAX_ELONGATION_PADDLE,
+                            MIN_LONG_SIDE_VERTICAL_PT,
                             YOLO_CONF_GEOMETRY_THRESHOLD)
     except ImportError:
         return []
@@ -559,12 +561,15 @@ def _prod_specs(sources):
              "min_short_side": MIN_SHORT_SIDE_PT,
              "conf_threshold": YOLO_CONF_GEOMETRY_THRESHOLD}
         if source == "yolo":
-            u["min_short_side"] = MIN_SHORT_SIDE_YOLO_PT
-            g["min_long_side"] = MIN_LONG_SIDE_YOLO_PT
+            u.update(min_short_side=MIN_SHORT_SIDE_YOLO_PT,
+                     min_long_side=MIN_LONG_SIDE_YOLO_PT,
+                     max_elongation=MAX_ELONGATION_YOLO)
         elif source == "paddle":
             u.update(min_short_side=MIN_SHORT_SIDE_PADDLE_PT,
                      min_long_side=MIN_LONG_SIDE_PADDLE_PT,
                      max_elongation=MAX_ELONGATION_PADDLE)
+        elif source == "yolo_vertikal":
+            u["min_long_side"] = MIN_LONG_SIDE_VERTICAL_PT
         ungated[source], gated[source] = u, g
 
     return [("RULE_DECIMAL", [{"yolo": RULE_DECIMAL}]),

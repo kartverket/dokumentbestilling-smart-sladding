@@ -7,8 +7,9 @@ import numpy as np
 from config import (
     YOLO_CONF, VERTICAL_FACTOR, YOLO_IMGSZ, MIN_DIGITS, MAX_LETTERS,
     MIN_BOX_AREA, MIN_ELONGATION, MAX_ELONGATION, MIN_SHORT_SIDE_PT,
-    MIN_SHORT_SIDE_YOLO_PT, MIN_LONG_SIDE_YOLO_PT,
+    MIN_SHORT_SIDE_YOLO_PT, MIN_LONG_SIDE_YOLO_PT, MAX_ELONGATION_YOLO,
     MIN_SHORT_SIDE_PADDLE_PT, MIN_LONG_SIDE_PADDLE_PT, MAX_ELONGATION_PADDLE,
+    MIN_LONG_SIDE_VERTICAL_PT,
     PDF_DPI, default_weights)
 from geometry import covered_share
 
@@ -18,6 +19,7 @@ MIN_SHORT_SIDE_YOLO_PX = MIN_SHORT_SIDE_YOLO_PT * PDF_DPI / 72.0
 MIN_LONG_SIDE_YOLO_PX = MIN_LONG_SIDE_YOLO_PT * PDF_DPI / 72.0
 MIN_SHORT_SIDE_PADDLE_PX = MIN_SHORT_SIDE_PADDLE_PT * PDF_DPI / 72.0
 MIN_LONG_SIDE_PADDLE_PX = MIN_LONG_SIDE_PADDLE_PT * PDF_DPI / 72.0
+MIN_LONG_SIDE_VERTICAL_PX = MIN_LONG_SIDE_VERTICAL_PT * PDF_DPI / 72.0
 
 _model = None
 _weights_path = YOLO_WEIGHTS
@@ -140,20 +142,25 @@ def is_too_thin(box):
     return min(x1 - x0, y1 - y0) < MIN_SHORT_SIDE_PX
 
 
-def is_too_narrow_yolo(box):
-    """Short side below MIN_SHORT_SIDE_YOLO_PT is noise at any confidence."""
-    x0, y0, x1, y1 = box[:4]
-    return min(x1 - x0, y1 - y0) < MIN_SHORT_SIDE_YOLO_PX
+def has_yolo_noise_shape(box):
+    """Stricter shape for yolo boxes. See MIN_*_YOLO_PT and MAX_ELONGATION_YOLO.
 
-
-def is_too_short_yolo(box):
-    """Long side below MIN_LONG_SIDE_YOLO_PT is too short for 5 digits.
-
-    High confidence exempts (see _skip_over_geometry_filter), unlike the
-    short side limit above.
+    Yolo is never exempted by confidence, so all three limits always apply.
+    The elongation cap is tighter than the universal one: at this length the
+    box is a whole line, not the five digits it should cover.
     """
     x0, y0, x1, y1 = box[:4]
-    return max(x1 - x0, y1 - y0) < MIN_LONG_SIDE_YOLO_PX
+    short, long = sorted((x1 - x0, y1 - y0))
+    if short <= 0:
+        return True
+    return (short < MIN_SHORT_SIDE_YOLO_PX or long < MIN_LONG_SIDE_YOLO_PX
+            or long / short > MAX_ELONGATION_YOLO)
+
+
+def is_too_short_vertical(box):
+    """Long side below MIN_LONG_SIDE_VERTICAL_PT is too short for 5 digits."""
+    x0, y0, x1, y1 = box[:4]
+    return max(x1 - x0, y1 - y0) < MIN_LONG_SIDE_VERTICAL_PX
 
 
 def has_paddle_noise_shape(box):
