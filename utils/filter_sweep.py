@@ -589,17 +589,22 @@ def _verdict(m, cost):
 
 
 def _operating_point(ds, ds_test, cost):
-    """Prices today's rules one at a time, then stacked.
+    """Prices today's rules: alone, stacked, and with one of them taken out.
 
-    The sweep grids do not hold the prod values — RULE_WINDOW's max_gap 6.5 is
-    on no axis and RULE_LINE_EVIDENCE's combination on none either — so
-    without this the report cannot say whether today's ruleset still pays
-    under a new model.
+    The sweep grids do not hold the prod values. RULE_WINDOW's max_gap 6.5 is
+    on no axis and RULE_LINE_EVIDENCE's combination on none either, so without
+    this the report cannot say whether today's ruleset still pays under a new
+    model.
+
+    Standalone numbers cannot decide which rule to drop: the rules overlap, so
+    they add up to far more than the stack removes. The leave-one-out block is
+    the one that answers it.
     """
     rules = _prod_specs(ds.sources())
     if not rules:
         print("\n(config.py is unavailable, today's operating point is skipped)")
         return
+    datasets = [d for d in (ds, ds_test) if d is not None]
 
     print(f"\n{'═' * 145}")
     print(f"TODAY'S OPERATING POINT   (config.py, each rule alone and then "
@@ -610,25 +615,54 @@ def _operating_point(ds, ds_test, cost):
           "valider_full.sh metadata=yes against metadata off.")
     print(f"{'═' * 145}")
 
-    width = max(24, max(len(label) for label, _ in rules) + 2)
+    width = max(26, max(len(label) for label, _ in rules) + 10)
+
+    def _measure(specs):
+        removed = _any_of(specs)
+        return [measure_filter(d, removed, cost=cost) for d in datasets]
+
+    def _print(label, per_dataset, cells):
+        for i, m in enumerate(per_dataset):
+            print(f"  {(label if i == 0 else '  ↳ holdout'):<{width}}"
+                  f"│{_target_cells(m)} │{cells(m, i)}")
+
+    def _verdict_cell(m, i):
+        return f" {_verdict(m, cost):<13}" if i == 0 else ""
+
     print(f"  {'rule':<{width}}│{HEADER_TARGET} │ {'verdict':<13}")
     print(f"  {'─' * width}┼{'─' * 106}─┼{'─' * 14}")
-
-    def _row(label, specs):
-        removed = _any_of(specs)
-        m = measure_filter(ds, removed, cost=cost)
-        print(f"  {label:<{width}}│{_target_cells(m)} │ {_verdict(m, cost):<13}")
-        if ds_test is not None:
-            t = measure_filter(ds_test, removed, cost=cost)
-            print(f"  {'  ↳ holdout':<{width}}│{_target_cells(t)} │")
 
     stack = []
     for label, specs in rules:
         stack += specs
-        _row(label, specs)
+        _print(label, _measure(specs), _verdict_cell)
 
     print(f"  {'─' * width}┼{'─' * 106}─┼{'─' * 14}")
-    _row("ALL OF IT", stack)
+    total = _measure(stack)
+    _print("ALL OF IT", total, _verdict_cell)
+
+    if len(rules) < 2:
+        return
+
+    print(f"\n  LEAVE ONE OUT: the stack with that one rule taken out. Δ is "
+          f"what the rule adds on top of the")
+    print("  others, which is what dropping it would actually cost. The "
+          "standalone rows above double-count")
+    print("  the overlap: they sum to far more than the stack removes.")
+    print(f"  {'rule':<{width}}│{HEADER_TARGET} │ {'Δov.rm':>7} {'Δlost':>6} "
+          f"{'Δ ov/lost':>10}")
+    print(f"  {'─' * width}┼{'─' * 106}─┼{'─' * 26}")
+
+    def _delta_cell(m, i):
+        d_ov = total[i].ov_rm - m.ov_rm
+        d_lost = total[i].lost - m.lost
+        ratio = f"{d_ov / d_lost:.1f}" if d_lost else ("∞" if d_ov else "–")
+        return f" {d_ov:>+7} {d_lost:>+6} {ratio:>10}"
+
+    for label, specs in rules:
+        rest = [spec for other, group in rules if other != label
+                for spec in group]
+        _print(f"without {label}", _measure(rest), _delta_cell)
 
 
 # ── Pareto-front ─────────────────────────────────────────────
