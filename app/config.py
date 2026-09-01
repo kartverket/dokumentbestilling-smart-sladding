@@ -44,13 +44,13 @@ def default_weights():
 
 
 # ---- YOLO --------------------------------------------------
-YOLO_CONF          = 0.05      # predict threshold
-YOLO_CONF_NO_TEXT = 0.40   # required when Paddle read nothing in the box
-YOLO_CONF_VERTICAL = 0.90
+YOLO_CONF          = 0.01      # predict threshold, 0.0 is tested and create A LOT of noise
+YOLO_CONF_NO_TEXT  = 0.02       # required when Paddle read nothing in the box
+YOLO_CONF_VERTICAL = 0.02
 VERTICAL_FACTOR    = 1.3       # height > 1.3 x width counts as vertical
 YOLO_IMGSZ         = 1280
 MIN_DIGITS         = 1         # lenient_check floor
-MAX_LETTERS     = 1         # 2+ letters is not an fnr, whatever YOLO says
+MAX_LETTERS        = 1         # 2+ letters is not an fnr, whatever YOLO says
 
 # An fnr never contains a decimal separator; confident detections are exempt.
 RULE_DECIMAL = {"reject_decimal": 1, "rec_veto": 0.98, "ocr_conf_exempt": 0.6}
