@@ -14,6 +14,7 @@ import json
 import os
 from collections import namedtuple
 
+from cache_path import cache_path
 from config import PADDLE_MODEL_SET, PDF_DPI
 
 # Identical to Token in paddle_ocr_model_fnr.py, duplicated here to avoid
@@ -23,14 +24,12 @@ Token = namedtuple("Token", ["text", "x0", "y0", "x1", "y1", "rec_score"])
 CACHE_VERSION = 2
 
 
-def _cache_path(cache_dir, doc_name):
-    doc_id = os.path.splitext(os.path.basename(doc_name))[0]
-    return os.path.join(cache_dir, f"{doc_id}.json")
-
-
 def read_cache(cache_dir, doc_name):
-    """Cached OCR result for a document, or None if missing or invalid."""
-    path = _cache_path(cache_dir, doc_name)
+    """Cached OCR result for a document, or None if missing or invalid.
+
+    Raises ValueError on a document name that cannot be a cache key.
+    """
+    path = cache_path(cache_dir, doc_name)
     if not os.path.isfile(path):
         return None
 
@@ -61,9 +60,12 @@ def read_cache(cache_dir, doc_name):
 
 
 def write_cache(cache_dir, doc_name, rotations, tokens_per_page):
-    """Write a document's OCR result to the cache."""
+    """Write a document's OCR result to the cache.
+
+    Raises ValueError on a document name that cannot be a cache key.
+    """
+    path = cache_path(cache_dir, doc_name)
     os.makedirs(cache_dir, exist_ok=True)
-    path = _cache_path(cache_dir, doc_name)
 
     pages = []
     for si, (rot, tokens) in enumerate(zip(rotations, tokens_per_page), start=1):

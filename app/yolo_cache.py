@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 
+from cache_path import cache_path
 from config import PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF, YOLO_IMGSZ
 
 CACHE_VERSION = 1
@@ -55,19 +56,16 @@ def cache_dir_for_weights(base_dir, weights_path):
     return os.path.join(base_dir, weights_hash(weights_path))
 
 
-def _cache_path(cache_dir, doc_name):
-    doc_id = os.path.splitext(os.path.basename(doc_name))[0]
-    return os.path.join(cache_dir, f"{doc_id}.json")
-
-
 def read_cache(cache_dir, doc_name, rotations):
     """Cached YOLO boxes for a document, or None if missing or invalid.
 
     `rotations` is the rotation of the image YOLO will run on, one per page,
     and must match what was stored. Returns one list of
     (x0, y0, x1, y1, conf) per page, filtered against YOLO_CONF.
+
+    Raises ValueError on a document name that cannot be a cache key.
     """
-    path = _cache_path(cache_dir, doc_name)
+    path = cache_path(cache_dir, doc_name)
     if not os.path.isfile(path):
         return None
 
@@ -106,10 +104,11 @@ def write_cache(cache_dir, doc_name, rotations, boxes_per_page):
 
     `boxes_per_page` must come from a predict at YOLO_CACHE_CONF_FLOOR. Store
     a stricter selection and the floor in the file becomes a lie, so later
-    runs with a lower YOLO_CONF hit an incomplete cache.
+    runs with a lower YOLO_CONF hit an incomplete cache. Raises ValueError on
+    a document name that cannot be a cache key.
     """
+    path = cache_path(cache_dir, doc_name)
     os.makedirs(cache_dir, exist_ok=True)
-    path = _cache_path(cache_dir, doc_name)
 
     pages = []
     for si, (k, boxes) in enumerate(zip(rotations, boxes_per_page), start=1):

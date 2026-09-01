@@ -88,3 +88,12 @@ services:
     volumes:
       - ${LOG_ROOT:-/data/docker}/gunicorn_logs_test:/data/gunicorn_logs
       - ${LOG_ROOT:-/data/docker}/ml_logs_test:/data/ml_logs
+
+# Pinned because llama-server's IPAddressAllow names this subnet. Docker hands
+# out bridge subnets in creation order, so an unpinned network can move and the
+# verifier then goes quiet without an error anywhere.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
