@@ -118,7 +118,7 @@ FEATURE_FIELDS = ("har_tokens", "n_siffer", "n_bokstaver", "rec_min", "rec_media
 # YOLO cache: boxes are stored down to the floor and filtered against
 # YOLO_CONF on read. A lower floor feeds more candidates into NMS, but the
 # survivors are the same. NMS always suppresses with a higher-scoring box.
-YOLO_CACHE_CONF_FLOOR = 0.05
+YOLO_CACHE_CONF_FLOOR = 0.01
 
 # ---- Paddle OCR --------------------------------------------
 PADDLE_MODEL_SET        = "v6"      # "v5" or "v6"
