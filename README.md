@@ -264,6 +264,33 @@ python run_stats.py result-2026-07-14T08-15-20 --labels labels.csv
 
 Writes `statistikk.txt` and `statistikk.png` into the result directory.
 
+### `filter_sweep.py`: what the rules cost and what they buy
+
+Every rule constant in `app/config.py` was tuned against one model's score
+distribution, so a new model needs them measured again. The sweep reads a result
+CSV produced without the rules, applies each candidate configuration to it and
+counts two things: fasit boxes that lose all coverage (`lost`), and pure
+oversladdinger removed (`ov.rm`). It never reruns the model, so a sweep costs CPU
+only.
+
+`--cost` is the exchange rate: how many removed oversladdinger one lost fasit box
+is worth. It decides which side of the trade the report favours, so pick it
+before reading anything.
+
+The report opens with today's operating point, each `RULE_*` from config measured
+alone and then all of them stacked. The rettsstiftelse profiles are missing from
+it because the result CSV carries no rettsstiftelseskode. Measure those with
+`valider_full.sh metadata=yes` against a run without metadata.
+
+On the server, `sveip_regler.sh` runs the whole round: the result CSV unbounded,
+the same CSV cut to what clears the exchange rate, and one pass per holdout seed.
+
+```sh
+./valider_full.sh model=$SLADD_WEIGHTS/48t_l/48t_l.pt uttrekk=6 \
+    list=holdout48 rules=no name=48t_l_raa
+./sveip_regler.sh res=$SLADD_VALIDATION/48t_l_raa/resultat.csv cost=50
+```
+
 ## VLM verifier
 
 A vision model can re-read every proposed sladdeboks and remove the ones it is

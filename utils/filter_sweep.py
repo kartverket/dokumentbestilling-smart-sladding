@@ -527,6 +527,110 @@ def _report_bounds(ds, ds_test, pct, cost):
         print(f"    → filter_review.py {review_command(spec)}")
 
 
+# ── Today's operating point ──────────────────────────────────
+
+def _prod_specs(sources):
+    """Today's rules from config.py as [(label, [per-kilde spec, ...])].
+
+    Each entry carries a LIST of specs because prod ORs its rules and one
+    dict cannot hold them: the two decimal tiers use different
+    (rec_veto, ocr_conf_exempt) pairs, and the yolo short-side limit bites at
+    any conf while the rest of the geometry sits behind the conf gate.
+
+    Scoped as `_rules_discard` scopes them: the OCR rules see kilde «yolo»,
+    the window rules kilde «paddle». The rettsstiftelse profiles are left out
+    — they need the document's codes, which the result CSV does not carry.
+    """
+    try:
+        from config import (RULE_DECIMAL, RULE_DECIMAL_LOW_TIER,
+                            RULE_LINE_EVIDENCE, RULE_WINDOW,
+                            MIN_BOX_AREA, MIN_ELONGATION, MAX_ELONGATION,
+                            MIN_SHORT_SIDE_PT, MIN_SHORT_SIDE_YOLO_PT,
+                            MIN_LONG_SIDE_YOLO_PT, MIN_SHORT_SIDE_PADDLE_PT,
+                            MIN_LONG_SIDE_PADDLE_PT, MAX_ELONGATION_PADDLE,
+                            YOLO_CONF_GEOMETRY_THRESHOLD)
+    except ImportError:
+        return []
+
+    ungated, gated = {}, {}
+    for source in sources:
+        u = {"min_area_px": MIN_BOX_AREA}
+        g = {"min_elongation": MIN_ELONGATION, "max_elongation": MAX_ELONGATION,
+             "min_short_side": MIN_SHORT_SIDE_PT,
+             "conf_threshold": YOLO_CONF_GEOMETRY_THRESHOLD}
+        if source == "yolo":
+            u["min_short_side"] = MIN_SHORT_SIDE_YOLO_PT
+            g["min_long_side"] = MIN_LONG_SIDE_YOLO_PT
+        elif source == "paddle":
+            u.update(min_short_side=MIN_SHORT_SIDE_PADDLE_PT,
+                     min_long_side=MIN_LONG_SIDE_PADDLE_PT,
+                     max_elongation=MAX_ELONGATION_PADDLE)
+        ungated[source], gated[source] = u, g
+
+    return [("RULE_DECIMAL", [{"yolo": RULE_DECIMAL}]),
+            ("RULE_DECIMAL_LOW_TIER", [{"yolo": RULE_DECIMAL_LOW_TIER}]),
+            ("RULE_LINE_EVIDENCE", [{"yolo": RULE_LINE_EVIDENCE}]),
+            ("RULE_WINDOW", [{"paddle": RULE_WINDOW}]),
+            ("dimension filters", [ungated, gated])]
+
+
+def _any_of(specs):
+    """One predicate from several per-kilde specs, as prod ORs its rules."""
+    compiled = [make_filter_per_source(s) for s in specs]
+    return lambda p: any(removed(p) for removed in compiled)
+
+
+def _verdict(m, cost):
+    if not m.n_rm:
+        return "no effect"
+    if not m.lost:
+        return "free"
+    return "pays" if m.ov_per_lost >= cost else "DOES NOT PAY"
+
+
+def _operating_point(ds, ds_test, cost):
+    """Prices today's rules one at a time, then stacked.
+
+    The sweep grids do not hold the prod values — RULE_WINDOW's max_gap 6.5 is
+    on no axis and RULE_LINE_EVIDENCE's combination on none either — so
+    without this the report cannot say whether today's ruleset still pays
+    under a new model.
+    """
+    rules = _prod_specs(ds.sources())
+    if not rules:
+        print("\n(config.py is unavailable, today's operating point is skipped)")
+        return
+
+    print(f"\n{'═' * 145}")
+    print(f"TODAY'S OPERATING POINT   (config.py, each rule alone and then "
+          f"stacked)   [cost {cost:g}]")
+    print(f"  «pays» means ov/lost ≥ {cost:g}. The rettsstiftelse profiles are "
+          f"NOT here: they need the document's")
+    print("  codes, which the result CSV does not carry. Price those with "
+          "valider_full.sh metadata=yes against metadata off.")
+    print(f"{'═' * 145}")
+
+    width = max(24, max(len(label) for label, _ in rules) + 2)
+    print(f"  {'rule':<{width}}│{HEADER_TARGET} │ {'verdict':<13}")
+    print(f"  {'─' * width}┼{'─' * 106}─┼{'─' * 14}")
+
+    def _row(label, specs):
+        removed = _any_of(specs)
+        m = measure_filter(ds, removed, cost=cost)
+        print(f"  {label:<{width}}│{_target_cells(m)} │ {_verdict(m, cost):<13}")
+        if ds_test is not None:
+            t = measure_filter(ds_test, removed, cost=cost)
+            print(f"  {'  ↳ holdout':<{width}}│{_target_cells(t)} │")
+
+    stack = []
+    for label, specs in rules:
+        stack += specs
+        _row(label, specs)
+
+    print(f"  {'─' * width}┼{'─' * 106}─┼{'─' * 14}")
+    _row("ALL OF IT", stack)
+
+
 # ── Pareto-front ─────────────────────────────────────────────
 
 def _pareto_table(rows, cost, ds_test=None, title="PARETO-FRONT",
@@ -746,6 +850,10 @@ def main():
             ds = ds_full
             print("\n  (no holdout, use --holdout 0.3 to see whether the "
                   "chosen configuration holds on independent documents)")
+
+        # Before _sweep_threshold: build_dataset mutates the predictions, and
+        # ds holds references to them.
+        _operating_point(ds, ds_test, args.cost)
 
         tee.to_terminal = False
 
