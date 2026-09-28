@@ -1,16 +1,14 @@
-# Sikkerhetspolicy
+# Security policy
 
-## Rapportering av sårbarheter
+## Reporting a vulnerability
 
-Har du oppdaget en sårbarhet i dette prosjektet, vennligst ikke publiser det som et offentlig issue.
+Do not open a public issue. Report it through GitHub's private channel:
 
-Bruk GitHubs private varslingskanal for å rapportere sårbarheten:
+**[Report a vulnerability](https://github.com/kartverket/dokumentbestilling-smart-sladding/security/advisories/new)**
 
-**[Rapporter sårbarhet](https://github.com/kartverket/dokumentbestilling-smart-sladding/security/advisories/new)**
+Include:
 
-Inkluder følgende:
-
-- Beskrivelse av sårbarheten
-- Steg for å reprodusere
-- Potensielle konsekvenser
-- Forslag til løsning (om tilgjengelig)
+- what the vulnerability is
+- steps to reproduce
+- the impact you expect
+- a suggested fix, if you have one
