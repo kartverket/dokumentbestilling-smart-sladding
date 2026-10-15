@@ -1,155 +1,532 @@
 # dokumentbestilling-smart-sladding
 
-## VIKTIG: For bruk i Kartverket
-Hvis du jobber med dette i Kartverket-sammenheng, så skal du være inneforstått med de relevante rutinene før du begynner med å arbeide. [Les rutinene på confluence her](https://kartverket.atlassian.net/wiki/x/F4Dwn)
+Automatic sladding of fødselsnummer and d-nummer in ordered tinglysing
+documents. A PDF goes in, a list of boxes to cover comes out.
 
-## Beskrivelse
-Prosjektet genererer automatiske sladdinger av personnummer og d-nummer i dokumentbestillinger. Løsningen benytter Tesseract OCR for å gjenkjenne tekst i dokumenter, og klassifiserer områder med sensitive opplysninger gjennom regex- og nøkkelordssøk.
+> **Working at Kartverket?** Read the routines before you start:
+> [Confluence](https://kartverket.atlassian.net/wiki/x/F4Dwn)
 
-## Forutsetninger
+See [docs/TEKNISK.md](docs/TEKNISK.md) for how the detection actually works.
 
+## Repo layout
 
-### Docker (anbefalt)
-- Docker
-- NVIDIA GPU med CUDA 12.1-støtte
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-
-### Lokal utvikling
-- Python 3.10+
-- [Poppler](https://poppler.freedesktop.org/) (`pdftoppm -v` for å verifisere)
-- [Tesseract](https://tesseract-ocr.github.io/) (`tesseract -v` for å verifisere)
-
-På macOS:
-```sh
-brew install poppler tesseract
+```
+app/      the model API (Flask + PaddleOCR + YOLO); all the detection logic
+job/      the batch job that drives production; calls the API, no ML of its own
+train/    training pipeline for the YOLO model            (train/README.md)
+utils/    analysis and test tooling: run, draw, statistics
+config/   gunicorn config for the container
+docs/     technical description with diagrams, server notes (docs/SERVER.md)
 ```
 
-## Installasjon
+## Install
 
-### 1. Docker-oppsett (anbefalt)
+Python 3.12.
 
-Prosjektet bruker `nvidia/cuda:12.1.1-runtime-ubuntu22.04` som base-image med Python 3.10. Docker og NVIDIA Container Toolkit må være installert og konfigurert på forhånd.
-
-#### 1.1 Docker build
-
-```sh
-# Bygg image
-docker build --tag smart_sladding_app:latest .
-
-# Bak proxy:
-docker build \
-  --build-arg http_proxy=http://159.162.48.7:3128 \
-  --build-arg https_proxy=http://159.162.48.7:3128 \
-  --build-arg no_proxy=localhost,127.0.0.1 \
-  --tag smart_sladding_app:latest .
-```
-
-#### 1.2 Start containere med compose
-
-```sh
-docker compose up -d
-```
-
-Dette starter to tjenester:
-- **prod** på port 5071 (`MODE=prod`)
-- **dev** på port 5072 (`MODE=dev`)
-
-#### 1.3 Start container manuelt
-
-```sh
-docker run -it --gpus all \
-  -v /data/docker/ml_logs:/data/ml_logs \
-  -p 5071:8080 \
-  -e MODE=prod \
-  -e HTTP_PROXY=http://159.162.48.7:3128 \
-  -e HTTPS_PROXY=http://159.162.48.7:3128 \
-  --name smsl-server-prod \
-  smart_sladding_app:latest
-```
-
-#### 1.4 Test med curl
-
-```sh
-curl -X POST http://localhost:5071/model \
-  -H "Content-Type: application/pdf" \
-  --data-binary "@app/testdokument-2.pdf"
-```
-
-### 2. Lokalt oppsett (uten Docker)
-
-#### 2.1. Klon repository
 ```sh
 git clone https://github.com/kartverket/dokumentbestilling-smart-sladding.git
 cd dokumentbestilling-smart-sladding
-```
-
-#### 2.2. Opprett virtuelt miljø og installer avhengigheter
-```sh
-python3 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-For onprem maskin, finn de nødvendige installasjonspakkene for Tesseract og Poppler, og installer disse.
-* poppler versjon kan sjekkes med `pdftoppm -v`
-* tesseract versjon kan sjekkes med `tesseract -v`
+`requirements.txt` pins `paddlepaddle==3.3.1`. Which build you get depends on
+the index you install from: plain PyPI gives the CPU wheel (Mac, laptops),
+while the `Dockerfile` adds `--extra-index-url
+https://www.paddlepaddle.org.cn/packages/stable/cu126/` to get the CUDA build
+for the GPU server. Do not mix the two in one environment.
 
-#### 2.3. Kjør opp appen
-```sh
-cd app
-python3 app.py
+On the server, `source activate.sh` activates the venv, loads the `SLADD_*`
+paths from `server.env` and enables the repo git hooks in one go.
+
+## Models
+
+**YOLO weights are not in the repo.** They live in the model store on the
+server, `$SLADD_WEIGHTS` (see `server.env`), one directory per published model:
+
+```
+$SLADD_WEIGHTS/<name>/
+  <name>.pt        the weights, named after the model
+  modell.json      what it was trained on, with which parameters
+  training/        results.csv, args.yaml, data.yaml, split_log.txt
 ```
 
-#### 2.4. Test appen via curl i ny terminal
+`make -C $SLADD_TRAIN publiser` creates them after a training run. See
+[train/README.md](train/README.md). `$SLADD_PRODWEIGHTS` points at the default
+model: the one `./deploy.sh build` bakes in, and the one `run.py` uses when
+`--yolo-weights` is omitted.
+
+**PaddleOCR models** are pretrained weights from PaddlePaddle and are
+downloaded by hand into `app/` (the code looks for them next to the source):
+
 ```sh
-mkdir -p app/logs
+cd app
+for m in PP-OCRv6_medium_det_infer PP-OCRv6_medium_rec_infer PP-LCNet_x1_0_doc_ori_infer; do
+  curl -L -O "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/${m}.tar"
+  tar -xvf "${m}.tar"
+done
+```
+
+`PADDLE_MODEL_SET` in `app/config.py` selects the set (`"v6"` or `"v5"`). For
+`"v5"` download `PP-OCRv5_server_det_infer` and `PP-OCRv5_server_rec_infer`
+instead. The `Dockerfile` hardcodes the v6 downloads, so switching the config
+without editing the Dockerfile builds an image without the models the code
+asks for.
+
+## Run the API locally
+
+```sh
+cd app
+mkdir -p logs
+ML_LOG_DIR=logs python app.py
+```
+
+`ML_LOG_DIR` matters: without it `app.py` falls back to the container path
+`/data/ml_logs` and fails to start. Then, in another terminal:
+
+```sh
+curl http://localhost:5070/health
+
 curl -X POST http://localhost:5070/model \
   -H "Content-Type: application/pdf" \
-  --data-binary "@app/testdokument-2.pdf"
+  --data-binary "@/path/to/document.pdf"
 ```
 
-#### 2.5. For production/test kjører vi appen med gunicorn
-```sh
-cd app
-chmod +x start_production.sh
-./start_production.sh
-```
-
-## EasyOCR-modeller bak brannmur
-
-Dersom maskinen ikke har direkte internettilgang, last ned modellene manuelt og plasser dem i `tmp/.EasyOCR/model`:
+A test document ships with the repo. Use it to check the setup end to end:
 
 ```sh
-curl -L -x http://<proxyip>:<proxyport> -o "latin_g2.zip" https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip
-curl -L -x http://<proxyip>:<proxyport> -o "craft_mlt_25k.zip" https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip
-
-mkdir -p tmp/.EasyOCR/model
-mv latin_g2.zip craft_mlt_25k.zip tmp/.EasyOCR/model/
-cd tmp/.EasyOCR/model && unzip latin_g2.zip && unzip craft_mlt_25k.zip
+cd utils
+python run.py --folder . --select testdokument.pdf --csv --csv-out test_ut.csv \
+  --png --png-dir visning_test --time
 ```
 
-## Testing
+The PNGs land in `utils/visning_test/`. Measuring recall (`--truth`) needs a
+labels CSV, which is not in the repo.
 
-### Enkelt dokument
-Kjør modellen på ett dokument med `doc_id` på formen `<aar>_<nr>_<embete>`:
-```python
-predicted_boxes = get_predicted_boxes_on_doc(doc_id, base_url)
+## API contract
+
+### `GET /health`
+
+Returns `{"health": "healthy"}` with status 200. The models load lazily on the
+first `/model` call, so `/health` answers long before the service is warm.
+
+### `POST /model`
+
+Takes a PDF as raw bytes in the request body (`Content-Type: application/pdf`)
+and returns the sladd boxes as JSON.
+
+| Status | Body |
+|--------|------|
+| 200 | the object described below |
+| 400 | empty request body |
+| 500 | `{"error": "<description>"}` |
+
+Optional query parameters: `elektronisk_tinglyst=true` skips YOLO entirely,
+`rettsstiftelsestyper=SR_JOU,SE_SEK` (comma-separated grunnbok codes) enables
+the per-document-type rule profiles, and `vlm=false` turns the VLM verifier off
+for one request when the container runs with it on. `filrevisjonid=883421`
+names the document in the application log; the batch job sends it with every
+call.
+
+#### Response format
+
+An object with the pipeline version, one entry per page, and the boxes as a
+**flat list**, not grouped by page. Pages with no findings simply contribute
+no boxes, and an empty document returns `"boxes": []` with the pages still
+listed.
+
+```json
+{
+  "pipeline_version": "yolo-48t-l",
+  "pages": [
+    { "page": 1, "rotation": 0 },
+    { "page": 2, "rotation": 90 },
+    { "page": 3, "rotation": 0 }
+  ],
+  "boxes": [
+    {
+      "page": 1,
+      "x": 205.61, "y": 288.74, "width": 34.12, "height": 8.93,
+      "kilde": "begge",
+      "yolo_conf": 0.871,
+      "paddle_rec_score": 0.99412
+    },
+    {
+      "page": 3,
+      "x": 118.2, "y": 512.44, "width": 31.7, "height": 9.41,
+      "kilde": "yolo",
+      "yolo_conf": 0.53,
+      "trekk": { "har_tokens": 1, "n_siffer": 11, "n_bokstaver": 0 }
+    }
+  ]
+}
 ```
-Funksjonen returnerer predikerte avgrensingsboksene og lagrer et bilde.
 
-### Evaluering på flere dokumenter
-Kjør `evaluation_main.py`. Minor-versjonsøkning i `current_model_version_number` kjører reglene på nytt med cachet OCR-lesing. Major-versjonsøkning kjører OCR på nytt.
+`pipeline_version` names the model that answered: `SLADD_PIPELINE_VERSION`
+from the environment if set, otherwise the `name` field of the `modell.json`
+that sits next to the weights, otherwise `unknown`. The batch job stores it
+with every label, so review outcomes can be attributed to the model that
+proposed them.
 
-Første gang tar OCR-lesingen 8+ timer for 1400 dokumenter.
+`rotation` is the number of degrees the analysis turned the page
+counterclockwise to make it upright. 0 means the page already stood upright.
+The batch job turns nonzero values into `ROTERT_SIDE` findings in the
+dokumentbestilling database.
 
-## SSL-problemer på macOS
-Se [denne Stack Overflow-responsen](https://stackoverflow.com/a/57795811).
+Each entry in `boxes`:
 
-## Lisens
+| Field | Description |
+|-------|-------------|
+| `page` | page number, 1-based |
+| `x`, `y` | top-left corner of the box, in PDF points, origin top-left |
+| `width`, `height` | box size in PDF points |
+| `kilde` | `paddle`, `yolo`, `begge` or `yolo_vertikal` |
+| `yolo_conf` | YOLO detection confidence (0-1). Only when YOLO was involved |
+| `paddle_rec_score` | how confidently the OCR read the characters. Only when Paddle was involved |
+| `trekk` | what the OCR saw in and around the box. Only for `kilde: "yolo"` |
+
+`yolo_conf` and `paddle_rec_score` are deliberately two fields. They measure
+different things: a confident *read* says nothing about detection certainty,
+and merging them would let a well-read Paddle box skip the geometry filters.
+`trekk` does not affect the sladding; it exists so stricter filter variants can
+be swept offline. See `app/box_features.py` for the full field list.
+
+Coordinates refer to the page's original orientation; any rotation applied
+during analysis has already been undone.
+
+## Test tooling
+
+All three run from `utils/`. Only the flags you need day to day are listed.
+`--help` has the rest.
+
+### `run.py`: run the model over a folder of PDFs
+
+Same code path as a POST: bytes in, `run_model_on_pdf_bytes` out.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--folder PATH` | `../uttrekk_3` | folder of PDFs |
+| `--select FILE [FILE ...]` | none | only these files (filename/substring) |
+| `--select-from-file FILE` | none | read IDs from a text file, one per line |
+| `--count N` | `20` | number of files when `--select` is empty (`alle` = all) |
+| `--yolo-weights FILE` | `$SLADD_PRODWEIGHTS` | weights to test |
+| `--csv` / `--csv-out FILE` | off / `sladd_koordinater.csv` | write found boxes to CSV |
+| `--truth` / `--truth-csv FILE` | off | measure recall against a labels CSV |
+| `--png` / `--png-dir PATH` | off / `visning` | draw found + truth boxes to PNG |
+| `--only-error` | off | PNGs only for pages with a miss or oversladding |
+| `--result-dir PATH` | `.` | where the `result-*` directory is created |
+| `--metadata-csv FILE` | none | rettsstiftelse types per document; enables rule profiles |
+| `--without-postfilter` | off | skip all postfilters; baseline of what the rules contribute |
+| `--vlm` | off | let a vision model re-read the boxes and remove the ones it rejects |
+| `--vlm-model NAME` | `$SLADD_VLM_MODEL` | model name at the endpoint |
+| `--vlm-url URL` | `$SLADD_VLM_URL` | OpenAI-compatible `/v1`, comma-separated for several backends |
+| `--api-url URL` | none | send every PDF to a running deployment instead of the model in this process |
+| `--api-timeout SEK` | `300` | seconds per document before it counts as failed |
+| `--api-no-vlm` | off | send `vlm=false`, so a container with the verifier on answers without it |
+| `--time` | off | timing per document |
+
+Output directories that already exist abort the run; use `--proceed` to resume
+or `--overwrite` to start over. OCR and YOLO results are cached per document
+under `$SLADD_CACHE`, so rerunning the same model is nearly free.
+
+```sh
+python run.py --select 10000676.pdf --csv --truth --time
+python run.py --count alle --truth --csv --png
+```
+
+With `--api-url` the model runs nowhere near this process: each PDF is POSTed
+to a container and the boxes come back over HTTP. The weights, the rules and
+the caches are then the image's, so `--yolo-weights`, `--vlm` and
+`--without-postfilter` are refused. See "Validating a deployment" below.
+
+On the server, `valider_full.sh` and `valider_yolo.sh` wrap this with the
+standard paths. Start there rather than assembling flags by hand.
+
+### `draw_from_csv.py`: visualise boxes as PNG
+
+Draws the boxes from a finished CSV onto the PDF pages, without running the
+model. Use it to flip through what was found. With `--truth` the labels are
+drawn as green frames; `--only-oversladd` and `--only-miss` narrow it down to
+the pages worth looking at.
+
+```sh
+python draw_from_csv.py --csv sladd_koordinater.csv --png-dir visning
+python draw_from_csv.py --csv sladd_koordinater.csv --truth --only-miss
+```
+
+### `run_stats.py`: combined report for one run
+
+```sh
+python run_stats.py result-2026-07-14T08-15-20 --labels labels.csv
+```
+
+Writes `statistikk.txt` and `statistikk.png` into the result directory.
+
+### `filter_sweep.py`: what the rules cost and what they buy
+
+Every rule constant in `app/config.py` was tuned against one model's score
+distribution, so a new model needs them measured again. The sweep reads a result
+CSV produced without the rules, applies each candidate configuration to it and
+counts two things: fasit boxes that lose all coverage (`lost`), and pure
+oversladdinger removed (`ov.rm`). It never reruns the model, so a sweep costs CPU
+only.
+
+`--cost` is the exchange rate: how many removed oversladdinger one lost fasit box
+is worth. It decides which side of the trade the report favours, so pick it
+before reading anything.
+
+The report opens with today's operating point, each `RULE_*` from config measured
+alone and then all of them stacked. The rettsstiftelse profiles are missing from
+it because the result CSV carries no rettsstiftelseskode. Measure those with
+`valider_full.sh metadata=yes` against a run without metadata.
+
+On the server, `sveip_regler.sh` runs the whole round: the result CSV unbounded,
+the same CSV cut to what clears the exchange rate, and one pass per holdout seed.
+
+```sh
+./valider_full.sh model=$SLADD_WEIGHTS/48t_l/48t_l.pt uttrekk=6 \
+    list=holdout48 rules=no name=48t_l_raa
+./sveip_regler.sh res=$SLADD_VALIDATION/48t_l_raa/resultat.csv cost=50
+```
+
+## VLM verifier
+
+A vision model can re-read every proposed sladdeboks and remove the ones it is
+sure hold no fødselsnummer. It is off unless you turn it on, and when it is on
+it can only remove boxes. It never adds one and never moves one.
+
+Three limits bound what a «nei» from the model can do.
+
+- Only boxes with kilde `yolo` are judged, and only in documents that get no
+  rule profile. Measured on uttrekk4, the removable boxes were 806 of 1027 for
+  `yolo`, 0 of 203 for `begge` and 1 of 129 for `paddle`, so judging the other
+  kilder costs GPU time and returns nothing.
+- Before a «nei» is acted on, PaddleOCR's line and the model's own
+  transcription go back through `find_fnr`. A valid eleven-digit run overrules
+  the verdict, and so does a fnr ledetekst next to a five-digit run. The model
+  reads better than it infers, so the code does the inferring.
+- Anything that fails keeps the box: a timeout, an HTTP error, an answer that
+  does not parse, an endpoint that is not running.
+
+The endpoint is OpenAI-compatible `/v1/chat/completions`, so llama-server,
+vLLM and LM Studio all work. `llama-server` is what runs on the GPU host,
+because it has no registry client and no cloud backend to switch off. Each
+judged box is one call to the model. `run.py --time` reports what it cost on
+its own `vlm` line.
+
+The crops hold real fødselsnumre, so what the model server may reach matters as
+much as what it answers. `docs/VLM-ISOLATION.md` covers the sandbox and how to
+check that it holds.
+
+### Turning it on in prod
+
+Set these in `server.env` and deploy again. `deploy.sh` passes them to the
+container.
+
+```sh
+export SLADD_VLM=1
+export SLADD_VLM_URL=http://127.0.0.1:8080/v1
+export SLADD_VLM_URL_DOCKER=http://host.docker.internal:8080/v1
+export SLADD_VLM_MODEL=qwen3.8:27b
+```
+
+`SLADD_VLM` plus a URL and a model are what turn the verifier on. Without a URL
+and a model there is nothing to call, and the pipeline runs as it did before.
+
+The two URLs exist because the same endpoint has two addresses. `SLADD_VLM_URL`
+is the one the host-side tools use, so it stays on loopback. Inside the
+container `localhost` is the container itself, so compose sends
+`SLADD_VLM_URL_DOCKER` instead and falls back to `SLADD_VLM_URL` when it is
+empty. `host.docker.internal` resolves through the `extra_hosts` entry in
+`docker-compose.yml`. Set only `SLADD_VLM_URL` and the container will call
+itself and get nothing.
+
+`SLADD_VLM_TIMEOUT` (seconds per box) and `SLADD_VLM_CONCURRENT` (boxes in
+flight per page) reach the container the same way, and default to 20 and 4.
+
+The container also runs with `HTTP_PROXY` set for traffic to the outside. VLM
+calls skip it, since the endpoint is on the inside. `SLADD_VLM_PROXY` sends them
+through a proxy anyway, but it only works for the tools that run on the host:
+`docker-compose.yml` does not pass it into the container, so add it to the
+environment block there first if a container ever needs it.
+
+### Turning it on in run.py
+
+```sh
+python run.py --count alle --truth --csv --vlm --vlm-model qwen3.8:27b
+```
+
+The crops come from the page image, so `--vlm` renders every document even
+when OCR and YOLO both come from cache. Judgements are cached under
+`$SLADD_CACHE/vlm` in a directory named after the prompt version, so a rerun
+with the same prompt and model reuses them. Edit the prompt and you get a new
+directory and a full rejudge.
+
+## Configuration
+
+| File | Contents |
+|------|----------|
+| `app/config.py` | PDF DPI, YOLO thresholds, OCR parameters, filter rules, orientation |
+| `utils/utils_config.py` | paths, evaluation threshold, visualisation colours |
+| `server.env` | `SLADD_*` paths on the GPU server, and the VLM verifier settings |
+| `.env` | deploy state for one machine, which tag runs where (see `.env.example`) |
+
+## CSV formats
+
+### Box CSV (`run.py --csv`, read back by `draw_from_csv.py`)
+
+`navn, side, bilde_bredde, bilde_hoyde, x0, y0, x1, y1, kilde, yolo_conf,
+paddle_rec_score` followed by one column per feature in `FEATURE_FIELDS`
+(`app/config.py`). Coordinates are pixels here, not points. Feature columns are
+empty for every `kilde` other than `yolo`.
+
+### Labels CSV (fasit from the existing solution)
+
+Column names come from the database export and are not ours to rename:
+`fil_revisjon_id` (the number in the PDF filename), `sidetall`, `x`, `y`,
+`width`, `height` (PDF points), `type`, `ml_generated`, `ml_status`
+(`ACCEPTED`/`REJECTED`; rejected rows are skipped).
+
+A labels file covers a whole uttrekk, so a document with no rows has been
+reviewed and found to contain no fnr. Predictions on it are real oversladdinger.
+
+### Details CSV (`run.py --truth`, read by `run_stats.py`)
+
+One row per truth box, written to `detaljer.csv` in the result directory:
+`fil, side, fasit_nr, type, dekning_pst, resultat` (`TRUFFET`/`MANGLER`),
+`kilde, conf, fasit_x0/y0/x1/y1`. Alongside it, `sammendrag.csv` holds the
+overall recall and the per-type breakdown.
+
+## Production (Docker)
+
+Production is a Docker container on the GPU server. **Port 5071 is production**,
+and nothing else is.
+
+An image is built once and gets an immutable tag
+(`<date>-<commit>-<model>`, e.g. `20260820-6d7e6820-yolo-yearly-10000-docs`).
+After that only *which* tag runs where moves. Prod never builds, so rollback is
+pointing back at a tag that has already run.
+
+Images are stored **only locally on the server**. There is no registry. So
+`docker image prune -a` destroys the ability to roll back, and a new machine
+has to rebuild everything.
+
+| Role | Port | Container | Tag from |
+|------|------|-----------|----------|
+| Prod | 5071 | `smsl-prod` | `PROD_TAG` |
+| Test | 5072 | `smsl-test` | `TEST_TAG` |
+
+`deploy.sh` does all the work. First time on a new machine:
+
+```sh
+cp .env.example .env
+source activate.sh          # loads server.env, which points at the model store
+ls $SLADD_WEIGHTS           # models available to build in
+```
+
+### build → test → promote
+
+```sh
+./deploy.sh build                                            # model from $SLADD_PRODWEIGHTS
+./deploy.sh build weights=$SLADD_WEIGHTS/uttrekk_4_jou/uttrekk_4_jou.pt   # another model
+
+./deploy.sh test 20260820-6d7e6820-yolo-yearly-10000-docs
+curl http://localhost:5072/health
+
+./deploy.sh promote 20260820-6d7e6820-yolo-yearly-10000-docs # same bits that were tested
+./deploy.sh stop test                                        # release the GPU memory
+```
+
+`promote` requires the tag explicitly, asks for confirmation, and **rolls back
+automatically** if `/health` does not answer. A tag built on uncommitted changes
+gets a `-dirty` suffix and is refused.
+
+### Validating a deployment
+
+`./deploy.sh test <tag>` only checks that the container answers. To see what it
+finds, point the validation at it:
+
+```sh
+./deploy.sh start test
+./valider_full.sh deploy=test uttrekk=5 list=jou
+```
+
+Every PDF goes over HTTP to `/model` in the container, and the answer is
+measured against the labels exactly as a local run is. Output folder,
+`resultat.csv` and summary look the same, so you can compare the two runs line
+by line.
+
+- The image holds the weights and the rules. `model=`, `rules=` and
+  `processes=` therefore do not apply, and `./deploy.sh status` tells you which
+  model is inside.
+- The caches under `$SLADD_CACHE` belong to this disk. The container keeps its
+  own and reads every document from scratch, so expect a few seconds per
+  document.
+- `deploy=prod` measures port 5071. `deploy=http://host:5072` measures any
+  other address.
+- `metadata=yes` sends the rettsstiftelse types as query parameters, the way
+  the skip job does.
+
+### Other commands
+
+```sh
+./deploy.sh status            # what runs where, and is it healthy
+./deploy.sh versions          # locally built tags with model, newest first
+./deploy.sh rollback          # back to the previous prod tag
+./deploy.sh start|stop prod|test
+./deploy.sh logs prod|test
+./deploy.sh prune [keep]      # delete old images, cannot be undone
+```
+
+`start` and `stop` never change version; they bring the tag already in `.env`
+down and up. Deploy history lives in `.deploy-historikk` and is what `rollback`
+reads.
+
+### Worth knowing
+
+- Prod and test share the GPU. Run `./deploy.sh stop test` when you are done.
+- Which model is baked in is always an explicit choice. Without one, `build`
+  refuses. An image without weights starts fine and fails at the first
+  `/model` call.
+- The weights live outside the repo, so the commit alone does not say what an
+  image contains. That is why the model name is in the tag, and model name +
+  sha256 are labels on the image.
+- `deploy.sh build` stages the chosen model in `.byggvekter/` because Docker
+  can only copy from the build context. `docker build .` directly no longer
+  works; go through `deploy.sh`.
+- Confirm the GPU is actually in use:
+
+```sh
+./deploy.sh logs prod | grep -i "GPU available"   # -> True on gpu
+```
+
+### Logs
+
+Three streams through the same rotating handler: zipped at midnight, oldest zip
+dropped when the history is full.
+
+| Log | File | Source |
+|-----|------|--------|
+| Application | `app.log` | `app/app.py` |
+| Access | `gunicorn_access_prod.log` | `config/gunicorn_config_prod.py` |
+| Gunicorn errors | `gunicorn_error_prod.log` | same |
+
+`server.env` sets `SLADD_LOGS` (log root on the host) and `SLADD_LOG_DAYS`
+(days of history); `deploy.sh` passes them to compose as `LOG_ROOT` and
+`LOG_BACKUP_DAYS`. Under the log root: `gunicorn_logs/` and `ml_logs/` for
+prod, `gunicorn_logs_test/` and `ml_logs_test/` for test. Test writes to its own
+directories on purpose. Sharing them would have two rotation handlers fighting
+over the same file at midnight. The `_prod` suffix in the filenames is
+historical; it is kept so the existing log history on the server does not split
+into two series.
+
+## License
+
 [MIT](LICENSE)
 
-## Bidrag
-Se [CONTRIBUTING.md](CONTRIBUTING.md).
+## Contributing
 
-## Sikkerhet
-Se [SECURITY.md](.github/SECURITY.md) for rapportering av sårbarheter.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities via
+[SECURITY.md](.github/SECURITY.md), not in a public issue.

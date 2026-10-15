@@ -1,4 +1,4 @@
-# To run tests automatically when pushed to GitHub
+# Runs the guards that need no GPU, no VLM server and no documents.
 
 name: CI
 
@@ -25,14 +25,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
       with:
-        python-version: '3.11'
+        python-version: '3.12'
+
+    - name: No valid fødselsnummer in tracked files
+      run: |
+        python utils/fnr_vakt.py --selftest
+        python utils/fnr_vakt.py --all
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install $(grep -E '^(PyMuPDF|Pillow|numpy)==' requirements.txt)
 
-    - name: Run tests
-      run: |
-        cd app/
-        pytest
+    - name: Run the VLM selftest
+      run: python utils/vlm_selftest.py

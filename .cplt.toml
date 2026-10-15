@@ -1,0 +1,17 @@
+# cplt sandbox policy for dokumentbestilling-smart-sladding.
+# Required by kartverket/copilot (content/sikkerhet/cplt.md).
+# cplt reads this file from git HEAD: commit it, then run `cplt trust accept --all`.
+# [deny] applies at once; [propose] only after it is committed and accepted.
+
+[deny]
+# Local secret files. Paths are exact, relative to the repo root: cplt does not
+# expand globs. cplt's defaults already block any .env / .env.* file; listed so
+# the policy is explicit. server.env is committed and holds no secrets.
+paths = [
+    ".env",
+]
+
+[propose]
+# Block pushes and destructive git/gh commands. Required.
+gh_guard = true
+git_push_prevention = true

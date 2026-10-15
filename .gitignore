@@ -16,3 +16,32 @@ valideringssett/organized_labels_all.csv
 valideringssett/results/**
 tmp/
 logs/**
+*.pdf
+!utils/testdokument.pdf
+*.png
+!docs/diagrams/skjermbilder/*.png
+bokser.csv
+ocr_linjer.txt
+smartsladding_uttrekk_1_22_06_26.csv
+smartsladding_uttrekk_labels_1_22_06_26.csv
+PP-OCRv5_server_det_infer/
+PP-OCRv5_server_rec_infer/
+PP-OCRv5_server_det_infer.tar
+PP-OCRv5_server_rec_infer.tar
+PP-OCRv6_medium_det_infer/
+PP-OCRv6_medium_rec_infer/
+PP-OCRv6_medium_det_infer.tar
+PP-OCRv6_medium_rec_infer.tar
+PP-LCNet_x1_0_doc_ori_infer/
+PP-LCNet_x1_0_doc_ori_infer.tar
+*.csv
+# Fasit metadata, not data: geometry only, never a number.
+!manglende_labels.csv
+runs/
+.deploy-historikk
+
+# Weights belong in the model store ($SLADD_WEIGHTS), never in the repo.
+# .byggvekter/ is staging for ./deploy.sh build and lives for seconds.
+.byggvekter/
+app/weights/
+*.pt

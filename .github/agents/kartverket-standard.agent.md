@@ -1,5 +1,6 @@
 ---
 name: kartverket-standard
+displayName: Kartverket-standard
 description: Kartverkets standardkonfigurasjon for KI-assistanse.
 tools: [
     # VSCode

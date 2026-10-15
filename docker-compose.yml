@@ -1,55 +1,99 @@
+# Prod and test run the same image — only the tag and the port differ.
+#
+# Compose never builds anything here. Building happens in ./deploy.sh, which
+# gives the image an immutable tag. Prod then does not change because someone
+# built something new, and rollback is pointing PROD_TAG at an older tag.
+#
+# The images exist only locally on the server, so «docker image prune -a»
+# removes the ability to roll back.
+#
+# Port 5071 is always prod. Test sits behind a compose profile, so a bare
+# "docker compose up -d" does not start a test container that eats GPU memory
+# alongside prod.
+
+name: smsl
+
+x-common: &common
+  restart: unless-stopped
+  # Gives the containers a name for the host, so SLADD_VLM_URL_DOCKER can
+  # point at llama-server there. Resolves to the host's bridge address.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  environment:
+    HTTP_PROXY: ${PROXY:-http://159.162.48.7:3128}
+    HTTPS_PROXY: ${PROXY:-http://159.162.48.7:3128}
+
+    # PaddleX initialises its training-repo manager on import and raises if
+    # that happens twice in one process. Inference never needs it.
+    PADDLE_PDX_EAGER_INIT: "0"
+    # Log paths inside the container. The host mounts in under ${LOG_ROOT},
+    # which deploy.sh takes from SLADD_LOGS in server.env.
+    GUNICORN_LOG_DIR: /data/gunicorn_logs
+    ML_LOG_DIR: /data/ml_logs
+    LOG_BACKUP_DAYS: ${LOG_BACKUP_DAYS:-30}
+    # VLM verifier, off unless SLADD_VLM=1 with an endpoint. deploy.sh sources
+    # server.env, so the values come from there. The URL is reached from
+    # inside the container, so localhost is the container itself:
+    # SLADD_VLM_URL_DOCKER carries the container-visible address and falls
+    # back to SLADD_VLM_URL, which stays loopback for the host-side tools.
+    SLADD_VLM: ${SLADD_VLM:-}
+    SLADD_VLM_URL: ${SLADD_VLM_URL_DOCKER:-${SLADD_VLM_URL:-}}
+    SLADD_VLM_MODEL: ${SLADD_VLM_MODEL:-}
+    SLADD_VLM_TIMEOUT: ${SLADD_VLM_TIMEOUT:-20}
+    SLADD_VLM_CONCURRENT: ${SLADD_VLM_CONCURRENT:-4}
+  # The access, error and application logs rotate and zip themselves into the
+  # mounted directories. This cap is for stray stdout/stderr, which otherwise
+  # grows without limit in docker's own json log file.
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 60s
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
 services:
-  app-prod:
-    build:
-      context: .
-      args:
-        - HTTP_PROXY=http://159.162.48.7:3128
-        - HTTPS_PROXY=http://159.162.48.7:3128
-    container_name: smsl-server-prod 
-    image: smart_sladding_app_prod
-    restart: unless-stopped
-    environment:
-      - HTTP_PROXY=http://159.162.48.7:3128
-      - HTTPS_PROXY=http://159.162.48.7:3128
-      - MODE=prod  
+  prod:
+    <<: *common
+    image: ${IMAGE:-smart-sladding}:${PROD_TAG:-not-set}
+    container_name: smsl-prod
+    pull_policy: never
     ports:
       - "5071:8080"
     volumes:
-      - /data/docker/gunicorn_logs:/data/gunicorn_logs
-      - /data/docker/ml_logs:/data/ml_logs
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - ${LOG_ROOT:-/data/docker}/gunicorn_logs:/data/gunicorn_logs
+      - ${LOG_ROOT:-/data/docker}/ml_logs:/data/ml_logs
 
-  app-dev:
-    build:
-      context: .
-      args:
-        - HTTP_PROXY=http://159.162.48.7:3128
-        - HTTPS_PROXY=http://159.162.48.7:3128
-    container_name: smsl-server-dev
-    image: smart_sladding_app_dev
-    restart: unless-stopped
-    environment:
-      - HTTP_PROXY=http://159.162.48.7:3128
-      - HTTPS_PROXY=http://159.162.48.7:3128
-      - MODE=dev
+  test:
+    <<: *common
+    image: ${IMAGE:-smart-sladding}:${TEST_TAG:-not-set}
+    container_name: smsl-test
+    pull_policy: never
+    profiles: ["test"]
+    restart: "no"
     ports:
-      - "5072:8080"
+      - "${TEST_PORT:-5072}:8080"
     volumes:
-      - /data/docker/gunicorn_logs:/data/gunicorn_logs
-      - /data/docker/ml_logs:/data/ml_logs
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
+      - ${LOG_ROOT:-/data/docker}/gunicorn_logs_test:/data/gunicorn_logs
+      - ${LOG_ROOT:-/data/docker}/ml_logs_test:/data/ml_logs
 
-volumes:
-  data:
+# Pinned because llama-server's IPAddressAllow names this subnet. Docker hands
+# out bridge subnets in creation order, so an unpinned network can move and the
+# verifier then goes quiet without an error anywhere.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
