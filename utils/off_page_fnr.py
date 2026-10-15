@@ -3,8 +3,9 @@ Whether the labels outside the page left an fnr uncovered.
 
 Takes the CSV from off_page_labels.py --out and, for every page it names, finds
 the fnr candidates in the cached OCR tokens and checks each against the labels
-that are on the page. A candidate counts as covered when one burned label
-(manual, or ML ACCEPTED) covers COVER_SHARE of it. An uncovered candidate on
+that are on the page. Only the last SLADD_DIGITS digits are redacted, so a
+candidate counts as covered when one burned label (manual, or ML ACCEPTED)
+covers COVER_SHARE of those digits. An uncovered candidate on
 the same text line as an off-page label is the case that matters: the label
 was probably meant for it, and nothing on the page redacts it.
 
@@ -45,12 +46,12 @@ _APP = os.path.join(_UTILS, "..", "app")
 if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
-from config import PDF_DPI
+from config import PDF_DPI, SLADD_DIGITS
 from ocr_cache import read_cache as read_ocr_cache
 from paddle_ocr_model_fnr import _normalize_ocr, build_lines, find_fnr, valid_mod11
 
 PX_TO_PT = 72 / PDF_DPI
-COVER_SHARE = 0.5      # share of the candidate's area one label must cover
+COVER_SHARE = 0.5      # share of the last SLADD_DIGITS digits one label must cover
 LINE_SLACK_PT = 4.0    # pt; y slack when matching a label to a text line
 TOLERANCE_PT = 1.0     # pt; same as off_page_labels.py
 
@@ -112,8 +113,13 @@ def _same_line(a, b):
     return a[1] - LINE_SLACK_PT < b[3] and b[1] - LINE_SLACK_PT < a[3]
 
 
+def _digit_box(digits):
+    return (min(d.left for d in digits) * PX_TO_PT, min(d.top for d in digits) * PX_TO_PT,
+            max(d.right for d in digits) * PX_TO_PT, max(d.bottom for d in digits) * PX_TO_PT)
+
+
 def _candidates(tokens):
-    """[(box in pt, digit count, passes mod11)] for every fnr-shaped run."""
+    """[(box, box of the redacted digits, digit count, passes mod11)], in pt."""
     out = []
     for _, text, map_ in build_lines(tokens):
         for hit in find_fnr(text, require_mod11=False):
@@ -123,9 +129,8 @@ def _candidates(tokens):
             digit_str = _normalize_ocr("".join(
                 ch for ch, d in zip(text[hit.start:hit.end], map_[hit.start:hit.end])
                 if d is not None))
-            box = (min(d.left for d in digits) * PX_TO_PT, min(d.top for d in digits) * PX_TO_PT,
-                   max(d.right for d in digits) * PX_TO_PT, max(d.bottom for d in digits) * PX_TO_PT)
-            out.append((box, len(digits), valid_mod11(digit_str)))
+            out.append((_digit_box(digits), _digit_box(digits[-SLADD_DIGITS:]),
+                        len(digits), valid_mod11(digit_str)))
     return out
 
 
@@ -156,7 +161,7 @@ def _draw(page, labels, cands, w_pt, h_pt, dpi, path):
     canvas = Image.new("RGB", (int(right * s), pix.h), (255, 230, 230))
     canvas.paste(page_img, (0, 0))
     d = ImageDraw.Draw(canvas)
-    for b, _, ok in cands:
+    for b, _, _, _ in cands:
         d.rectangle([b[0] * s, b[1] * s, b[2] * s, b[3] * s], outline=(0, 0, 255), width=2)
     for r in labels:
         b = _box(r)
@@ -226,9 +231,9 @@ def main():
               f"({len(burned_on_page)} burned on the page), {len(cands)} fnr candidates")
 
         cand_state = []
-        for b, n, ok in cands:
-            cover = max((_intersection(b, lb) / _area(b) for lb in burned_on_page if _area(b)),
-                        default=0.0)
+        for b, redacted, n, ok in cands:
+            cover = max((_intersection(redacted, lb) / _area(redacted)
+                         for lb in burned_on_page if _area(redacted)), default=0.0)
             cand_state.append((b, n, ok, cover >= COVER_SHARE))
             print(f"   candidate {_fmt_box(b)} digits={n} mod11={'yes' if ok else 'no'} "
                   f"{'covered' if cover >= COVER_SHARE else 'UNCOVERED'} ({cover:.0%})")
