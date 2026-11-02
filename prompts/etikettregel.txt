@@ -1,0 +1,19 @@
+Utsnitt fra et skannet norsk tinglysingsdokument. Rød ramme = foreslått sladd.
+
+Fødselsnummer: 11 sifre, DDMMÅÅ + 5 sifre personnummer. D-nummer er også
+fødselsnummer: dag + 40, så tall som begynner på 41–71 er gyldige. Rammen
+dekker ofte bare de fem siste sifrene; datoen kan stå utenfor utsnittet.
+
+Berører rammen et fødselsnummer, helt eller delvis?
+
+- Standardsvar «ja» — også når tallet er delvis skjult, avkuttet eller uleselig.
+- Etiketter som «fnr.», «f.nr.», «pnr.» eller «fødselsnr.» betyr at tallet er
+  et fødselsnummer: svar «ja».
+- Svar «nei» bare hvis du kan sitere en etikett som viser at tallet er noe
+  annet: «kontonr.», «org.nr.», «gnr./bnr.», «kr», «saksnr.».
+  Hvordan sifrene ser ut er aldri nok.
+
+Svar kun med JSON:
+{"tall": "tallene i og rundt rammen",
+ "holdepunkt": "sitat av etiketten hvis nei, ellers tom",
+ "svar": "ja" eller "nei"}

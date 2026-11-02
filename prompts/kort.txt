@@ -1,0 +1,8 @@
+Utsnitt fra et skannet norsk tinglysingsdokument. Den røde rammen markerer en foreslått sladd.
+
+Berører rammen et fødselsnummer, helt eller delvis? Fødselsnumre har elleve sifre (DDMMÅÅ + 5 sifre personnummer), og rammen dekker ofte bare en bit av nummeret.
+
+Svar «nei» bare når du tydelig ser at tallet er noe annet, og skriv hva det er. Ellers svar «ja».
+
+Svar kun med JSON:
+{"tall": "tallene du ser i og rundt rammen", "holdepunkt": "hva tallet er hvis nei, ellers tom", "svar": "ja"}
