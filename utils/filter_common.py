@@ -313,6 +313,16 @@ def _warn_missing_id_column(invalid, columns):
               f"Include id in the next export.")
 
 
+def is_ml_status_accepted(status):
+    """Whether an ML label's final box is approved fasit (ACCEPTED or MOVED).
+
+    Says nothing about the model's guess: a MOVED box was placed wrong and
+    corrected by the behandler, so it must not count as a model hit.
+    But can be trained on.
+    """
+    return status in ("ACCEPTED", "MOVED")
+
+
 def iter_label_rows(path, exclude_status=("REJECTED",), info=None):
     """Yields rows from a labels CSV with the fasit policy applied.
 
@@ -370,7 +380,7 @@ def iter_label_rows(path, exclude_status=("REJECTED",), info=None):
 
 
 def read_truth_boxes(path):
-    """Truth labels (ACCEPTED + manual; REJECTED and ugyldige_labels.txt skipped)
+    """Truth labels (ACCEPTED + MOVED + manual; REJECTED and ugyldige_labels.txt skipped)
     as (doc_no, side) -> [(x0, y0, x1, y1, label_id), ...] in PDF points.
     """
     truth = defaultdict(list)

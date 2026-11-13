@@ -387,7 +387,7 @@ empty for every `kilde` other than `yolo`.
 Column names come from the database export and are not ours to rename:
 `fil_revisjon_id` (the number in the PDF filename), `sidetall`, `x`, `y`,
 `width`, `height` (PDF points), `type`, `ml_generated`, `ml_status`
-(`ACCEPTED`/`REJECTED`; rejected rows are skipped).
+(`ACCEPTED`/`MOVED`/`REJECTED`; rejected rows are skipped).
 
 A labels file covers a whole uttrekk, so a document with no rows has been
 reviewed and found to contain no fnr. Predictions on it are real oversladdinger.

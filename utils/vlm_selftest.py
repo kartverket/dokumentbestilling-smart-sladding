@@ -103,7 +103,7 @@ def build_data(rot):
                     "id": label_id, "fil_revisjon_id": int(name.lstrip("0")[:6]),
                     "sidetall": 1, "x": tx0, "y": ty0,
                     "width": tx1 - tx0, "height": ty1 - ty0,
-                    "ml_status": "ACCEPTED",
+                    "ml_status": "MOVED" if name == "0100003.pdf" else "ACCEPTED",
                 })
             px = [tx0 * SCALE, ty0 * SCALE, tx1 * SCALE, ty1 * SCALE]
             pred_rows.append({
