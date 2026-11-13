@@ -750,7 +750,7 @@ def main():
     p = argparse.ArgumentParser(
         description="Ground-truth-centric evaluation of filter configurations")
     p.add_argument("--truth-csv", required=True,
-                   help="Labels CSV (ACCEPTED + manual = ground truth, "
+                   help="Labels CSV (ACCEPTED + MOVED + manual = ground truth, "
                         "REJECTED excluded)")
     p.add_argument("--res-csv", required=True,
                    help="Result CSV from the model (pixel coordinates)")

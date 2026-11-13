@@ -6,9 +6,9 @@ whole-uttrekk regime: a processed document without rows counts as zero fnr,
 so --processed-list is required, or documents where the model found nothing
 would silently leave the scope. The YOLO confidence cutoff is swept per model;
 cost = cost_w * missed fnr + oversladd boxes, and the winner is the
-(model, conf) pair. Misses are also reported on manual-only fasit, since
-ML-accepted rows are the incumbent's own suggestions and the manual slice is
-the number that escapes that circularity, plus per decade and per
+(model, conf) pair. Misses are also reported on manual + moved fasit, since
+ML-accepted rows are the incumbent's own suggestions and the manual + moved slice
+is the number that escapes that circularity, plus per decade and per
 rettsstiftelseskode (a doc with several codes counts under each), with
 WORST_DECADE/WORST_CODE lines for the specialist probe to read.
 
@@ -55,7 +55,7 @@ def _manual_ids(truth_csv):
     for r in iter_label_rows(truth_csv):
         status = (r.get("ml_status") or "").strip().upper()
         gen = (r.get("ml_generated") or "").strip().lower()
-        if status == "MANUAL" or gen not in ("true", "t", "1"):
+        if (status == "MANUAL" or status == "MOVED") or gen not in ("true", "t", "1"):
             manual.add((r.get("id") or "").strip())
     manual.discard("")
     return manual
@@ -184,7 +184,7 @@ def main():
 
     hdr = f"{'navn':<24} {'conf':>5} {'tapte':>5} {'man':>4} {'oversl':>6} {'kostnad':>7}"
     print(f"\nRanking, cost = {args.cost:g} * tapte + oversladd, "
-          f"{rows[0]['n_fasit']} fasit boxes ({rows[0]['n_manuell']} manual), "
+          f"{rows[0]['n_fasit']} fasit boxes ({rows[0]['n_manuell']} manual + moved), "
           f"{rows[0]['n_dok_scope']} docs in scope")
     print(hdr + "   | ved std-conf " + f"{STD_CONF:g}: tapte/oversl/kostnad")
     for r in rows:
