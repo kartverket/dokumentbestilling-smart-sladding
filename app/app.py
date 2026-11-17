@@ -6,6 +6,7 @@ import vlm_verifier
 import yolo_fnr
 import zipped_timed_rotating_file_handler
 import os
+import signal
 from dotenv import load_dotenv
 
 app = Flask(__name__)
@@ -37,6 +38,9 @@ def _pipeline_version():
 
 
 PIPELINE_VERSION = _pipeline_version()
+
+# YOLO takes its GPU memory before Paddle can grow into it.
+yolo_fnr.warm_up()
 
 
 def _log_safe(value, max_len=100):
@@ -139,7 +143,17 @@ def get_bounding_boxes():
 
     except Exception as e:
         logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')
+        if _is_gpu_oom(e):
+            # Only a new process frees Paddle's cache; SIGTERM lets this response go out first.
+            logging.error('GPU out of memory: restarting the worker')
+            os.kill(os.getpid(), signal.SIGTERM)
+            return jsonify({'error': str(e)}), 503
         return jsonify({'error': str(e)}), 500
+
+
+def _is_gpu_oom(e):
+    """True for a CUDA out-of-memory error from torch (YOLO) or Paddle (OCR)."""
+    return isinstance(e, MemoryError) or 'out of memory' in str(e).lower()
 
 
 logging.basicConfig(

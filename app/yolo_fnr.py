@@ -68,6 +68,14 @@ def _fetch_model():
     return _model
 
 
+def warm_up():
+    """Load YOLO and run one predict, so its GPU memory is taken at startup.
+
+    Lazy loading put YOLO after Paddle, which by then held the free memory.
+    """
+    find_yolo_boxes(np.zeros((YOLO_IMGSZ, YOLO_IMGSZ, 3), dtype=np.uint8))
+
+
 def find_yolo_boxes(image, conf=None):
     """Run YOLO on one image. conf=None uses the YOLO_CONF threshold."""
     bgr = np.ascontiguousarray(image[:, :, ::-1])    # RGB (PyMuPDF) -> BGR (ultralytics)

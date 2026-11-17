@@ -26,6 +26,9 @@ x-common: &common
     # PaddleX initialises its training-repo manager on import and raises if
     # that happens twice in one process. Inference never needs it.
     PADDLE_PDX_EAGER_INIT: "0"
+    # Uncapped, Paddle grows into what llama-server leaves free and YOLO cannot load. MB.
+    FLAGS_allocator_strategy: auto_growth
+    FLAGS_gpu_memory_limit_mb: ${SLADD_PADDLE_GPU_MB:-10000}
     # Log paths inside the container. The host mounts in under ${LOG_ROOT},
     # which deploy.sh takes from SLADD_LOGS in server.env.
     GUNICORN_LOG_DIR: /data/gunicorn_logs
