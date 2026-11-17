@@ -27,7 +27,7 @@ container when you are done, or prod can run short of memory.
 
 | Path | Contents |
 |---|---|
-| `/home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding` | This repo, `deploy.sh`, `server.env`, `.env` and the venv |
+| `/home/smartsladding/dokumentbestilling-smart-sladding` | This repo, `deploy.sh`, `server.env`, `.env` and the venv |
 | `/home/smartsladding/smartsladding-uttrekk-labels` | Label CSVs (ground truth) per uttrekk |
 | `/home/smartsladding/smartsladding-uttrekk-metadata` | Metadata CSVs per uttrekk |
 | `/data2/vekter` | Published YOLO models. Prod is built from `48t_l` |
@@ -77,7 +77,7 @@ Everything below needs an uttrekk on disk.
 
 ```bash
 tmux new -s trening
-source /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding/activate.sh
+source /home/smartsladding/dokumentbestilling-smart-sladding/activate.sh
 ```
 
 One line activates both the venv and every `SLADD_` variable. Put the `source`

@@ -153,7 +153,7 @@ Commit and push first. The server builds from its own checkout, so it needs
 the commit on origin.
 
 ```bash
-cd /home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding
+cd /home/smartsladding/dokumentbestilling-smart-sladding
 git pull --ff-only
 ./deploy.sh build
 ./deploy.sh test <tag>
