@@ -1,17 +1,20 @@
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+# CUDA 12.x, not 13: CUDA 13 dropped Volta (sm_70), which the server runs.
+# Ubuntu 24.04 for Python 3.12; Pillow 13 needs 3.11 or newer.
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    PATH=/opt/venv/bin:$PATH
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-pip \
-    poppler-utils tesseract-ocr \
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+    python3 python3-venv \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     curl \
-    && apt-get remove -y python3-blinker \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --upgrade pip
+# Ubuntu 24.04 refuses pip installs into the system Python (PEP 668).
+RUN python3 -m venv /opt/venv && pip install --no-cache-dir --upgrade pip
 
 WORKDIR /app
 
