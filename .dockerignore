@@ -2,6 +2,7 @@
 !app/
 !config/
 !requirements.txt
+!requirements-override.txt
 # The model ./deploy.sh stages here just before the build. If it is not in the
 # context, the Dockerfile cannot copy it in.
 !.byggvekter/

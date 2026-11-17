@@ -31,9 +31,6 @@ updates:
       # A new ultralytics changes the YOLO scores on the same page, so a bump
       # needs a recall check on labelled data first.
       - dependency-name: "ultralytics"
-      # paddlex requires numpy below 2.4.
-      - dependency-name: "numpy"
-        versions: [">=2.4"]
 
   - package-ecosystem: "pip"
     directory: "/job"

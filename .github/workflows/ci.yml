@@ -38,7 +38,8 @@ jobs:
     - name: Install dependencies
       # Only what the tests import, at the versions the images use.
       run: |
-        grep -E '^(PyMuPDF|Pillow|numpy)==' requirements.txt > "$RUNNER_TEMP/imports.txt"
+        grep -E '^(PyMuPDF|Pillow)==' requirements.txt > "$RUNNER_TEMP/imports.txt"
+        grep -E '^numpy==' requirements-override.txt >> "$RUNNER_TEMP/imports.txt"
         grep -E '^requests==' job/requirements-skip-job.txt >> "$RUNNER_TEMP/imports.txt"
         python -m pip install --upgrade pip
         pip install -r "$RUNNER_TEMP/imports.txt" -r tests/requirements.txt

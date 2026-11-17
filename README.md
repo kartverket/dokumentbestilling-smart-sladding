@@ -31,7 +31,11 @@ python3.12 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install --no-deps -r requirements-override.txt
 ```
+
+The second line installs the numpy the server runs. pip will not pick it
+together with `requirements.txt`, since paddlex declares numpy below 2.4.
 
 `requirements.txt` pins `paddlepaddle==3.3.1`. Which build you get depends on
 the index you install from: plain PyPI gives the CPU wheel (Mac, laptops),

@@ -14,6 +14,7 @@ on:
     paths:
       - 'Dockerfile'
       - 'requirements.txt'
+      - 'requirements-override.txt'
       - '.github/workflows/check-model-packages.yml'
   workflow_dispatch:
 
@@ -42,9 +43,18 @@ jobs:
           --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
           -r requirements.txt
         python - <<'PY' > resolved.txt
-        import json
+        import json, re
+        # The Dockerfile installs requirements-override.txt last, so its pins win.
+        override = {}
+        for line in open("requirements-override.txt"):
+            m = re.match(r"([A-Za-z0-9_.-]+)==([^\s#]+)", line)
+            if m:
+                override[m.group(1).lower()] = m.group(2)
         for i in json.load(open("report.json"))["install"]:
-            print(f'{i["metadata"]["name"]}=={i["metadata"]["version"]}')
+            name = i["metadata"]["name"]
+            print(f'{name}=={override.pop(name.lower(), i["metadata"]["version"])}')
+        for name, pinned in override.items():
+            print(f'{name}=={pinned}')
         PY
         cat resolved.txt
 

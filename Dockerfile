@@ -48,6 +48,36 @@ RUN NCCL=$(python3 -c "import importlib.metadata as m; print(next(r.split(';')[0
     echo "pinning $NCCL" && \
     pip install --no-cache-dir --force-reinstall --no-deps "$NCCL"
 
+# The torch step above has already replaced numpy with what the PyTorch index
+# has. This sets the version we chose and tested.
+COPY requirements-override.txt .
+RUN pip install --no-cache-dir --no-deps -r requirements-override.txt
+
+# The torch step reinstalls torch's dependencies from the PyTorch index, which
+# can replace a pinned package without a word. Stop the build if it did.
+RUN python3 - <<'EOF'
+import re
+from importlib.metadata import PackageNotFoundError, version
+
+pins = {}
+for path in ("requirements.txt", "requirements-override.txt"):
+    for line in open(path):
+        m = re.match(r"([A-Za-z0-9_.-]+)==([^\s#]+)", line)
+        if m:
+            pins[m.group(1)] = m.group(2)
+wrong = []
+for name, pinned in pins.items():
+    try:
+        installed = version(name)
+    except PackageNotFoundError:
+        installed = "missing"
+    if installed.split("+")[0] != pinned:
+        wrong.append(f"  {name}: pinned {pinned}, installed {installed}")
+if wrong:
+    raise SystemExit("Installed packages differ from their pins:\n" + "\n".join(wrong))
+print(f"All {len(pins)} pins match")
+EOF
+
 # The weights live outside the repo (see SLADD_WEIGHTS in server.env) and
 # docker only copies from the build context, so ./deploy.sh stages the chosen
 # model in .byggvekter/ (modell.pt + modell.json) before the build and cleans

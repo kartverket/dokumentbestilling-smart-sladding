@@ -8,7 +8,7 @@ torch or Python.
 
 | Image | Built from | Built by | Reaches production |
 |---|---|---|---|
-| Model API | `Dockerfile`, `requirements.txt` | `./deploy.sh build` on `ribr07ml27` | When you run `./deploy.sh promote <tag>` |
+| Model API | `Dockerfile`, `requirements.txt`, `requirements-override.txt` | `./deploy.sh build` on `ribr07ml27` | When you run `./deploy.sh promote <tag>` |
 | Skip job | `job/Dockerfile`, `job/requirements-skip-job.txt` | GitHub Actions, `docker-image.yml` | **On every push to main**, through GHCR and argocd |
 
 A push to main deploys the skip job at once. Test a change to `job/` before it
@@ -22,7 +22,7 @@ Main can be ahead of the image that runs.
 | Workflow | Runs when a PR changes | Checks |
 |---|---|---|
 | `ci.yml` | Anything | No valid fødselsnummer in tracked files, the VLM selftest, the unit tests in `tests/`, and the linters `ruff`, `actionlint` and `zizmor` |
-| `check-model-packages.yml` | `Dockerfile`, `requirements.txt` | The packages install together on Linux, and `pip-audit` finds no known vulnerabilities |
+| `check-model-packages.yml` | `Dockerfile`, `requirements.txt`, `requirements-override.txt` | The packages install together on Linux, and `pip-audit` finds no known vulnerabilities |
 | `check-job-image.yml` | `job/` | The skip job image builds, and its modules import |
 
 `ci.yml` also runs on every push to main. The other two run on pull requests
@@ -50,15 +50,22 @@ fixed yet.
 | Pin | Why |
 |---|---|
 | `nvidia/cuda:12.6.x` base image | Matches the cu126 wheels of torch and paddle. The server has a Tesla V100S (Volta, sm_70), and CUDA 13 dropped Volta |
-| `numpy` below 2.4 | Set by paddlex |
+| `numpy` in `requirements-override.txt` | paddlex declares numpy below 2.4, so pip will not resolve a newer one with `requirements.txt`. The model runs on newer, so the Dockerfile installs this file last, without dependency checks |
 | `ultralytics==8.4.90` | A newer version changes the YOLO scores on the same page. 8.4.215 dropped a low-score box on the test document. Bump it only after a recall check on labelled data |
 | `torch==2.12.1`, `torchvision==0.27.1` | The last builds for CUDA 12.6. The Dockerfile reinstalls them from the cu126 index, so the version in `requirements.txt` must match that index |
 | `paddlepaddle-gpu` from the paddle cu126 index | Same reason. It is not on PyPI |
 | Ubuntu 24.04, Python 3.12 | Pillow 13 and PyMuPDF 2 need Python 3.11 or newer |
 | `setuptools` below 82 | Set by torch. A scanner may flag it, but you cannot raise it without a new torch |
 
-`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision,
-ultralytics and numpy 2.4 and newer, so Dependabot does not propose them. Moving off CUDA 12 means new GPU hardware first.
+`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision and
+ultralytics, so Dependabot does not propose them. Moving off CUDA 12 means new
+GPU hardware first.
+
+The torch step in the Dockerfile reinstalls torch's dependencies from the
+PyTorch index, and can replace a package `requirements.txt` pins. The build
+checks every pin in `requirements.txt` and `requirements-override.txt` at the
+end, and stops with a list of the packages that differ. Test the version the
+index installed, and pin it in `requirements-override.txt` if it works.
 
 ## Dependabot pull requests
 
@@ -89,6 +96,8 @@ docker run --rm --platform linux/amd64 -v "$PWD":/w python:3.12-slim \
 ```
 
 This takes several minutes, since it reads the metadata of the CUDA wheels.
+It leaves out `requirements-override.txt`, which pip cannot resolve together
+with the rest. Test a bump there with a build on the server.
 Compare the package list in `report.json` with the one before. Look for new
 packages, not only new versions.
 
@@ -181,4 +190,5 @@ Expect `True (7, 0)` from torch and `gpu:0` from paddle. Then:
 | `fatal: not a git repository` as root | Root's shell does not load `server.env`, so `$SLADD_REPO` is empty | Use the full path, or `source activate.sh` |
 | Build hangs pulling `nvidia/cuda` | An expired Docker Hub token in the server's login | `docker logout`. Anonymous pulls work |
 | `docker rmi` refuses: image is in use | A stopped `smsl-test` still uses it. `deploy.sh stop` does not remove the container | `docker rm smsl-test`, then `docker rmi` |
+| The build stops with «Installed packages differ from their pins» | The torch step replaced a pinned package with the version on the PyTorch index | See [What is pinned, and why](#what-is-pinned-and-why) |
 | The new image finds other boxes than expected | The server checkout was on another branch, or `server.env` pointed at another model | `git status` on the server, and check the model with `./deploy.sh versions` |

@@ -1,0 +1,3 @@
+# Installed last, without dependency checks, so these pins win over
+# requirements.txt. paddlex declares numpy below 2.4, but the model runs on newer.
+numpy==2.5.4
