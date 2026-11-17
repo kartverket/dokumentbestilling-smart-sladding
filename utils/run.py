@@ -49,9 +49,6 @@ SCALE = PDF_DPI / 72.0                     # PDF points -> pixels
 
 
 def _pages_from_result(result, pdf_bytes):
-    if isinstance(result, dict):
-        return result.get("sider", [])
-
     per_page = defaultdict(list)
     for b in result:
         per_page[b["page"]].append(b)
@@ -92,12 +89,26 @@ def _health_url(api_url):
     return head + "/health"
 
 
+def _boxes_from_answer(result):
+    """The flat box list out of a /model answer.
+
+    The endpoint wraps the boxes in an object with pipeline_version and
+    per-page rotation; a deployment without that wrapper answers with the list
+    itself. Both are unwrapped to the form _pages_from_result reads.
+    """
+    boxes = result.get("boxes") if isinstance(result, dict) else result
+    if not isinstance(boxes, list):
+        raise ValueError(f"expected a list of boxes, got "
+                         f"{type(result).__name__}: {str(result)[:120]}")
+    return boxes
+
+
 def _post_pdf(session, api_url, pdf_bytes, name, rettsstiftelsestyper,
               elektronisk_tinglyst, vlm_off, timeout):
     """One document through a running deployment, the way the skip job sends it.
 
-    The answer is the flat box list from /model, which _pages_from_result reads
-    the same way as a local run.
+    Returns the boxes from /model, which _pages_from_result reads the same way
+    as a local run.
     """
     params = {"filrevisjonid": os.path.splitext(name)[0]}
     if elektronisk_tinglyst:
@@ -110,11 +121,7 @@ def _post_pdf(session, api_url, pdf_bytes, name, rettsstiftelsestyper,
                           headers={"Content-Type": "application/pdf"},
                           timeout=timeout)
     answer.raise_for_status()
-    result = answer.json()
-    if not isinstance(result, list):
-        raise ValueError(f"expected a list of boxes, got "
-                         f"{type(result).__name__}: {str(result)[:120]}")
-    return result
+    return _boxes_from_answer(answer.json())
 
 
 def _write_ocr_log(ocr_lines, path):

@@ -45,6 +45,20 @@ def _send_one(sess, url, pdf_bytes, timeout):
     return r.json()
 
 
+def _boxes_from_answer(result):
+    """The box list out of a /model answer.
+
+    The endpoint wraps the boxes in an object with pipeline_version and
+    per-page rotation; a deployment without that wrapper answers with the list
+    itself.
+    """
+    boxes = result.get("boxes") if isinstance(result, dict) else result
+    if not isinstance(boxes, list):
+        raise ValueError(f"expected a list of boxes, got "
+                         f"{type(result).__name__}: {str(result)[:120]}")
+    return boxes
+
+
 def _evaluate(pred_boxes, sent_doc_no, truth, threshold):
     """Hits + oversladding in point space, only for the documents we sent.
 
@@ -146,8 +160,7 @@ def main():
                 dt = time.perf_counter() - t0
                 api_time += dt
 
-                if not isinstance(result, list):
-                    raise ValueError(f"expected a list, got {type(result).__name__}: {str(result)[:120]}")
+                boxes = _boxes_from_answer(result)
 
                 jf.write(json.dumps({"navn": name, "sekunder": round(dt, 3),
                                      "result": result}, ensure_ascii=False) + "\n")
@@ -155,7 +168,7 @@ def main():
 
                 nr = _doc_no(name)
                 doc_boxes = 0
-                for b in result:
+                for b in boxes:
                     page = b["page"]
                     x, y, w, h = b["x"], b["y"], b["width"], b["height"]
                     write.writerow([name, page, x, y, w, h])
