@@ -38,6 +38,9 @@ def _pipeline_version():
 
 PIPELINE_VERSION = _pipeline_version()
 
+# YOLO takes its GPU memory before Paddle can grow into it.
+yolo_fnr.warm_up()
+
 
 def _log_safe(value, max_len=100):
     """A query-string value as one log line.
@@ -139,7 +142,17 @@ def get_bounding_boxes():
 
     except Exception as e:
         logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')
+        if _is_gpu_oom(e):
+            # Only a new process frees Paddle's cache; post_request in the gunicorn config ends this worker.
+            logging.error('GPU out of memory: restarting the worker')
+            request.environ['smsl.restart_worker'] = True
+            return jsonify({'error': str(e)}), 503
         return jsonify({'error': str(e)}), 500
+
+
+def _is_gpu_oom(e):
+    """True for a CUDA out-of-memory error from torch (YOLO) or Paddle (OCR)."""
+    return isinstance(e, MemoryError) or 'out of memory' in str(e).lower()
 
 
 logging.basicConfig(
