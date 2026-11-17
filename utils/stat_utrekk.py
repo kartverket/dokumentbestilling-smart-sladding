@@ -134,22 +134,23 @@ def fig_per_year(year_csv, rows, path):
 
 def fig_ml_vs_manual(all_rows, path):
     ml_acc  = sum(1 for r in all_rows if r["ml"] and r["status"] == "ACCEPTED")
+    ml_mov = sum(1 for r in all_rows if r["ml"] and r["status"] == "MOVED")
     ml_rej  = sum(1 for r in all_rows if r["ml"] and r["status"] == "REJECTED")
     manual = sum(1 for r in all_rows if not r["ml"])
-    total  = ml_acc + ml_rej + manual
+    total  = ml_acc + ml_mov + ml_rej + manual
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.5))
 
-    categories = ["ML found\n(accepted)", "ML found\n(rejected)", "Case worker\nadded"]
-    values    = [ml_acc, ml_rej, manual]
-    colors     = ["#5a9e6f", "#c0504d", "#f0a830"]
+    categories = ["ML found\n(accepted)", "ML found\n(moved)", "ML found\n(rejected)", "Case worker\nadded"]
+    values    = [ml_acc, ml_mov, ml_rej, manual]
+    colors     = ["#5a9e6f", "#30d6f0", "#c0504d", "#f0a830"]
     ax1.bar(categories, values, color=colors, edgecolor=EDGE)
     for i, v in enumerate(values):
         ax1.text(i, v + total * 0.005, str(v), ha="center", va="bottom", fontsize=9)
     _style(ax1, "ML vs by hand (boxes)", "", "Boxes")
 
-    recall = ml_acc / (ml_acc + manual) if (ml_acc + manual) > 0 else 0
-    oversladd = ml_rej / (ml_acc + ml_rej) if (ml_acc + ml_rej) > 0 else 0
+    recall = ml_acc / (ml_acc + ml_mov + manual) if (ml_acc + ml_mov + manual) > 0 else 0
+    oversladd = ml_rej / (ml_acc + ml_mov + ml_rej) if (ml_acc + ml_mov + ml_rej) > 0 else 0
     ax2.barh(["Recall", "Over-sladding"], [recall * 100, oversladd * 100],
              color=["#5a9e6f", "#c0504d"], edgecolor=EDGE)
     ax2.set_xlim(0, 100)
@@ -190,12 +191,15 @@ def write_summary(rows, all_rows, path):
             w(f"  {ml:<8} {st:<10} {c:>6}\n")
 
         ml_acc  = sum(1 for r in all_rows if r["ml"] and r["status"] == "ACCEPTED")
+        ml_mov = sum(1 for r in all_rows if r["ml"] and r["status"] == "MOVED")
         ml_rej  = sum(1 for r in all_rows if r["ml"] and r["status"] == "REJECTED")
         manual = sum(1 for r in all_rows if not r["ml"])
-        recall  = ml_acc / (ml_acc + manual) if (ml_acc + manual) > 0 else 0
-        oversladd = ml_rej / (ml_acc + ml_rej) if (ml_acc + ml_rej) > 0 else 0
+
+        recall  = ml_acc / (ml_acc + ml_mov + manual) if (ml_acc + ml_mov + manual) > 0 else 0
+        oversladd = ml_rej / (ml_acc + ml_mov + ml_rej) if (ml_acc + ml_mov + ml_rej) > 0 else 0
         w("\n=== Current solution (recall estimate) ===\n")
         w(f"  ML found + accepted:     {ml_acc:>6}\n")
+        w(f"  ML found + moved:        {ml_mov:>6}  (model miss)\n")
         w(f"  ML found + rejected:     {ml_rej:>6}  (over-sladding)\n")
         w(f"  Case worker added:       {manual:>6}  (model miss)\n")
         w(f"  Recall estimate:         {recall:.1%}\n")

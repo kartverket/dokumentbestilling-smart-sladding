@@ -4,7 +4,7 @@ Whether the labels outside the page left an fnr uncovered.
 Takes the CSV from off_page_labels.py --out and, for every page it names, finds
 the fnr candidates in the cached OCR tokens and checks each against the labels
 that are on the page. Only the last SLADD_DIGITS digits are redacted, so a
-candidate counts as covered when one burned label (manual, or ML ACCEPTED)
+candidate counts as covered when one burned label (manual, ML MOVED or ML ACCEPTED)
 covers COVER_SHARE of those digits. An uncovered candidate on
 the same text line as an off-page label is the case that matters: the label
 was probably meant for it, and nothing on the page redacts it.
@@ -47,6 +47,7 @@ if _APP not in sys.path:
     sys.path.insert(0, _APP)
 
 from config import PDF_DPI, SLADD_DIGITS
+from filter_common import is_ml_status_accepted
 from ocr_cache import read_cache as read_ocr_cache
 from paddle_ocr_model_fnr import _normalize_ocr, build_lines, find_fnr, valid_mod11
 
@@ -83,7 +84,7 @@ def _is_true(value):
 def _burned(row):
     if not _is_true(row.get("ml_generated")):
         return True
-    return (row.get("ml_status") or "").strip().upper() == "ACCEPTED"
+    return is_ml_status_accepted((row.get("ml_status") or "").strip().upper())
 
 
 def _who(row):

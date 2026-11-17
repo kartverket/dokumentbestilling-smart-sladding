@@ -135,7 +135,7 @@ def paddle_stats(details, summary):
 
 
 def labels_stats(labels, doc_nos=None):
-    s = {"tp": 0, "fp": 0, "fn": 0, "unresolved": 0, "pr_type": defaultdict(lambda: [0, 0, 0])}
+    s = {"tp": 0, "fp": 0, "fn": 0, "moved": 0, "unresolved": 0, "pr_type": defaultdict(lambda: [0, 0, 0])}
     for r in labels:
         if doc_nos is not None and r["doc_no"] not in doc_nos:
             continue
@@ -146,14 +146,17 @@ def labels_stats(labels, doc_nos=None):
         elif r["ml"] and r["status"] == "REJECTED":
             s["fp"] += 1
             t[1] += 1
+        elif r["ml"] and r["status"] == "MOVED":
+            s["moved"] += 1
+            t[2] += 1
         elif not r["ml"]:
             s["fn"] += 1
             t[2] += 1
         else:
             s["unresolved"] += 1
-    s["fasit"] = s["tp"] + s["fn"]                       
+    s["fasit"] = s["tp"] + s["fn"] + s["moved"]
     s["recall"] = s["tp"] / s["fasit"] if s["fasit"] else 0.0
-    s["pred"] = s["tp"] + s["fp"]                        
+    s["pred"] = s["tp"] + s["fp"] + s["moved"]
     s["oversladding"] = s["fp"] / s["pred"] if s["pred"] else 0.0
     s["precision"] = 1.0 - s["oversladding"] if s["pred"] else 0.0
     s["manuell_andel"] = s["fn"] / s["fasit"] if s["fasit"] else 0.0
@@ -222,6 +225,7 @@ def make_report(folder, p, n, labels_path, log_info):
     L.append("")
     L.append("--- Current solution (same documents) " + "-" * 27)
     L.append(f"Found by itself (ml+ACCEPTED):{n['tp']}")
+    L.append(f"ML found, moved (miss):       {n['moved']}")
     L.append(f"Case worker added (FN):       {n['fn']}")
     L.append(f"Case worker rejected (FP):    {n['fp']}")
     L.append(f"Recall:                       {pct(n['recall'])}")
@@ -233,10 +237,10 @@ def make_report(folder, p, n, labels_path, log_info):
         L.append(f"NB: truth in the labels CSV ({n['fasit']}) != truth in the run "
                  f"({p['fasit']}), the numbers are not 1:1 comparable.")
     L.append("")
-    L.append("Current solution per type (same documents):")
+    L.append("Current solution per type (same documents, miss = manual + moved):")
     for t, (tp, fp, fn) in sorted(n["pr_type"].items()):
         rec = tp / (tp + fn) if tp + fn else 0.0
-        L.append(f"   {t or '(empty)':<22} TP {tp:>4}  FP {fp:>4}  FN {fn:>4}  recall {pct(rec)}")
+        L.append(f"   {t or '(empty)':<22} TP {tp:>4}  FP {fp:>4}  miss {fn:>4}  recall {pct(rec)}")
 
     L.append("")
     L.append("--- Comparison " + "-" * 50)
@@ -291,9 +295,11 @@ def make_graphs(folder, p, n, log_info):
 
     ax = axes[1][0]
     if n is not None and n["fasit"]:
-        ax.pie([n["tp"], n["fn"]],
-               labels=[f"Model found itself\n{n['tp']}", f"Case worker added\n{n['fn']}"],
-               colors=[blue, roed], autopct="%.1f %%", startangle=90)
+        ax.pie([n["tp"], n["moved"], n["fn"]],
+               labels=[f"Model found itself\n{n['tp']}",
+                       f"Model missed, moved\n{n['moved']}",
+                       f"Case worker added\n{n['fn']}"],
+               colors=[blue, gray, roed], autopct="%.1f %%", startangle=90)
         ax.set_title("Truth boxes today: model vs case worker")
     else:
         ax.axis("off")
@@ -320,18 +326,19 @@ def _write_labels_report(n, labels_path):
     stroke = "=" * 66
     pct_fn = lambda x: f"{x * 100:5.1f} %"
     L = [stroke, f"CURRENT SOLUTION: {labels_path.name}", stroke, ""]
-    L.append(f"Truth (TP + FN):               {n['fasit']}")
+    L.append(f"Truth (TP + moved + FN):       {n['fasit']}")
     L.append(f"Found by itself (ml+ACCEPTED): {n['tp']}")
+    L.append(f"ML found, moved (miss):        {n['moved']}")
     L.append(f"Case worker added (FN):        {n['fn']}")
     L.append(f"Case worker rejected (FP):     {n['fp']}")
     L.append(f"Recall:                        {pct_fn(n['recall'])}")
     L.append(f"Over-sladding:                 {pct_fn(n['oversladding'])}   ({n['fp']} of {n['pred']} boxes rejected)")
     L.append(f"Case worker share:             {pct_fn(n['manuell_andel'])}")
     L.append("")
-    L.append("Per type:")
+    L.append("Per type (miss = manual + moved):")
     for t, (tp, fp, fn) in sorted(n["pr_type"].items()):
         rec = tp / (tp + fn) if tp + fn else 0.0
-        L.append(f"   {t or '(empty)':<22} TP {tp:>4}  FP {fp:>4}  FN {fn:>4}  recall {pct_fn(rec)}")
+        L.append(f"   {t or '(empty)':<22} TP {tp:>4}  FP {fp:>4}  miss {fn:>4}  recall {pct_fn(rec)}")
     L.append(stroke)
     return "\n".join(L) + "\n"
 

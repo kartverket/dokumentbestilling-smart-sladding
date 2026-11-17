@@ -1,9 +1,9 @@
 """Draw labels onto the PDF pages, colored by error category.
 
-Green is ACCEPTED, orange REJECTED (false positive) and red hand-placed
+Green is ACCEPTED, blue is MOVED, orange REJECTED (false positive) and red hand-placed
 (true negative). Documents where everything is ACCEPTED are dropped, and the
-rest are written to false_positive/ and true_negative/. A page with both
-lands in both directories.
+rest are written to moved/, false_positive/ and true_negative/. A page with several
+matching categories appears in each matching directory.
 
 Run:
     python utils/render_error_categories.py --folder ../uttrekk_3 \
@@ -26,8 +26,9 @@ PDF_DPI = 300
 SCALE = PDF_DPI / 72.0  # PDF points -> pixels
 
 COLOR_ACCEPTED = (30, 160, 30)      # green
+COLOR_MOVED = (48, 214, 240)        # blue
 COLOR_REJECTED = (255, 140, 0)      # orange (false positive)
-COLOR_MANUAL = (200, 0, 0)         # red (true negative)
+COLOR_MANUAL = (200, 0, 0)          # red (true negative)
 
 
 def _doc_no(name):
@@ -54,6 +55,8 @@ def read_labels_csv(path):
 
         if ml and status == "ACCEPTED":
             category = "accepted"
+        elif ml and status == "MOVED":
+            category = "moved"
         elif ml and status == "REJECTED":
             category = "rejected"
         else:
@@ -91,6 +94,8 @@ def _render_page(page):
 def _color_for(category):
     if category == "accepted":
         return COLOR_ACCEPTED
+    elif category == "moved":
+        return COLOR_MOVED
     elif category == "rejected":
         return COLOR_REJECTED
     return COLOR_MANUAL
@@ -130,7 +135,7 @@ def find_pdf_for_doc(folder, doc_no):
 def main():
     p = argparse.ArgumentParser(
         description="Draw labels by error category: green=accepted, "
-                    "orange=rejected (FP), red=hand-placed (TN).")
+                    "blue=moved, orange=rejected (FP), red=hand-placed (TN).")
     p.add_argument("--folder", required=True,
                    help="directory holding the PDF documents")
     p.add_argument("--labels-csv", required=True,
@@ -176,12 +181,15 @@ def main():
         print("No documents with errors, done.")
         return
 
+    mv_dir = os.path.join(args.out_dir, "moved")
     fp_dir = os.path.join(args.out_dir, "false_positive")
     tn_dir = os.path.join(args.out_dir, "true_negative")
+    os.makedirs(mv_dir, exist_ok=True)
     os.makedirs(fp_dir, exist_ok=True)
     os.makedirs(tn_dir, exist_ok=True)
 
     n_drawn = 0
+    n_mv = 0
     n_fp = 0
     n_tn = 0
     processed_doc = set()
@@ -215,12 +223,16 @@ def main():
 
             has_fp = "rejected" in categories_on_side
             has_tn = "manual" in categories_on_side
+            has_mv = "moved" in categories_on_side
 
             if args.proceed:
+                mv_finnes = (not has_mv) or os.path.exists(os.path.join(mv_dir, filename))
                 fp_finnes = (not has_fp) or os.path.exists(os.path.join(fp_dir, filename))
                 tn_finnes = (not has_tn) or os.path.exists(os.path.join(tn_dir, filename))
-                if fp_finnes and tn_finnes:
+                if mv_finnes and fp_finnes and tn_finnes:
                     n_drawn += 1
+                    if has_mv:
+                        n_mv += 1
                     if has_fp:
                         n_fp += 1
                     if has_tn:
@@ -232,6 +244,9 @@ def main():
             pw, ph = page_obj.rect.width, page_obj.rect.height
             draw_page(image, labels, pw, ph)
 
+            if has_mv:
+                image.save(os.path.join(mv_dir, filename))
+                n_mv += 1
             if has_fp:
                 image.save(os.path.join(fp_dir, filename))
                 n_fp += 1
@@ -246,6 +261,7 @@ def main():
     print(f"\nDone!")
     print(f"  Documents processed:  {len(processed_doc)}")
     print(f"  Pages drawn:          {n_drawn}")
+    print(f"  Moved:                {n_mv} pages -> {mv_dir}/")
     print(f"  False positive (FP):  {n_fp} pages -> {fp_dir}/")
     print(f"  True negative (TN):   {n_tn} pages -> {tn_dir}/")
 
@@ -254,14 +270,16 @@ def main():
         f.write("COLOR CODES\n")
         f.write("===========\n")
         f.write("Green frame:  ACCEPTED, ML found it, the case worker accepted it\n")
+        f.write("Blue frame:   MOVED, ML found it, the case worker accepted it then moved or transformed it\n")
         f.write("Orange frame: REJECTED, ML found it, the case worker rejected it (false positive)\n")
         f.write("Red frame:    BY HAND . The case worker added it (true negative / model miss)\n")
         f.write("\n")
         f.write("DIRECTORIES\n")
         f.write("===========\n")
+        f.write("moved/ , pages with at least one MOVED box (blue)\n")
         f.write("false_positive/ , pages with at least one REJECTED box (orange)\n")
         f.write("true_negative/  , pages with at least one hand-placed box (red)\n")
-        f.write("\nNote: a page with both FP and TN appears in both directories.\n")
+        f.write("\nNote: a page with several matching categories appears in each matching directory.\n")
     print(f"  Legend:               {legend_path}")
 
 

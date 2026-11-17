@@ -1045,7 +1045,7 @@ SWEEP_CONFIGURE = [
 # What the model never found, as opposed to what the filter removes. Ground
 # truth is split on ml_generated: ML-accepted boxes are the model's own
 # approved suggestions and a re-run nearly always refinds them (circular), so
-# real detection ability is measured on the manually drawn boxes.
+# real detection ability is measured on the manually drawn and MOVED boxes.
 
 def _is_ml_generated(row):
     return (row.get("ml_generated") or "").strip().lower() in ("true", "t", "1")
@@ -1102,6 +1102,7 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
         r["_coverage"] = best_v
         r["_beste_p"] = best_p
         r["_ml"] = _is_ml_generated(r["row"])
+        r["_circular"] = r["_ml"] and r["ml_status"] != "MOVED"
         group = ("udekket" if best_v < threshold
                   else "daarlig_dekket" if best_v < good_coverage else "ok")
         groups[group].append(r)
@@ -1110,8 +1111,8 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
     print(f"\nUncovered review  (criterion «{criterion}», threshold "
           f"{threshold:g}, good coverage ≥ {good_coverage:g})")
     print(f"  Scope: {len(scope)} documents, {n_scope} ground-truth boxes")
-    for ml, name in ((False, "manually drawn"), (True, "ML-accepted   ")):
-        tally = {k: sum(1 for r in g if r["_ml"] == ml)
+    for ml, name in ((False, "manual + MOVED"), (True, "ML-accepted   ")):
+        tally = {k: sum(1 for r in g if r["_circular"] == ml)
                 for k, g in groups.items()}
         n = sum(tally.values())
         if n:
@@ -1122,14 +1123,14 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
                   f"good {tally['ok']:>5} ({100*tally['ok']/n:4.1f}%)")
 
     sample = [r for r in groups["udekket"] + groups["daarlig_dekket"]
-              if also_ml or not r["_ml"]]
+              if also_ml or not r["_circular"]]
     if not sample:
         print("  Nothing to draw.")
         return
 
     upright = sum(1 for r in sample if r["h"] > r["w"])
     print(f"\n  Selected for review: {len(sample)} boxes "
-          f"({'manual + ML' if also_ml else 'manually drawn only'})")
+          f"({'manual + MOVED + ML' if also_ml else 'manual + MOVED only'})")
     print(f"    upright (h > w):   {upright} ({100*upright/len(sample):.1f}%)")
     for target in ("short_side", "long_side"):
         p10, p50, p90 = _p10_p50_p90([r[target] for r in sample])
@@ -1233,8 +1234,10 @@ def review_uncovered(truth_csv, res_csv, folder, out_dir,
             rr = [fx0 * skx - 6, fy0 * sky - 6,
                   fx1 * skx + 6, fy1 * sky + 6]
             drawer.rectangle(rr, outline=LOST_TRUTH, width=5)
+            origin = ("MOVED" if r2["ml_status"] == "MOVED"
+                      else "ML" if r2["_ml"] else "manual")
             mark = (f"{row['group'].upper()} {row['coverage_pct']:g}% "
-                     f"[{'ML' if r2['_ml'] else 'manual'}]")
+                     f"[{origin}]")
             _draw_text(drawer, rr, mark, LOST_TRUTH, over=True)
             bp = r2["_beste_p"]
             if bp is not None:
@@ -1350,7 +1353,7 @@ def main():
                    help="Review mode: catalogue and draw ground-truth boxes the "
                         "model does not cover (well enough). Splits on "
                         "ml_generated, real detection ability is measured on "
-                        "manually drawn boxes. Needs no filter flag.")
+                        "manually drawn and MOVED boxes. Needs no filter flag.")
     p.add_argument("--good-coverage", type=float, default=0.90,
                    dest="good_coverage", metavar="FRACTION",
                    help="--uncovered: coverage below this counts as «poorly "
@@ -1358,7 +1361,7 @@ def main():
     p.add_argument("--uncovered-also-ml", action="store_true",
                    dest="uncovered_also_ml",
                    help="--uncovered: draw ML-accepted boxes too (otherwise "
-                        "manually drawn only. The ML boxes are circular)")
+                        "manually drawn and MOVED only. The ML boxes are circular)")
     p.add_argument("--max-crop", type=int, default=None,
                    dest="max_crop", metavar="N",
                    help="--uncovered: max number of boxes to draw "

@@ -9,7 +9,7 @@ import argparse
 import csv
 import statistics
 
-from filter_common import iter_label_rows
+from filter_common import iter_label_rows, is_ml_status_accepted
 
 SCALE = 300 / 72.0  # PDF points -> pixels at 300 DPI
 
@@ -106,7 +106,7 @@ def main():
         all_of = read_labels(args.csv)
         print(f"Read {len(all_of)} boxes from {args.csv}")
 
-        accepted = [b for b in all_of if b["ml"] and b["status"] == "ACCEPTED"]
+        accepted = [b for b in all_of if b["ml"] and is_ml_status_accepted(b["status"])]
         rejected = [b for b in all_of if b["ml"] and b["status"] == "REJECTED"]
         manual = [b for b in all_of if not b["ml"]]
 
@@ -122,10 +122,10 @@ def main():
         pos_accepted = [b for b in accepted if b["w"] > 0 and b["h"] > 0]
 
         _analyse_group(pos, "ALL positive boxes")
-        _analyse_group(pos_accepted, "ACCEPTED only (ml_generated + accepted)")
+        _analyse_group(pos_accepted, "ACCEPTED/MOVED only (ml_generated)")
 
         print(f"\n{'=' * 60}")
-        print(f"ACCEPTED in pixels (300 DPI, scale={SCALE:.3f}):")
+        print(f"ACCEPTED/MOVED in pixels (300 DPI, scale={SCALE:.3f}):")
         percentiles([b["w"] * SCALE for b in pos_accepted], "Width (px)")
         percentiles([b["h"] * SCALE for b in pos_accepted], "Height (px)")
         percentiles([b["w"] * b["h"] * SCALE**2 for b in pos_accepted], "Area (px²)")
@@ -137,11 +137,11 @@ def main():
         print("Compared with the current filters:")
         print(f"  MIN_BOX_AREA = {min_area_px} px²")
         under_min = sum(1 for b in pos_accepted if b["w"] * b["h"] * SCALE**2 < min_area_px)
-        print(f"    ACCEPTED boxes that would be filtered out: {under_min}/{len(pos_accepted)}")
+        print(f"    ACCEPTED/MOVED boxes that would be filtered out: {under_min}/{len(pos_accepted)}")
 
         print(f"  MAKS_BREDDE_PT = {max_width_pt} pt ({max_width_pt * SCALE:.0f} px)")
         over_max = sum(1 for b in pos_accepted if b["w"] > max_width_pt)
-        print(f"    ACCEPTED boxes that would be filtered out: {over_max}/{len(pos_accepted)}")
+        print(f"    ACCEPTED/MOVED boxes that would be filtered out: {over_max}/{len(pos_accepted)}")
 
         print(f"\n{'=' * 60}")
         print("Possible new filters (from the truth data):")
@@ -203,7 +203,7 @@ def main():
         if args.csv:
             print(f"\n{'=' * 60}")
             print("COMPARISON truth vs. predictions (median):")
-            print(f"  {'':20} {'Truth (ACCEPTED)':>20} {'Predictions':>20}")
+            print(f"  {'':20} {'Truth (ACCEPTED/MOVED)':>20} {'Predictions':>20}")
             if pos_accepted and pos_pred:
                 fw = statistics.median(b["w"] for b in pos_accepted)
                 pw = statistics.median(b["w"] for b in pos_pred)
@@ -221,6 +221,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 

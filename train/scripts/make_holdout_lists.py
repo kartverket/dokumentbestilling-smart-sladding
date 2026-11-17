@@ -56,7 +56,8 @@ def _read_id_file(path):
 
 
 def _is_manual(row):
-    if (row.get("ml_status") or "").strip().upper() == "MANUAL":
+    status = (row.get("ml_status") or "").strip().upper()
+    if status == "MANUAL" or status == "MOVED":
         return True
     return (row.get("ml_generated") or "").strip().lower() not in ("true", "t", "1")
 
@@ -141,12 +142,12 @@ def main():
     n_train_neg = min(args.neg_train, len(neg_rest))
     train_neg, _ = stratified_split(neg_rest, n_train_neg)
 
-    print(f"Fasit: {len(labeled)} labeled docs ({len(manual_docs)} with manual boxes) "
+    print(f"Fasit: {len(labeled)} labeled docs ({len(manual_docs)} with manual or moved boxes) "
           f"of {len(alle_dok)} in the uttrekk, {len(neg_pool)} zero-fnr docs, "
           f"{len(forced)} forced to train")
     print("Holdout:")
     _decade_table("labeled", hold_labeled, decade_of)
-    _decade_table("manual-docs", hold_labeled & manual_docs, decade_of)
+    _decade_table("manual/moved-docs", hold_labeled & manual_docs, decade_of)
     _decade_table("negative", hold_neg, decade_of)
     print("Train:")
     _decade_table("labeled", train_labeled, decade_of)
