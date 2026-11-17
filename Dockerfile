@@ -1,6 +1,6 @@
 # CUDA 12.x, not 13: CUDA 13 dropped Volta (sm_70), which the server runs.
 # Ubuntu 24.04 for Python 3.12; Pillow 13 needs 3.11 or newer.
-FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+FROM nvidia/cuda:13.5.0-runtime-ubuntu24.04
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
