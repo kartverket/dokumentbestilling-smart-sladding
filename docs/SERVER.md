@@ -1,4 +1,76 @@
-# Training server: setup and use
+# GPU server: operation and use
+
+`ribr07ml27` runs smart sladding in production. It also holds the tools for
+training and validation, but no training data. See
+[Data and legal basis](#data-and-legal-basis).
+
+## What runs
+
+| Service | How | Port | Reached as |
+|---|---|---|---|
+| Prod | Docker, container `smsl-prod` | 5071 | `https://ribr07ml27.statkart.no/smartsladding_prod/` |
+| Test | Docker, container `smsl-test`, only while testing | 5072 | `https://ribr07ml27.statkart.no/smartsladding_dev/` |
+| VLM verifier | systemd, `llama-server.service` | 8080, local only | Prod container, through `host.docker.internal` |
+| Reverse proxy | Apache `httpd`, `/etc/httpd/conf.d/02_smartsladding.conf` | 80, 443 | |
+
+`./deploy.sh` builds, tests and promotes the containers. See "Production
+(Docker)" in the [README](../README.md#production-docker). The llama-server
+unit and its network lock are in [VLM-ISOLATION.md](VLM-ISOLATION.md).
+
+All three share one Tesla V100S with 32 GB. llama-server takes about 18 GB.
+Paddle in the container is capped by `SLADD_PADDLE_GPU_MB` (default 10000 MB),
+and a worker that runs out of GPU memory restarts itself. Stop the test
+container when you are done, or prod can run short of memory.
+
+## Where things are
+
+| Path | Contents |
+|---|---|
+| `/home/smartsladding/dokumentbestilling-smart-sladding_test/dokumentbestilling-smart-sladding` | This repo, `deploy.sh`, `server.env`, `.env` and the venv |
+| `/home/smartsladding/smartsladding-uttrekk-labels` | Label CSVs (ground truth) per uttrekk |
+| `/home/smartsladding/smartsladding-uttrekk-metadata` | Metadata CSVs per uttrekk |
+| `/data2/vekter` | Published YOLO models. Prod is built from `48t_l` |
+| `/data2/llama` | The VLM weights for llama-server |
+| `/data2/docker`, `/data2/containerd` | Docker images and containers |
+| `/data/docker` | Container logs |
+| `/data/httpd_logs` | Apache logs |
+
+The images exist only on this server. There is no registry and no backup, so
+an image you delete is gone, and so is the ability to roll back to it.
+
+## Logs
+
+All logs are kept for 30 days and then deleted.
+
+| Log | Where | Rotated by |
+|---|---|---|
+| Application, access and errors from the containers | `/data/docker/{gunicorn,ml}_logs[_test]/` | The app itself, at midnight. `SLADD_LOG_DAYS` sets the days |
+| Docker stdout/stderr | Docker's own json log | Compose, 5 × 50 MB |
+| Apache access and errors | `/data/httpd_logs/` | logrotate, `/etc/logrotate.d/smartsladding-httpd` |
+
+The access logs hold the `filrevisjonid` of every request. Nothing on the
+server is backed up, so the deletion after 30 days is final.
+
+## Data and legal basis
+
+The training data was deleted in November 2026, because there was no longer a
+legal basis for processing it. That covered the pantebok PDFs, every image
+rendered from them, the OCR, YOLO and VLM caches, the validation results and
+the training datasets.
+
+What remains:
+
+* Labels and metadata: document IDs and box coordinates, no document content.
+* The published models in `/data2/vekter`.
+* `utils/testdokument.pdf` in the repo.
+
+A new uttrekk needs a new legal basis before it is put on the server. When it
+comes, the PDFs go in `$SLADD_UTTREKK/uttrekk_<n>/` and the labels and
+metadata in `$SLADD_LABELS/uttrekk_<n>.csv` and
+`$SLADD_METADATA/uttrekk_<n>.csv`. The tools create the cache, run and
+validation directories themselves.
+
+Everything below needs an uttrekk on disk.
 
 ## First time: set up the environment
 
@@ -17,15 +89,15 @@ Set by `server.env`, which `activate.sh` sources.
 | Variable | Value | What it is |
 |---|---|---|
 | `SLADD_REPO` | `.../dokumentbestilling-smart-sladding` | Repo root |
-| `SLADD_UTTREKK` | `/data2/smartsladding-uttrekk` | PDFs per uttrekk |
+| `SLADD_UTTREKK` | `/data2/smartsladding-uttrekk` | PDFs per uttrekk. Empty |
 | `SLADD_LABELS` | `.../smartsladding-uttrekk-labels` | Label CSVs (ground truth) |
 | `SLADD_METADATA` | `.../smartsladding-uttrekk-metadata` | Metadata CSVs |
-| `SLADD_RUNS` | `/data2/runs` | Raw training runs |
+| `SLADD_RUNS` | `/data2/runs` | Raw training runs. Empty |
 | `SLADD_WEIGHTS` | `/data2/vekter` | Published models |
-| `SLADD_PRODWEIGHTS` | `$SLADD_WEIGHTS/yolo-yearly-10000-docs/yolo-yearly-10000-docs.pt` | Default model |
-| `SLADD_VALIDATION` | `/data2/validering` | Validation results |
-| `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists |
-| `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk |
+| `SLADD_PRODWEIGHTS` | `$SLADD_WEIGHTS/48t_l/48t_l.pt` | Default model, the one in prod |
+| `SLADD_VALIDATION` | `/data2/validering` | Validation results. Empty |
+| `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists. Empty |
+| `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk. Empty |
 | `SLADD_RUN` | `.../utils/run.py` | Validation script |
 | `SLADD_PRECACHE` | `.../utils/precache.py` | Cache filler |
 | `SLADD_TRAIN` | `.../train` | Training directory |
@@ -197,8 +269,8 @@ PDF rendering is not cached: the files are too large, roughly 25 MB per page.
 
 ```
 /data2/vekter/
-  yolo-yearly-10000-docs/
-    yolo-yearly-10000-docs.pt    ← the weights
+  48t_l/
+    48t_l.pt                     ← the weights
     modell.json                  ← dataset, hyperparameters, metrics, git sha
     training/                    ← results.csv, args.yaml, data.yaml, split_log.txt
 ```
