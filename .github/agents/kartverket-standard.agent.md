@@ -1,7 +1,7 @@
 ---
 name: kartverket-standard
 displayName: Kartverket-standard
-description: Kartverkets standardkonfigurasjon for KI-assistanse.
+description: Kartverkets standardkonfigurasjon for KI-assistanse i editor.
 tools: [
     # VSCode
     "read",
@@ -9,7 +9,7 @@ tools: [
     "search",
     "web",
     "todo",
-    # IntelliJ
+    # JetBrains (IntelliJ, GoLand, Rider, PyCharm, etc.)
     "insert_edit_into_file",
     "replace_string_in_file",
     "create_file",
@@ -25,4 +25,4 @@ tools: [
   ]
 ---
 
-Kartverkets standardkonfigurasjon for KI-assistanse.
+Kartverkets standardkonfigurasjon for KI-assistanse i editor.

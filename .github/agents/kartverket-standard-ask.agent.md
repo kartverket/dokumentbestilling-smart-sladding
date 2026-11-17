@@ -1,14 +1,14 @@
 ---
 name: kartverket-standard-ask
 displayName: Kartverket-standard (ask)
-description: Kartverkets standard ask-konfigurasjon for KI-assistanse. Lar ikke agenten redigere filer.
+description: Kartverkets standard ask-konfigurasjon for KI-assistanse i editor. Lar ikke agenten redigere filer.
 tools: [
     # VSCode
     "read",
     "search",
     "web",
     "todo",
-    # IntelliJ
+    # JetBrains (IntelliJ, GoLand, Rider, PyCharm, etc.)
     "open_file",
     "ask_questions",
     "get_errors",
@@ -20,4 +20,4 @@ tools: [
   ]
 ---
 
-Kartverkets standard ask-konfigurasjon for KI-assistanse. Lar ikke agenten redigere filer.
+Kartverkets standard ask-konfigurasjon for KI-assistanse i editor. Lar ikke agenten redigere filer.
