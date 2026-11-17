@@ -6,7 +6,8 @@ documents. A PDF goes in, a list of boxes to cover comes out.
 > **Working at Kartverket?** Read the routines before you start:
 > [Confluence](https://kartverket.atlassian.net/wiki/x/F4Dwn)
 
-See [docs/TEKNISK.md](docs/TEKNISK.md) for how the detection actually works.
+See [docs/TEKNISK.md](docs/TEKNISK.md) for how the detection actually works,
+and [docs/UPDATING.md](docs/UPDATING.md) before you bump a package or an image.
 
 ## Repo layout
 

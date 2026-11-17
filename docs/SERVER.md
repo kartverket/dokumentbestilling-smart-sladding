@@ -15,7 +15,8 @@ training and validation, but no training data. See
 
 `./deploy.sh` builds, tests and promotes the containers. See "Production
 (Docker)" in the [README](../README.md#production-docker). The llama-server
-unit and its network lock are in [VLM-ISOLATION.md](VLM-ISOLATION.md).
+unit and its network lock are in [VLM-ISOLATION.md](VLM-ISOLATION.md). To
+bump packages or the base image, see [UPDATING.md](UPDATING.md).
 
 All three share one Tesla V100S with 32 GB. llama-server takes about 18 GB.
 Paddle in the container is capped by `SLADD_PADDLE_GPU_MB` (default 10000 MB),

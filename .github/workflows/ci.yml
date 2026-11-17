@@ -1,4 +1,4 @@
-# Runs the guards that need no GPU, no VLM server and no documents.
+# Runs the checks that need no GPU, no VLM server and no documents.
 
 name: CI
 
@@ -17,10 +17,13 @@ jobs:
   test:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - name: Check out repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -33,9 +36,47 @@ jobs:
         python utils/fnr_vakt.py --all
 
     - name: Install dependencies
+      # Only what the tests import, at the versions the images use.
       run: |
+        grep -E '^(PyMuPDF|Pillow|numpy)==' requirements.txt > "$RUNNER_TEMP/imports.txt"
+        grep -E '^requests==' job/requirements-skip-job.txt >> "$RUNNER_TEMP/imports.txt"
         python -m pip install --upgrade pip
-        pip install $(grep -E '^(PyMuPDF|Pillow|numpy)==' requirements.txt)
+        pip install -r "$RUNNER_TEMP/imports.txt" -r tests/requirements.txt
 
     - name: Run the VLM selftest
       run: python utils/vlm_selftest.py
+
+    - name: Run the unit tests
+      run: python -m pytest tests
+
+  lint:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.12'
+
+    - name: Install linters
+      run: pip install -r tests/requirements.txt
+
+    - name: Python errors (ruff)
+      # Pyflakes rules only. Left out: F401 (utils/filter_common.py re-exports),
+      # F541 and F841 (vlm_lock variables hold a file lock open).
+      run: ruff check --select F --ignore F401,F541,F841 --output-format github .
+
+    - name: Workflow mistakes (actionlint)
+      run: |
+        docker run --rm -v "$PWD:/repo" -w /repo \
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+
+    - name: Workflow security (zizmor)
+      run: zizmor --offline .github/workflows

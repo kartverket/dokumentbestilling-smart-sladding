@@ -1,9 +1,6 @@
 name: Deploy Image to GHCR
 
-permissions:
-  contents: read
-  packages: write
-  id-token: write
+permissions: {}
 
 on:
   push:
@@ -19,11 +16,16 @@ on:
 jobs:
   push-python-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     outputs:
       short_sha: ${{ steps.setOutput.outputs.short_sha }}
     steps:
       - name: 'Checkout GitHub Action'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: 'Set up Docker Buildx'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -51,10 +53,16 @@ jobs:
       - name: Set output with build values
         id: setOutput
         run: |
-          echo "short_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "short_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   argocd-sync:
     needs: push-python-image
+    # All three, since release-app.yml is in an internal repo and what it
+    # needs cannot be read from here.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     uses: kartverket/eiet-apps/.github/workflows/release-app.yml@main
     with:
       imageurl: ghcr.io/${{ github.repository }}:${{ needs.push-python-image.outputs.short_sha }}

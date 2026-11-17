@@ -225,9 +225,6 @@ def evaluate_against_truth(sladd_boxes, truth, folder, threshold=HIT_THRESHOLD, 
         ],
     }
 
-import csv
-from collections import defaultdict
-
 
 def read_truth_xywh(csv_path):
     from filter_common import iter_label_rows

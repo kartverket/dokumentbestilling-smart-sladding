@@ -1,0 +1,7 @@
+# Settings for zizmor, run by the lint job in workflows/ci.yml.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # The team's own reusable workflows follow main on purpose.
+        "kartverket/*": ref-pin

@@ -1,0 +1,36 @@
+# Builds the skip job image on a pull request. docker-image.yml builds and
+# deploys it on every push to main, so this is the only build before that.
+
+name: Job image
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'job/**'
+      - '.github/workflows/check-job-image.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Build the image
+      run: docker build -t skip-job:check job/
+
+    - name: The job's modules import
+      run: |
+        docker run --rm --entrypoint python skip-job:check \
+          -c "import skip_job, url_utils, pdf_utils, requests"
