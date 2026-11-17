@@ -38,7 +38,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-import fitz
+import pymupdf as fitz
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))
 if _UTILS not in sys.path:

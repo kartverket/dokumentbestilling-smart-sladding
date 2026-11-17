@@ -23,7 +23,7 @@ import os
 import sys
 from collections import Counter
 
-import fitz
+import pymupdf as fitz
 from PIL import Image
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))

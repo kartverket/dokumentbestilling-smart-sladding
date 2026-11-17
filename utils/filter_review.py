@@ -24,7 +24,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 
 from filter_common import (CRITERIA, CRITERION_FIELDS, CRITERION_LOW_IS_GOOD,

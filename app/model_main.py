@@ -1,7 +1,7 @@
 import time
 from contextlib import contextmanager
 
-import fitz
+import pymupdf as fitz
 import numpy as np
 
 from config import (DEDUP_OVERLAP, PDF_DPI, YOLO_CACHE_CONF_FLOOR, YOLO_CONF,

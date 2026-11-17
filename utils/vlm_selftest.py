@@ -29,7 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "app")))
 
-import fitz
+import pymupdf as fitz
 from PIL import Image
 
 from config import (VLM_MARGIN_DOWN_PT, VLM_MARGIN_LEFT_PT,

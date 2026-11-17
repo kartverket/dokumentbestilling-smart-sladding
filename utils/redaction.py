@@ -1,7 +1,7 @@
 import os
 from collections import defaultdict
 
-import fitz
+import pymupdf as fitz
 
 
 def _pixel_to_point(box, bw, bh, pw, ph):

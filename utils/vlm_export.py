@@ -34,7 +34,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.normpath(os.path.join(_HERE, "..", "app")))
 
-import fitz
+import pymupdf as fitz
 
 from filter_common import (CRITERIA, PDF_DPI, SCALE, STD_CRITERION,
                            STD_SLOPPINESS_FACTOR, HIT_THRESHOLD, build_dataset,

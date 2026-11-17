@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 warnings.filterwarnings("ignore", message=".*ccache.*")
 os.environ["GLOG_minloglevel"] = "2"
 
-import fitz
+import pymupdf as fitz
 import requests
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))

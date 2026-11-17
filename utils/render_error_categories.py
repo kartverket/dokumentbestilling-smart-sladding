@@ -17,7 +17,7 @@ import re
 import sys
 from collections import defaultdict
 
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageDraw
 
 from filter_common import iter_label_rows

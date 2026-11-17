@@ -22,7 +22,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 import numpy as np
 
 # ugyldige_labels.txt lives at the repo root; reuse the reader in utils/.

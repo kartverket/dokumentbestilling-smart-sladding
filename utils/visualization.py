@@ -2,7 +2,7 @@ import glob
 import os
 import re
 
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 
 from load_pdf import PDF_DPI

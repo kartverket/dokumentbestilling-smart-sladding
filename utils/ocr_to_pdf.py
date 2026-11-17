@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-import fitz  # PyMuPDF
+import pymupdf as fitz
 import numpy as np
 
 _UTILS = os.path.dirname(os.path.abspath(__file__))

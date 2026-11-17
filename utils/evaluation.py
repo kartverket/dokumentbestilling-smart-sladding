@@ -3,7 +3,7 @@ import re
 import sys
 from collections import defaultdict
 
-import fitz
+import pymupdf as fitz
 
 _APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app")
 if _APP not in sys.path:

@@ -6,7 +6,7 @@ import sys
 from collections import defaultdict
 from contextlib import redirect_stdout
 
-import fitz
+import pymupdf as fitz
 import numpy as np
 
 _APP = os.path.join(os.path.dirname(__file__), "..", "app")
