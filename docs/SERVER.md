@@ -96,6 +96,7 @@ Set by `server.env`, which `activate.sh` sources.
 | `SLADD_RUNS` | `/data2/runs` | Raw training runs. Empty |
 | `SLADD_WEIGHTS` | `/data2/vekter` | Published models |
 | `SLADD_PRODWEIGHTS` | `$SLADD_WEIGHTS/48t_l/48t_l.pt` | Default model, the one in prod |
+| `SLADD_BACKUP_REPO` | `kartverket/dokumentbestilling-smart-sladding-model` | Private repo for the model backups |
 | `SLADD_VALIDATION` | `/data2/validering` | Validation results. Empty |
 | `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists. Empty |
 | `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk. Empty |
@@ -162,6 +163,9 @@ make -C $SLADD_TRAIN publiser \
 `modell.json` is only as complete as the variables you pass. Run `publiser`
 with the same `PDFS`/`CSV`/`STRATEGY` values the training used, or they stay
 empty in the metadata.
+
+Back up the new model when it is published. See
+[Backup of the models](#backup-of-the-models).
 
 ---
 
@@ -286,6 +290,55 @@ weights file itself and not the directory. That is the model `run.py` uses when
 `--yolo-weights` is omitted and the one `./deploy.sh build` bakes in without a
 `weights=` argument.
 
+## Backup of the models
+
+The models exist only on this server until they are backed up. A YOLO model
+takes a 48-hour training window to make again. `backup_model.sh` puts each
+model in a GitHub release in the private repo `$SLADD_BACKUP_REPO`. Only the
+team has access to that repo.
+
+```bash
+./backup_model.sh                                # every model in $SLADD_WEIGHTS without a release
+./backup_model.sh $SLADD_WEIGHTS/48t_l           # one model
+./backup_model.sh /data2/llama vlm-qwen3.8-27b   # the VLM weights, with their own tag
+```
+
+Each release is tagged with the model name. It holds the model directory as a
+tar, `modell.json` and `training/` included, and a `SHA256SUMS`. GitHub accepts
+files below 2 GiB, so the script splits the tar into parts of 1900 MiB. The
+YOLO models fit in one part. The VLM weights need about nine.
+
+The script skips a model that already has a release, so you can run it again
+after each new model. The release stays a draft until every part is uploaded.
+If an upload stops halfway, the next run stops at the draft. Delete the draft
+with `gh release delete <tag>`, then run again.
+
+The release notes have the commands to restore it:
+
+```bash
+gh release download 48t_l -R $SLADD_BACKUP_REPO -D 48t_l
+(cd 48t_l && sha256sum -c SHA256SUMS)
+cat 48t_l/48t_l.tar.part-* | tar -xf - -C $SLADD_WEIGHTS
+```
+
+`training/split_log.txt` lists the document IDs the model was trained and
+tested on. That is one reason the repo must stay private.
+
+### Set up gh
+
+The script needs `gh`, logged in as the user who runs it, with write access to
+the backup repo:
+
+1. Create a fine-grained personal access token. Resource owner: `kartverket`.
+   Repository access: only the backup repo. Permission: Contents, read and
+   write. The organisation may need to approve the token.
+2. Log in on the server: `gh auth login --with-token < token.txt`, then delete
+   `token.txt`.
+3. Check it: `gh repo view $SLADD_BACKUP_REPO`.
+
+The repo needs at least one commit, such as a README, before it can hold a
+release. The token expires, so renew it when `gh` stops working.
+
 ## File map
 
 ```
@@ -295,6 +348,7 @@ lag_liste.sh       ← generate document ID lists from metadata
 valider_yolo.sh    ← validation, YOLO only
 valider_full.sh    ← validation, full production logic (OCR + YOLO)
 deploy.sh          ← build, test and promote the container images
+backup_model.sh    ← back up models as releases in $SLADD_BACKUP_REPO
 app/ocr_cache.py   ← per-document OCR cache
 app/yolo_cache.py  ← per-document YOLO cache
 app/vlm_cache.py   ← per-crop cache of the verifier's answers
