@@ -17,6 +17,17 @@ worker_class = 'sync'
 workers = 1
 timeout = 600
 
+
+def post_request(worker, req, environ, resp):
+    """End the worker after its response when app.py asks, e.g. after a GPU OOM.
+
+    Not SIGTERM: once Paddle is loaded the worker dies on it at once, before
+    the response is sent.
+    """
+    if environ.get('smsl.restart_worker'):
+        worker.alive = False
+
+
 # Logging configuration
 loglevel = os.getenv("GUNICORN_LOGLEVEL", "debug")
 

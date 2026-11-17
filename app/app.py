@@ -6,7 +6,6 @@ import vlm_verifier
 import yolo_fnr
 import zipped_timed_rotating_file_handler
 import os
-import signal
 from dotenv import load_dotenv
 
 app = Flask(__name__)
@@ -144,9 +143,9 @@ def get_bounding_boxes():
     except Exception as e:
         logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')
         if _is_gpu_oom(e):
-            # Only a new process frees Paddle's cache; SIGTERM lets this response go out first.
+            # Only a new process frees Paddle's cache; post_request in the gunicorn config ends this worker.
             logging.error('GPU out of memory: restarting the worker')
-            os.kill(os.getpid(), signal.SIGTERM)
+            request.environ['smsl.restart_worker'] = True
             return jsonify({'error': str(e)}), 503
         return jsonify({'error': str(e)}), 500
 
