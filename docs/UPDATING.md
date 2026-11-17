@@ -51,13 +51,14 @@ fixed yet.
 |---|---|
 | `nvidia/cuda:12.6.x` base image | Matches the cu126 wheels of torch and paddle. The server has a Tesla V100S (Volta, sm_70), and CUDA 13 dropped Volta |
 | `numpy` below 2.4 | Set by paddlex |
+| `ultralytics==8.4.90` | A newer version changes the YOLO scores on the same page. 8.4.215 dropped a low-score box on the test document. Bump it only after a recall check on labelled data |
 | `torch==2.12.1`, `torchvision==0.27.1` | The last builds for CUDA 12.6. The Dockerfile reinstalls them from the cu126 index, so the version in `requirements.txt` must match that index |
 | `paddlepaddle-gpu` from the paddle cu126 index | Same reason. It is not on PyPI |
 | Ubuntu 24.04, Python 3.12 | Pillow 13 and PyMuPDF 2 need Python 3.11 or newer |
 | `setuptools` below 82 | Set by torch. A scanner may flag it, but you cannot raise it without a new torch |
 
-`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision and
-numpy 2.4 and newer, so Dependabot does not propose them. Moving off CUDA 12 means new GPU hardware first.
+`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision,
+ultralytics and numpy 2.4 and newer, so Dependabot does not propose them. Moving off CUDA 12 means new GPU hardware first.
 
 ## Dependabot pull requests
 
