@@ -12,6 +12,11 @@ if [[ -f "$(dirname "$0")/server.env" ]]; then
     source "$(dirname "$0")/server.env"
 fi
 
+# The server reaches GitHub only through git's proxy, and gh does not read git's settings.
+if [[ -z ${HTTPS_PROXY:-} ]] && proxy=$(git -C "$(dirname "$0")" config --get http.proxy); then
+    export HTTPS_PROXY=$proxy
+fi
+
 REPO=${SLADD_BACKUP_REPO:?Set SLADD_BACKUP_REPO in server.env}
 # MiB, so each part stays below GitHub's limit of 2 GiB per release file.
 PART_SIZE=1900M

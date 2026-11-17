@@ -332,9 +332,23 @@ the backup repo:
 1. Create a fine-grained personal access token. Resource owner: `kartverket`.
    Repository access: only the backup repo. Permission: Contents, read and
    write. The organisation may need to approve the token.
-2. Log in on the server: `gh auth login --with-token < token.txt`, then delete
-   `token.txt`.
-3. Check it: `gh repo view $SLADD_BACKUP_REPO`.
+2. Install `gh` as root. The repo file gets the proxy, so later `dnf` runs
+   reach it too:
+   ```bash
+   P=$(git config --get http.proxy)
+   curl -fsS -x "$P" https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo
+   echo "proxy=$P" >> /etc/yum.repos.d/gh-cli.repo
+   dnf install -y --repo gh-cli gh
+   ```
+3. Log in. Paste the token and press Enter. It is not shown and not saved in
+   the shell history:
+   ```bash
+   read -rs T && echo "$T" | HTTPS_PROXY=$(git config --get http.proxy) gh auth login --with-token && unset T
+   ```
+4. Check it: `HTTPS_PROXY=$(git config --get http.proxy) gh repo view $SLADD_BACKUP_REPO`.
+
+The server reaches the internet only through the proxy in git's settings.
+`backup_model.sh` passes it on to `gh`, so you do not have to.
 
 The repo needs at least one commit, such as a README, before it can hold a
 release. The token expires, so renew it when `gh` stops working.
