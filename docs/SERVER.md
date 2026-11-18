@@ -331,15 +331,19 @@ the backup repo:
 
 1. Create a fine-grained personal access token. Resource owner: `kartverket`.
    Repository access: only the backup repo. Permission: Contents, read and
-   write. The organisation may need to approve the token.
-2. Install `gh` as root. The repo file gets the proxy, so later `dnf` runs
-   reach it too:
+   write. An administrator in `kartverket` must approve the token. Until then
+   `gh repo view` gives "Could not resolve to a Repository".
+2. Install `gh` as root from the RPM on GitHub. A `dnf` repo for `gh` does not
+   work here, because the subscription-manager plugin turns off every repo
+   that does not come from Red Hat:
    ```bash
    P=$(git config --get http.proxy)
-   curl -fsS -x "$P" https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo
-   echo "proxy=$P" >> /etc/yum.repos.d/gh-cli.repo
-   dnf install -y --repo gh-cli gh
+   U=$(curl -fsS -x "$P" https://api.github.com/repos/cli/cli/releases/latest | grep -o 'https://[^"]*_linux_amd64\.rpm' | head -1) && echo "$U"
+   curl -fsSL -x "$P" "$U" -o /tmp/gh.rpm && dnf install -y --disablerepo='*' /tmp/gh.rpm && rm /tmp/gh.rpm
+   gh --version
    ```
+   `dnf` does not update `gh` installed this way. To get a new version, run
+   the same commands again.
 3. Log in. Paste the token and press Enter. It is not shown and not saved in
    the shell history:
    ```bash
