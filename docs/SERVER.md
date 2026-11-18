@@ -292,7 +292,7 @@ weights file itself and not the directory. That is the model `run.py` uses when
 
 ## Backup of the models
 
-The models exist only on this server until they are backed up. A YOLO model
+The YOLO models exist only on this server until they are backed up. A model
 takes a 48-hour training window to make again. `backup_model.sh` puts each
 model in a GitHub release in the internal repo `$SLADD_BACKUP_REPO`. Everyone
 with an account in Kartverket's GitHub enterprise can read that repo.
@@ -300,13 +300,12 @@ with an account in Kartverket's GitHub enterprise can read that repo.
 ```bash
 ./backup_model.sh                                # every model in $SLADD_WEIGHTS without a release
 ./backup_model.sh $SLADD_WEIGHTS/48t_l           # one model
-./backup_model.sh /data2/llama vlm-qwen3.8-27b   # the VLM weights, with their own tag
 ```
 
 Each release is tagged with the model name. It holds the model directory as a
 tar, `modell.json` and `training/` included, and a `SHA256SUMS`. GitHub accepts
 files below 2 GiB, so the script splits the tar into parts of 1900 MiB. The
-YOLO models fit in one part. The VLM weights need about nine.
+YOLO models fit in one part.
 
 The script skips a model that already has a release, so you can run it again
 after each new model. The release stays a draft until every part is uploaded.
@@ -324,6 +323,31 @@ cat 48t_l/48t_l.tar.part-* | tar -xf - -C $SLADD_WEIGHTS
 `training/split_log.txt` lists the document IDs the model was trained and
 tested on. Everyone who can read the repo can see them, so never make the repo
 public.
+
+### The VLM weights
+
+The VLM weights are not in the backup repo. They are the open model
+`qwen3.8:27b` from the Ollama registry, and the registry serves each file by
+its SHA-256. The digests below are the ones the verifier was measured with:
+
+| File in `/data2/llama` | SHA-256 |
+|---|---|
+| `qwen3.8-27b.gguf` | `f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d` |
+| `qwen3.8-27b-mmproj.gguf` | `ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e` |
+
+The tag can later point to other weights. The digests cannot, so download by
+digest. The server does not reach the registry, so do it on a machine that
+does, then copy the files to `/data2/llama`:
+
+```bash
+R=https://registry.ollama.ai/v2/library/qwen3.8/blobs
+curl -fL "$R/sha256:f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d" -o qwen3.8-27b.gguf
+curl -fL "$R/sha256:ac3714bfdddeca31351f2752bf1a63f266f4df87c0b68c895e44945ca704448e" -o qwen3.8-27b-mmproj.gguf
+```
+
+On the server, check the files with `sha256sum /data2/llama/*.gguf` and
+compare with the table. Then check the SELinux label with `ls -lZ`, as
+[VLM-ISOLATION.md](VLM-ISOLATION.md) describes.
 
 ### Set up gh
 
