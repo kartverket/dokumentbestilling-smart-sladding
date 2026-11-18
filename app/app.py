@@ -140,14 +140,15 @@ def get_bounding_boxes():
             'boxes': bounding_boxes_result,
         })
 
+    # The exception text stays in app.log: it can hold paths and text read from the document.
     except Exception as e:
         logging.exception(f'Document {_log_safe(filrevisjonid)}: model failed')
         if _is_gpu_oom(e):
             # Only a new process frees Paddle's cache; post_request in the gunicorn config ends this worker.
             logging.error('GPU out of memory: restarting the worker')
             request.environ['smsl.restart_worker'] = True
-            return jsonify({'error': str(e)}), 503
-        return jsonify({'error': str(e)}), 500
+            return jsonify({'error': 'GPU out of memory, see app.log'}), 503
+        return jsonify({'error': 'Model failed, see app.log'}), 500
 
 
 def _is_gpu_oom(e):
@@ -167,4 +168,4 @@ logging.basicConfig(
 
 if __name__ == '__main__':
     # For development only - use gunicorn for production
-    app.run(host='localhost', port=5070, debug=True)
+    app.run(host='localhost', port=5070)
