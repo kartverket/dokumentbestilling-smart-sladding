@@ -11,4 +11,4 @@ ultralytics==8.4.90
 paddlepaddle-gpu==3.3.1    # CUDA build, from the cu126 index in the Dockerfile. On CPU (Mac): paddlepaddle==3.3.1
 torch==2.12.1        
 torchvision==0.27.1
-gunicorn==26.0.0
+gunicorn==27.0.1
