@@ -52,19 +52,21 @@ fixed yet.
 | `nvidia/cuda:12.6.x` base image | Matches the cu126 wheels of torch and paddle. The server has a Tesla V100S (Volta, sm_70), and CUDA 13 dropped Volta |
 | `numpy` in `requirements-override.txt` | paddlex declares numpy below 2.4, so pip will not resolve a newer one with `requirements.txt`. The model runs on newer, so the Dockerfile installs this file last, without dependency checks |
 | `ultralytics==8.4.90` | A newer version changes the YOLO scores on the same page. 8.4.215 dropped a low-score box on the test document. Bump it only after a recall check on labelled data |
+| `opencv-contrib-python==4.10.0.84` | The `cv2` the model runs. paddlex pins this exact version, and ultralytics pulls in `opencv-python`, which writes the same `cv2/` folder. The Dockerfile reinstalls the contrib package last, and the build stops when `cv2.__version__` is not 4.10.0. A bump of `opencv-python` or `opencv-python-headless` does not change what runs. Check `import cv2; cv2.__version__` in the image |
 | `torch==2.12.1`, `torchvision==0.27.1` | The last builds for CUDA 12.6. The Dockerfile reinstalls them from the cu126 index, so the version in `requirements.txt` must match that index |
 | `paddlepaddle-gpu` from the paddle cu126 index | Same reason. It is not on PyPI |
 | Ubuntu 24.04, Python 3.12 | Pillow 13 and PyMuPDF 2 need Python 3.11 or newer |
 | `setuptools` below 82 | Set by torch. A scanner may flag it, but you cannot raise it without a new torch |
 
-`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision and
-ultralytics, so Dependabot does not propose them. Moving off CUDA 12 means new
+`.github/dependabot.yml` ignores CUDA 12.7 and newer, torch, torchvision,
+ultralytics and opencv-contrib-python, so Dependabot does not propose them. Moving off CUDA 12 means new
 GPU hardware first.
 
 The torch step in the Dockerfile reinstalls torch's dependencies from the
 PyTorch index, and can replace a package `requirements.txt` pins. The build
 checks every pin in `requirements.txt` and `requirements-override.txt` at the
-end, and stops with a list of the packages that differ. Test the version the
+end, and the version of `cv2` on import, and stops with a list of the packages
+that differ. Test the version the
 index installed, and pin it in `requirements-override.txt` if it works.
 
 ## Dependabot pull requests

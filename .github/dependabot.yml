@@ -31,6 +31,8 @@ updates:
       # A new ultralytics changes the YOLO scores on the same page, so a bump
       # needs a recall check on labelled data first.
       - dependency-name: "ultralytics"
+      # paddlex pins this exact version, so a bump cannot install.
+      - dependency-name: "opencv-contrib-python"
 
   - package-ecosystem: "pip"
     directory: "/job"

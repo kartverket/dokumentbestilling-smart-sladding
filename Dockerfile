@@ -53,11 +53,20 @@ RUN NCCL=$(python3 -c "import importlib.metadata as m; print(next(r.split(';')[0
 COPY requirements-override.txt .
 RUN pip install --no-cache-dir --no-deps -r requirements-override.txt
 
+# opencv-contrib-python (paddlex) and opencv-python (ultralytics) both write
+# cv2/, and the last one installed wins. Reinstall the pinned one last.
+RUN pip install --no-cache-dir --force-reinstall --no-deps \
+    "$(grep -o '^opencv-contrib-python==[^ #]*' requirements.txt)"
+
 # The torch step reinstalls torch's dependencies from the PyTorch index, which
-# can replace a pinned package without a word. Stop the build if it did.
+# can replace a pinned package without a word. Stop the build if it did. pip's
+# version of an opencv package does not show which one owns cv2/, so cv2 is
+# checked on import.
 RUN python3 - <<'EOF'
 import re
 from importlib.metadata import PackageNotFoundError, version
+
+import cv2
 
 pins = {}
 for path in ("requirements.txt", "requirements-override.txt"):
@@ -73,6 +82,10 @@ for name, pinned in pins.items():
         installed = "missing"
     if installed.split("+")[0] != pinned:
         wrong.append(f"  {name}: pinned {pinned}, installed {installed}")
+# The wheel's fourth number is the build, which cv2.__version__ leaves out.
+cv2_pinned = ".".join(pins["opencv-contrib-python"].split(".")[:3])
+if cv2.__version__ != cv2_pinned:
+    wrong.append(f"  cv2: pinned {cv2_pinned} (opencv-contrib-python), imports {cv2.__version__}")
 if wrong:
     raise SystemExit("Installed packages differ from their pins:\n" + "\n".join(wrong))
 print(f"All {len(pins)} pins match")
