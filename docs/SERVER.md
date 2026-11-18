@@ -96,7 +96,7 @@ Set by `server.env`, which `activate.sh` sources.
 | `SLADD_RUNS` | `/data2/runs` | Raw training runs. Empty |
 | `SLADD_WEIGHTS` | `/data2/vekter` | Published models |
 | `SLADD_PRODWEIGHTS` | `$SLADD_WEIGHTS/48t_l/48t_l.pt` | Default model, the one in prod |
-| `SLADD_BACKUP_REPO` | `kartverket/dokumentbestilling-smart-sladding-model` | Private repo for the model backups |
+| `SLADD_BACKUP_REPO` | `kartverket/dokumentbestilling-smart-sladding-model` | Internal repo for the model backups |
 | `SLADD_VALIDATION` | `/data2/validering` | Validation results. Empty |
 | `SLADD_LISTS` | `/data2/validering/lister` | Document ID lists. Empty |
 | `SLADD_CACHE` | `/data2/cache` | Everything derived, per uttrekk. Empty |
@@ -294,8 +294,8 @@ weights file itself and not the directory. That is the model `run.py` uses when
 
 The models exist only on this server until they are backed up. A YOLO model
 takes a 48-hour training window to make again. `backup_model.sh` puts each
-model in a GitHub release in the private repo `$SLADD_BACKUP_REPO`. Only the
-team has access to that repo.
+model in a GitHub release in the internal repo `$SLADD_BACKUP_REPO`. Everyone
+with an account in Kartverket's GitHub enterprise can read that repo.
 
 ```bash
 ./backup_model.sh                                # every model in $SLADD_WEIGHTS without a release
@@ -322,7 +322,8 @@ cat 48t_l/48t_l.tar.part-* | tar -xf - -C $SLADD_WEIGHTS
 ```
 
 `training/split_log.txt` lists the document IDs the model was trained and
-tested on. That is one reason the repo must stay private.
+tested on. Everyone who can read the repo can see them, so never make the repo
+public.
 
 ### Set up gh
 
