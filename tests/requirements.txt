@@ -2,5 +2,5 @@
 # The packages the tests import come from requirements.txt and
 # job/requirements-skip-job.txt, so they match the images.
 pytest==9.2.0
-ruff==0.17.5
+ruff==0.17.6
 zizmor==1.32.0
